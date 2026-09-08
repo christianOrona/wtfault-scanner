@@ -14,7 +14,8 @@ export const TAGLINE = "Just ask your car what the fuck is wrong.";
  *
  * Example: "https://github.com/your-name/wtfault-scanner"
  */
-export const REPO_URL: string | null = null;
+export const REPO_URL: string | null =
+  "https://github.com/christianOrona/wtfault-scanner";
 
 /**
  * The author's LinkedIn profile.
