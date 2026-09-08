@@ -310,3 +310,6 @@ concepts:
   - id: vehicle_profiles
     easy: "Extra knowledge you can give the app by dropping a file in a folder. Useful when you have worked out something about your car that the app did not ship knowing - it takes effect next time you start it, no reinstall."
     technical: "A directory of YAML merged over the embedded catalogues at startup. Supports feature mappings, PID definitions and explanations. Everything loaded is attributed to its file, a parse failure is reported and skipped rather than fatal, and load order is name-sorted for determinism."
+  - id: module_picker
+    easy: "The computers inside your car. Modern vehicles have several, each looking after a different part - one runs the engine, another the gearbox. Picking one here changes which computer the Codes and Live data screens are asking. They store different faults and different readings, so it is worth checking each."
+    technical: "Discovered ECUs by response address. The selection scopes the per-module screens (Codes, Live data, monitor tests) to that address; whole-vehicle reads such as readiness and the agent inspection query every module regardless."

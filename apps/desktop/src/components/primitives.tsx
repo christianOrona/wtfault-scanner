@@ -209,11 +209,17 @@ export function Value({
   value,
   onEvidence,
   animate = false,
+  stale = false,
+  compact = false,
 }: {
   value: DecodedValue;
   onEvidence?: (ref: number) => void;
   /** Tween the number between samples. Only worth it on a live feed. */
   animate?: boolean;
+  /** This came from an earlier sample, not the latest one. */
+  stale?: boolean;
+  /** One of many on a dashboard: prose goes behind a disclosure. */
+  compact?: boolean;
 }) {
   const { easy, lookup } = useExplain();
   const p = value.provenance;
@@ -230,28 +236,60 @@ export function Value({
           {!easy && <div className="faint mono" style={{ fontSize: 11 }}>{value.signal_id}</div>}
           <div style={{ fontWeight: 500 }}>{value.name}</div>
         </div>
-        <div style={{ textAlign: "right", whiteSpace: "nowrap" }}>
-          <span className={`value-big${value.out_of_range ? " value-suspect" : ""}`}>
-            {animate && numeric ? (
-              <AnimatedNumber
-                value={(value.value as { value: number }).value}
-                format={(n) => (Number.isInteger((value.value as { value: number }).value)
-                  ? String(Math.round(n))
-                  : n.toFixed(2))}
-              />
-            ) : (
-              formatScalar(value.value)
-            )}
-          </span>
-          {value.unit && <span className="value-unit">{value.unit}</span>}
-        </div>
+        {/* Only an actual number gets the big-number treatment.
+
+            A bitmask or a flag list rendered at 22px monospace with nowrap does
+            not fit in a card and does not try to: "PIDs supported:
+            01,04,05,0B,0C,0D,0F,10" ran straight out of its box and over the
+            panel beside it. Those are real values and worth showing — they are
+            just not gauges, so they wrap at normal size instead. */}
+        {numeric ? (
+          <div style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+            <span className={`value-big${value.out_of_range ? " value-suspect" : ""}${stale ? " value-stale" : ""}`}>
+              {animate ? (
+                <AnimatedNumber
+                  value={(value.value as { value: number }).value}
+                  format={(n) => (Number.isInteger((value.value as { value: number }).value)
+                    ? String(Math.round(n))
+                    : n.toFixed(2))}
+                />
+              ) : (
+                formatScalar(value.value)
+              )}
+            </span>
+            {value.unit && <span className="value-unit">{value.unit}</span>}
+          </div>
+        ) : null}
       </div>
 
-      {/* What this reading actually means. In Easy this is the point of the
-          card; in Advanced it is the precise version, for anyone who wants it. */}
-      {explanation && (
-        <div className="explain">{easy ? explanation.easy : explanation.technical}</div>
+      {!numeric && (
+        <div className={`value-text${stale ? " value-stale" : ""}`}>
+          {formatScalar(value.value)}
+          {value.unit ? ` ${value.unit}` : ""}
+        </div>
       )}
+
+      {stale && (
+        <div className="faint" style={{ fontSize: 11, marginTop: 4 }}>
+          from an earlier sample — the adapter has not answered this one yet
+        </div>
+      )}
+
+      {/* What this reading actually means.
+
+          On a dashboard of thirty cards this is three lines of prose each and
+          the screen becomes unreadable, so there it goes behind a disclosure.
+          On a single card it is the point and stays open. */}
+      {explanation && (compact ? (
+        <details>
+          <summary className="faint" style={{ cursor: "pointer", fontSize: 11 }}>
+            what is this?
+          </summary>
+          <div className="explain">{easy ? explanation.easy : explanation.technical}</div>
+        </details>
+      ) : (
+        <div className="explain">{easy ? explanation.easy : explanation.technical}</div>
+      ))}
 
       {unverified && (
         <CodedBanner

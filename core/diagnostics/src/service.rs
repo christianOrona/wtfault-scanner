@@ -888,6 +888,14 @@ impl DiagnosticService {
                     "signal_id": c.def.signal_id,
                     "name": c.def.name,
                     "unit": c.def.unit,
+                    // A dashboard needs to know a gauge from a bitmask. Without
+                    // this the UI drew "PIDs supported: 01,04,05,0B,0C,0D,0F,10"
+                    // in 22px monospace and it overflowed its card.
+                    "kind": c.def.kind,
+                    "is_measurement": matches!(
+                        c.def.kind,
+                        aim_decoders::PidKind::Numeric | aim_decoders::PidKind::Enum
+                    ),
                     "verification": c.def.verification,
                     "decoder_available": true,
                 }),

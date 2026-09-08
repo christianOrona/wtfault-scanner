@@ -13,37 +13,63 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, describeError } from "../api/client";
 import type {
-  AgentStatus, ClaimSource, Finding, InspectResponse, Report, TraceEntry,
+  AgentStatus, ClaimSource, Finding, InspectResponse, Report, ScanPurpose, TraceEntry,
 } from "../api/types";
 import { ErrorBanner, Spinner } from "./primitives";
 import { useAgentProgress, type ProgressLine } from "../hooks/useAgentProgress";
 import { reportToText } from "./reportText";
+import { download, scanFilename } from "./exportFile";
 import { MonitorTestsCard } from "./MonitorTestsCard";
 import { ReadinessCard } from "./ReadinessCard";
 import { PaneIntro } from "../explain";
 
-const VERDICT: Record<Report["verdict"], { label: string; tone: string; blurb: string }> = {
-  walk_away: {
-    label: "Walk away",
-    tone: "serious",
-    blurb: "Serious faults were found. Do not buy this unless the price already reflects them.",
-  },
-  negotiate: {
-    label: "Negotiate",
-    tone: "caution",
-    blurb: "Real problems with a knowable cost. Use them to bring the price down.",
-  },
-  looks_sound: {
-    label: "Looks sound",
-    tone: "ok",
-    blurb: "Nothing alarming turned up in what could be checked electronically.",
-  },
-  inconclusive: {
-    label: "Inconclusive",
-    tone: "info",
-    blurb: "Too little could be read to give you an answer. That is not the same as good news.",
-  },
-};
+/**
+ * The verdict, said the way the reader needs to hear it.
+ *
+ * The same evidence means something different depending on who is asking. "Walk
+ * away" is sound advice to someone considering a purchase and meaningless to
+ * someone who has owned the truck for six years - they cannot walk away from
+ * it, they have to fix it. Only the framing changes; the verdict itself is the
+ * agent's and is not touched.
+ */
+function verdictCopy(
+  v: Report["verdict"],
+  purpose: ScanPurpose,
+): { label: string; tone: string; blurb: string } {
+  const owner = purpose !== "buyer";
+  switch (v) {
+    case "walk_away":
+      return {
+        label: owner ? "Needs serious attention" : "Walk away",
+        tone: "serious",
+        blurb: owner
+          ? "Serious faults were found. These are worth dealing with before they get more expensive."
+          : "Serious faults were found. Do not buy this unless the price already reflects them.",
+      };
+    case "negotiate":
+      return {
+        label: owner ? "Worth booking in" : "Negotiate",
+        tone: "caution",
+        blurb: owner
+          ? "Real problems with a knowable cost. None of them is an emergency, but none will fix itself."
+          : "Real problems with a knowable cost. Use them to bring the price down.",
+      };
+    case "looks_sound":
+      return {
+        label: "Looks sound",
+        tone: "ok",
+        blurb: owner
+          ? "Nothing alarming turned up in what could be checked electronically. That is a good result."
+          : "Nothing alarming turned up in what could be checked electronically.",
+      };
+    default:
+      return {
+        label: "Inconclusive",
+        tone: "info",
+        blurb: "Too little could be read to give an answer. That is not the same as good news.",
+      };
+  }
+}
 
 const SOURCE: Record<ClaimSource, { label: string; title: string }> = {
   measured: {
@@ -144,9 +170,11 @@ export function InspectPane({
       <PaneIntro kind="concept" id="inspection" />
       <div className="row" style={{ justifyContent: "space-between", marginBottom: 14 }}>
         <div>
-          <strong>Pre-purchase inspection</strong>
+          <strong>Full inspection</strong>
           <div className="faint">
-            The agent decides which tests to run, reads the vehicle, and explains what it found.
+            The assistant decides which tests to run, reads the vehicle, and explains what it
+            found. Set whether this is your vehicle or one you are considering in Settings -
+            it changes what the report is written for.
           </div>
         </div>
         <button className="primary" onClick={() => void run()} disabled={running || !connected}>
@@ -207,7 +235,12 @@ export function InspectPane({
       {result?.report && (
         <>
           <ShareReport result={result} vin={vin} descriptor={descriptor} />
-          <ReportView report={result.report} meta={result} onEvidence={onEvidence} />
+          <ReportView
+            report={result.report}
+            meta={result}
+            onEvidence={onEvidence}
+            purpose={agent?.purpose ?? "owner"}
+          />
         </>
       )}
     </div>
@@ -254,6 +287,12 @@ function ShareReport({
         <span className="faint">Send this to a mechanic, or keep it for the seller.</span>
         <div className="row">
           <button onClick={() => void copy()}>{copied ? "Copied" : "Copy as text"}</button>
+          <button
+            onClick={() => download(scanFilename("report", vin, "txt"), text(), "text/plain")}
+            title="Save the report as a text file. To make a PDF, open it and print to PDF - every browser and every text editor can, and the result is better than anything this app would generate."
+          >
+            Save as file
+          </button>
           <button onClick={() => setShowText((v) => !v)}>
             {showText ? "Hide" : "Show text"}
           </button>
@@ -330,12 +369,14 @@ function ReportView({
   report,
   meta,
   onEvidence,
+  purpose,
 }: {
   report: Report;
   meta: InspectResponse;
   onEvidence: (ref: number) => void;
+  purpose: ScanPurpose;
 }) {
-  const v = VERDICT[report.verdict];
+  const v = verdictCopy(report.verdict, purpose);
   const costs = [...(report.findings ?? []), ...(report.watch_items ?? [])]
     .map((f) => f.estimated_cost)
     .filter((c): c is NonNullable<typeof c> => !!c);

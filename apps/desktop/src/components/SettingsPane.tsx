@@ -7,7 +7,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { api, describeError, type ProviderInput } from "../api/client";
-import type { ProbeResult, ProfilesResponse, ProviderKindId, ProviderView, ProvidersResponse } from "../api/types";
+import type { ProbeResult, ProfilesResponse, ProviderKindId, ProviderView, ProvidersResponse, ScanPurpose, Tone } from "../api/types";
 import { ErrorBanner, Spinner } from "./primitives";
 
 const BLANK: ProviderInput = {
@@ -403,6 +403,12 @@ export function SettingsPane({ onChanged }: { onChanged?: () => void }) {
         </div>
       )}
 
+      <AgentVoice
+        purpose={data?.purpose ?? "owner"}
+        tone={data?.tone ?? "practical"}
+        onChanged={() => void load()}
+      />
+
       <VehicleProfiles />
     </div>
   );
@@ -502,6 +508,91 @@ function VehicleProfiles() {
           {data?.feature_count ?? 0} catalogued vehicle settings.
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Who the agent thinks it is talking to, and how blunt to be.
+ *
+ * The first of these is the single highest-value setting in the product, and it
+ * was hardcoded. Everything the agent said assumed a person standing next to a
+ * stranger's car deciding whether to buy it — "before you pay full price",
+ * "treat whatever it costs as money off", "get a pre-purchase inspection". Told
+ * to someone who has owned the truck for six years, that is not caution, it is
+ * the app answering a question nobody asked.
+ */
+function AgentVoice({
+  purpose,
+  tone,
+  onChanged,
+}: {
+  purpose: ScanPurpose;
+  tone: Tone;
+  onChanged: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+
+  async function set(body: { purpose?: ScanPurpose; tone?: Tone }) {
+    setBusy(true);
+    try {
+      await api.setVoice(body);
+      onChanged();
+    } catch {
+      /* Advisory: a failure here leaves the previous setting in place. */
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="section" style={{ marginTop: 26 }}>
+      <h2>How the assistant talks to you</h2>
+
+      <div className="card">
+        <div style={{ fontWeight: 500 }}>Is this your vehicle?</div>
+        <div className="explain">
+          This changes what the assistant thinks you need. As the owner it talks about what
+          is wrong, how urgent it is, and what you can fix yourself. As a buyer it talks
+          about cost, negotiating position, and what a scan cannot tell you.
+        </div>
+        <div className="seg" style={{ marginTop: 10 }}>
+          <button
+            aria-pressed={purpose === "owner"}
+            disabled={busy}
+            onClick={() => void set({ purpose: "owner" })}
+          >
+            I own it
+          </button>
+          <button
+            aria-pressed={purpose === "buyer"}
+            disabled={busy}
+            onClick={() => void set({ purpose: "buyer" })}
+          >
+            I'm thinking of buying it
+          </button>
+        </div>
+      </div>
+
+      <div className="card">
+        <div style={{ fontWeight: 500 }}>How much explanation?</div>
+        <div className="explain">
+          Only how much is said around a finding. What gets read from the vehicle, and how
+          honest the assistant is about uncertainty, do not change.
+        </div>
+        <div className="seg" style={{ marginTop: 10 }}>
+          {(["practical", "neutral", "blunt"] as Tone[]).map((t) => (
+            <button
+              key={t}
+              aria-pressed={tone === t}
+              disabled={busy}
+              onClick={() => void set({ tone: t })}
+            >
+              {t === "practical" ? "Practical" : t === "neutral" ? "Just the facts" : "Terse"}
+            </button>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }

@@ -15,7 +15,7 @@ import { SettingsPane } from "./components/SettingsPane";
 import { FeaturesPane } from "./components/FeaturesPane";
 import { ErrorBanner, FailedResult, Pill, Spinner, Warnings } from "./components/primitives";
 import { useFlightRecorder } from "./hooks/useFlightRecorder";
-import { ExplainToggle } from "./explain";
+import { Explain, ExplainToggle, useExplain } from "./explain";
 
 type Tab = "inspect" | "ask" | "codes" | "live" | "features" | "adapter" | "recorder" | "sessions" | "settings";
 
@@ -61,6 +61,7 @@ export default function App() {
   /** True once the connect dialog has been dismissed to browse history. */
   const [browsing, setBrowsing] = useState(false);
 
+  const { easy } = useExplain();
   const sessionId = adapter?.session_id ?? null;
   const recorder = useFlightRecorder(sessionId, true);
 
@@ -256,7 +257,8 @@ export default function App() {
         {connected && (
           <div className="sidebar">
             <div className="section">
-              <h2>Modules ({modules.length})</h2>
+              <h2>{easy ? "Computers in your car" : "Modules"} ({modules.length})</h2>
+              <Explain kind="concept" id="module_picker" />
               <div className="list">
                 {modules.map((m) => (
                   <button

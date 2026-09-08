@@ -14,7 +14,7 @@ import type {
   Health, IdentifyData, Measurement, ModuleIdentity, ModuleRecord, PortsResponse,
   SessionEvent, SessionSummary, SignalsData, ToolResult, ApiError, Dtc, MonitorTestsData,
   AgentStatus, InspectResponse, ChatResponse as AgentChatResponse,
-  ProvidersResponse, ProviderView, ProviderKindId, ProbeResult, Speed, ExplanationsResponse, FeaturesData, ChangePlan, ProfilesResponse, ClearResult, ReadinessData,
+  ProvidersResponse, ProviderView, ProviderKindId, ProbeResult, Speed, ExplanationsResponse, FeaturesData, ChangePlan, ProfilesResponse, ClearResult, ReadinessData, ScanPurpose, Tone,
 } from "./types";
 
 /**
@@ -118,6 +118,8 @@ export const api = {
   capabilities: () => request<CapabilitiesResponse>("/capabilities"),
   explanations: () => request<ExplanationsResponse>("/explanations"),
   profiles: () => request<ProfilesResponse>("/profiles"),
+  setVoice: (body: { purpose?: ScanPurpose; tone?: Tone }) =>
+    post<{ purpose: ScanPurpose; tone: Tone }>("/settings/voice", body),
   features: () => request<ToolResult<FeaturesData>>("/features"),
   previewFeature: (id: string, desired: "on" | "off") =>
     post<ToolResult<ChangePlan>>(`/features/${enc(id)}/preview`, { desired }),

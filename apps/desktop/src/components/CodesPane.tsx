@@ -12,6 +12,7 @@ import { api, describeError } from "../api/client";
 import type { Dtc, DtcData, FreezeFrameData, ToolResult } from "../api/types";
 import { ErrorBanner, FailedResult, Spinner, Value, Warnings } from "./primitives";
 import { PaneIntro, useExplain } from "../explain";
+import { download, scanFilename, toCsv } from "./exportFile";
 import { ClearCodesDialog } from "./ClearCodesDialog";
 
 export function CodesPane({
@@ -81,6 +82,28 @@ export function CodesPane({
           </button>
           <button onClick={() => void read()} disabled={busy}>
             {busy ? <Spinner label="Reading" /> : "Re-read"}
+          </button>
+          <button
+            disabled={!dtcs.length}
+            onClick={() =>
+              download(
+                scanFilename("codes", null, "csv"),
+                toCsv(
+                  ["code", "status", "module", "description", "source", "structural"],
+                  dtcs.map((d) => [
+                    d.code,
+                    d.status,
+                    d.module,
+                    d.description ?? "",
+                    d.verification ?? "",
+                    d.structural_summary ?? "",
+                  ]),
+                ),
+                "text/csv",
+              )
+            }
+          >
+            Export
           </button>
           {/* Deliberately last and styled as destructive. It is the one thing
               on this screen that changes the vehicle. */}

@@ -132,6 +132,10 @@ pub struct ActiveProvider {
     pub max_steps: Option<usize>,
     /// Output-token ceiling per turn, or `None` for the built-in default.
     pub max_tokens: Option<u32>,
+    /// Whether the user owns this vehicle or is considering buying it.
+    pub purpose: aim_agent::settings::ScanPurpose,
+    /// How direct the agent should be.
+    pub tone: aim_agent::settings::Tone,
 }
 
 /// Resolve the configured provider and its per-provider tuning.
@@ -149,6 +153,10 @@ pub fn active_provider(state: &AppState) -> Result<ActiveProvider, AgentError> {
         provider: config.build()?,
         max_steps: config.max_steps,
         max_tokens: config.max_tokens,
+        // Not per-provider: who is asking and how blunt to be is a property of
+        // the person, not of which model happens to be selected.
+        purpose: settings.purpose,
+        tone: settings.tone,
     })
 }
 
@@ -158,8 +166,10 @@ pub async fn run_inspection(
     request: &str,
     sink: &mut dyn EventSink,
 ) -> Result<AgentOutcome, AgentError> {
-    let ActiveProvider { provider, max_steps, max_tokens } = active_provider(state)?;
-    let system = prompts::inspection_system_prompt(&describe_context(state).await);
+    let ActiveProvider { provider, max_steps, max_tokens, purpose, tone } =
+        active_provider(state)?;
+    let system =
+        prompts::inspection_system_prompt(&describe_context(state).await, purpose, tone);
     let mut executor = CoreExecutor::new(state);
     let mut agent = Agent::new(provider.as_ref());
     if let Some(n) = max_steps {
@@ -177,8 +187,9 @@ pub async fn run_chat(
     history: Vec<Message>,
     sink: &mut dyn EventSink,
 ) -> Result<AgentOutcome, AgentError> {
-    let ActiveProvider { provider, max_steps, max_tokens } = active_provider(state)?;
-    let system = prompts::chat_system_prompt(&describe_context(state).await);
+    let ActiveProvider { provider, max_steps, max_tokens, purpose, tone } =
+        active_provider(state)?;
+    let system = prompts::chat_system_prompt(&describe_context(state).await, purpose, tone);
     let mut executor = CoreExecutor::new(state);
     let mut agent = Agent::new(provider.as_ref());
     if let Some(n) = max_steps {

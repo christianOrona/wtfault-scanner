@@ -43,6 +43,8 @@ pub async fn list_providers(State(state): State<AppState>) -> ApiResult<Json<Val
     let settings = state.settings.load().map_err(agent_error)?;
     Ok(Json(json!({
         "providers": settings.views(),
+        "purpose": settings.purpose,
+        "tone": settings.tone,
         "settings_path": state.settings.path().display().to_string(),
         // Said plainly rather than buried: the user is about to paste a key.
         "storage_note": "Keys are stored in this file in plain text, readable only by your \
@@ -247,6 +249,10 @@ pub async fn agent_status(State(state): State<AppState>) -> ApiResult<Json<Value
         "reason": if active.is_some() { Value::Null } else {
             json!("no model provider is configured")
         },
+        // The UI needs this to know whether to frame a verdict as a purchase
+        // decision or as a maintenance one.
+        "purpose": settings.purpose,
+        "tone": settings.tone,
     })))
 }
 
@@ -372,4 +378,35 @@ fn fastrand_id() -> u64 {
     x ^= x >> 27;
     x = x.wrapping_mul(0x94D0_49BB_1331_11EB);
     x ^ (x >> 31)
+}
+
+/// How the agent should address this user.
+#[derive(Debug, serde::Deserialize)]
+pub struct VoiceBody {
+    /// Owner or buyer.
+    #[serde(default)]
+    pub purpose: Option<aim_agent::settings::ScanPurpose>,
+    /// How direct to be.
+    #[serde(default)]
+    pub tone: Option<aim_agent::settings::Tone>,
+}
+
+/// Set who the agent thinks it is talking to, and how bluntly.
+///
+/// Separate from provider configuration on purpose: this is a property of the
+/// person, not of which model happens to be selected, and it should survive
+/// switching from a local model to a hosted one.
+pub async fn set_voice(
+    State(state): State<AppState>,
+    Json(body): Json<VoiceBody>,
+) -> ApiResult<Json<Value>> {
+    let mut settings = state.settings.load().map_err(agent_error)?;
+    if let Some(p) = body.purpose {
+        settings.purpose = p;
+    }
+    if let Some(t) = body.tone {
+        settings.tone = t;
+    }
+    state.settings.save(&settings).map_err(agent_error)?;
+    Ok(Json(json!({ "purpose": settings.purpose, "tone": settings.tone })))
 }

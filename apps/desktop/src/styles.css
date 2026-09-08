@@ -481,3 +481,31 @@ button.mini {
 
 .chart .area { stroke: none; }
 .chart .head { filter: drop-shadow(0 0 4px currentColor); }
+
+/* A value that is text rather than a number: a flag list, a bitmask, an enum.
+   Real data, but not a gauge — so normal size, wrapping, and clamped to a few
+   lines so one chatty signal cannot push a dashboard card to three times the
+   height of its neighbours. */
+.value-text {
+  margin-top: 6px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text);
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Carried over from an earlier sample. Dimmed rather than hidden: a two-second
+   old reading is still a reading, and blanking the card was what made the whole
+   dashboard flicker. */
+.value-stale { opacity: 0.55; }
+
+/* Nothing inside a dashboard card may overflow it. The card is a grid child,
+   and a grid child defaults to min-width:auto, which refuses to shrink below
+   its content — which is how a long monospace value escaped its box and drew
+   over the panel beside it. */
+.value-card { min-width: 0; overflow: hidden; }
+.value-card .row > div { min-width: 0; }

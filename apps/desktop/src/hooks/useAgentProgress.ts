@@ -36,6 +36,12 @@ const PLAIN: Record<string, string> = {
   read_supported_pids: "Checking what this module can report",
   get_module_identity: "Asking a module to identify itself",
   adapter_health: "Checking the adapter",
+  read_monitor_tests: "Reading the self-test results",
+  read_readiness: "Checking which self-tests have finished",
+  list_vehicle_features: "Looking up configurable settings",
+  preview_configuration_change: "Working out what a change would involve",
+  list_features: "Looking up configurable settings",
+  clear_dtcs: "Clearing stored codes",
 };
 
 const describe = (tool: string, args: unknown): string => {
@@ -55,10 +61,13 @@ const describe = (tool: string, args: unknown): string => {
 export function useAgentProgress(sessionId: string | null, active: boolean) {
   const [lines, setLines] = useState<ProgressLine[]>([]);
   const seen = useRef(0);
+  /** False until the first poll of a run has skipped past existing history. */
+  const primed = useRef(false);
 
   useEffect(() => {
     if (!active || !sessionId) {
       seen.current = 0;
+      primed.current = false;
       setLines([]);
       return;
     }
@@ -71,6 +80,21 @@ export function useAgentProgress(sessionId: string | null, active: boolean) {
         const page = await api.events(sessionId, seen.current, 500);
         if (cancelled) return;
         for (const e of page.events) seen.current = Math.max(seen.current, e.seq);
+
+        // The first poll of a run only moves the cursor to the end of the log.
+        //
+        // Without this a second inspection in the same session replays the
+        // first one: `seen` resets to zero on activation, so the opening poll
+        // returns every tool call the session has ever recorded and the
+        // progress list showed the whole run twice. The log is per-session and
+        // the run is not, so "everything so far" is the wrong starting point —
+        // "everything from now" is the right one.
+        if (!primed.current) {
+          primed.current = true;
+          if (!cancelled) timer = window.setTimeout(tick, 800);
+          return;
+        }
+
         const fresh = toLines(page.events);
         if (fresh.length) {
           setLines((prev) => merge(prev, fresh));

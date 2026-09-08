@@ -258,6 +258,45 @@ impl ProviderConfig {
     }
 }
 
+/// Why someone is scanning this vehicle.
+///
+/// This turned out to matter more than any other setting. The whole product was
+/// written for a person standing next to a stranger's car deciding whether to
+/// buy it — "before you pay full price", "get a pre-purchase inspection", "treat
+/// whatever it costs as money off". Read by the person who has owned the truck
+/// for years, every one of those sentences is noise at best and faintly
+/// insulting at worst, and it made the app sound like it was talking past them.
+///
+/// Same evidence, same honesty about uncertainty. Different question being
+/// answered.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScanPurpose {
+    /// The user owns this vehicle and wants to keep it running.
+    #[default]
+    Owner,
+    /// The user is deciding whether to buy it.
+    Buyer,
+}
+
+/// How direct the agent should be.
+///
+/// Not a personality dial for its own sake. The default came across as
+/// relentlessly discouraging — every answer led with what could not be done —
+/// and a person holding a working truck does not need to be talked out of it
+/// four times in one conversation.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Tone {
+    /// Practical and encouraging. Leads with what was found and what to do.
+    #[default]
+    Practical,
+    /// Neutral and factual. States findings without framing.
+    Neutral,
+    /// Terse. Findings only, minimal explanation.
+    Blunt,
+}
+
 /// Everything the agent needs to know about which models are available.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProviderSettings {
@@ -267,6 +306,12 @@ pub struct ProviderSettings {
     /// Id of the one the agent uses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selected: Option<String>,
+    /// Whether the user owns this vehicle or is considering buying it.
+    #[serde(default)]
+    pub purpose: ScanPurpose,
+    /// How direct the agent should be.
+    #[serde(default)]
+    pub tone: Tone,
 }
 
 impl ProviderSettings {
@@ -394,7 +439,11 @@ mod tests {
 
     #[test]
     fn one_provider_needs_no_explicit_selection() {
-        let s = ProviderSettings { providers: vec![cfg("p1", ProviderKind::Ollama)], selected: None };
+        let s = ProviderSettings {
+            providers: vec![cfg("p1", ProviderKind::Ollama)],
+            selected: None,
+            ..Default::default()
+        };
         assert_eq!(s.active().map(|p| p.id.as_str()), Some("p1"));
     }
 
@@ -403,6 +452,7 @@ mod tests {
         let s = ProviderSettings {
             providers: vec![cfg("p1", ProviderKind::Ollama), cfg("p2", ProviderKind::Anthropic)],
             selected: None,
+            ..Default::default()
         };
         assert!(s.active().is_none());
     }
@@ -416,6 +466,7 @@ mod tests {
         let s = ProviderSettings {
             providers: vec![cfg("p1", ProviderKind::Anthropic)],
             selected: Some("p1".into()),
+            ..Default::default()
         };
         store.save(&s).unwrap();
 

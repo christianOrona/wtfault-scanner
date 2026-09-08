@@ -219,6 +219,10 @@ export interface SupportedPid {
   unit?: string | null;
   verification?: Verification | null;
   decoder_available: boolean;
+  /** How the payload is interpreted: numeric, bitfield, supported_pids, ... */
+  kind?: string | null;
+  /** False for masks and bitfields - real things, but not gauges. */
+  is_measurement?: boolean;
 }
 
 export interface SignalsData {
@@ -403,6 +407,10 @@ export interface ProviderKindInfo {
 }
 
 export interface ProvidersResponse {
+  /** Whether the user owns this vehicle or is considering buying it. */
+  purpose?: ScanPurpose;
+  /** How direct the agent should be. */
+  tone?: Tone;
   providers: ProviderView[];
   settings_path: string;
   storage_note: string;
@@ -418,6 +426,10 @@ export interface ProbeResult {
 }
 
 export interface AgentStatus {
+  /** Whether the user owns this vehicle or is considering buying it. */
+  purpose?: ScanPurpose;
+  /** How direct the agent should be. */
+  tone?: Tone;
   ready: boolean;
   provider: { id: string; label: string; model: string } | null;
   reason: string | null;
@@ -611,3 +623,6 @@ export interface ReadinessData {
   /** Spread in distance-since-cleared between modules, when they disagree. */
   disagreement_km: number | null;
 }
+
+export type ScanPurpose = "owner" | "buyer";
+export type Tone = "practical" | "neutral" | "blunt";
