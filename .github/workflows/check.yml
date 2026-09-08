@@ -1,0 +1,123 @@
+# The same checks `scripts/check.ps1` runs locally, split across the platforms
+# each part is actually meant to work on.
+#
+# The split is not arbitrary. `apps/desktop/src-tauri` is deliberately its own
+# cargo workspace so that the core stays fast and portable to test; running the
+# core on Linux and the shell on Windows is what turns that intention into
+# something verified rather than assumed.
+
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A new push supersedes an in-flight run on the same ref. Diagnostics builds are
+# not so fast that finishing a superseded one is free.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # A backtrace costs nothing until something fails, and when something fails on
+  # a machine you cannot attach to, it is the whole investigation.
+  RUST_BACKTRACE: 1
+
+jobs:
+  core:
+    name: core (linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The serial transport binds libudev. This is the only system dependency
+      # the core has, and it is why the desktop shell's Tauri tree is kept out
+      # of this workspace.
+      - name: Install libudev
+        run: sudo apt-get update && sudo apt-get install -y libudev-dev pkg-config
+
+      # No toolchain action: rust-toolchain.toml pins the version and rustup
+      # honours it automatically. One source of truth, shared with local builds.
+      - name: Show toolchain
+        run: rustc --version && cargo --version
+
+      - uses: Swatinem/rust-cache@v2
+
+      # --locked fails if Cargo.lock would need changing, which is what makes
+      # the committed lockfile mean something.
+      - name: Tests
+        run: cargo test --workspace --locked
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  portability:
+    name: core without serial (linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+
+      # core/transport/Cargo.toml claims the workspace builds cleanly with
+      # `--no-default-features`, for environments with no libudev. Deliberately
+      # run WITHOUT installing libudev, so the claim is tested rather than
+      # restated — and note there is no apt step above.
+      - name: Lint without serial support
+        run: cargo clippy --workspace --all-targets --no-default-features --locked -- -D warnings
+
+  ui:
+    name: ui (linux)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      # `ci` not `install`: it fails on a lockfile mismatch instead of quietly
+      # resolving something different from what was committed.
+      - run: npm ci
+
+      # `npm run build` is `tsc --noEmit && vite build`, so this is the
+      # typecheck as well as the bundle.
+      - run: npm run build
+
+  shell:
+    name: desktop shell (windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      # Load-bearing ordering, not tidiness: the shell embeds the built UI with
+      # `include_dir!("$CARGO_MANIFEST_DIR/../dist")`, and `dist/` is
+      # gitignored. Without this the shell does not compile from a fresh clone
+      # at all.
+      - name: Build the UI the shell embeds
+        working-directory: apps/desktop
+        run: npm ci && npm run build
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+
+      # Clippy only. A full `tauri build` takes about ten minutes and produces
+      # an installer nobody is waiting for; compiling and linting catches the
+      # mistakes that matter on every push.
+      - name: Clippy
+        working-directory: apps/desktop/src-tauri
+        run: cargo clippy --all-targets --locked -- -D warnings

@@ -1,0 +1,9 @@
+# Match the style this codebase was already written in, rather than imposing a
+# different one on 20,000 lines.
+#
+# The default heuristics break a struct literal across four lines the moment it
+# passes a fairly small width. Much of this code deliberately keeps short
+# literals on one line - `ObdRequest { service, pid: Some(pid), extra: vec![] }`
+# reads as one thought, and stacked it reads as four. `Max` lets anything that
+# fits inside `max_width` stay on one line.
+use_small_heuristics = "Max"

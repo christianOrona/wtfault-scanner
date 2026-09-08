@@ -20,3 +20,10 @@ serial = ["aim-transport/serial"]
 
 [dev-dependencies]
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# The hardware probe talks to a real COM port, so it cannot build without the
+# serial transport. Declaring that here is what lets
+# `--all-targets --no-default-features` skip it instead of failing on it.
+[[example]]
+name = "probe_port"
+required-features = ["serial"]

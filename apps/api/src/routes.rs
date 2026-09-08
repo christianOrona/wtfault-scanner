@@ -24,6 +24,8 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{json, Value};
+// Only the serial port probe needs this, and that whole path is feature-gated.
+#[cfg(feature = "serial")]
 use std::time::Duration;
 
 /// Build the versioned router.

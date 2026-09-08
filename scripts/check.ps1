@@ -89,7 +89,15 @@ Invoke-Step 'core: clippy' '.' @('cargo', 'clippy', '--workspace', '--all-target
 Invoke-Step 'ui: typecheck and build' 'apps/desktop' @('npm', 'run', '-s', 'build')
 
 if (-not $Quick) {
-    # The shell, explicitly, because --workspace does not reach it.
+    # The build without the serial transport, for machines with no libudev.
+    # core/transport/Cargo.toml promises this works; CI checks it, so checking
+    # it here too means CI never reports something this script would have
+    # caught first.
+    Invoke-Step 'core: no serial' '.' @('cargo', 'clippy', '--workspace', '--all-targets', '--no-default-features', '--', '-D', 'warnings')
+
+    # The shell, explicitly, because --workspace does not reach it. Must come
+    # after the UI build above: the shell embeds `../dist` with `include_dir!`,
+    # so it does not compile at all until the UI has been built once.
     Invoke-Step 'shell: clippy' 'apps/desktop/src-tauri' @('cargo', 'clippy', '--all-targets', '--', '-D', 'warnings')
 }
 
