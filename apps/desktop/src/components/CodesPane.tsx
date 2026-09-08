@@ -12,7 +12,7 @@ import { api, describeError } from "../api/client";
 import type { Dtc, DtcData, FreezeFrameData, ToolResult } from "../api/types";
 import { ErrorBanner, FailedResult, Spinner, Value, Warnings } from "./primitives";
 import { PaneIntro, useExplain } from "../explain";
-import { download, scanFilename, toCsv } from "./exportFile";
+import { saveFile, scanFilename, toCsv } from "./exportFile";
 import { ClearCodesDialog } from "./ClearCodesDialog";
 
 export function CodesPane({
@@ -27,6 +27,8 @@ export function CodesPane({
   const [error, setError] = useState<{ code: string; message: string } | null>(null);
   const [frame, setFrame] = useState<ToolResult<FreezeFrameData> | null>(null);
   const [frameBusy, setFrameBusy] = useState(false);
+  /** Where the last export landed, or why it did not. Shown, never silent. */
+  const [savedTo, setSavedTo] = useState<string | null>(null);
 
   const read = useCallback(async () => {
     if (!moduleKey) return;
@@ -86,7 +88,7 @@ export function CodesPane({
           <button
             disabled={!dtcs.length}
             onClick={() =>
-              download(
+              void saveFile(
                 scanFilename("codes", null, "csv"),
                 toCsv(
                   ["code", "status", "module", "description", "source", "structural"],
@@ -99,8 +101,7 @@ export function CodesPane({
                     d.structural_summary ?? "",
                   ]),
                 ),
-                "text/csv",
-              )
+              ).then((r) => setSavedTo(r.path)).catch(() => setSavedTo("could not save"))
             }
           >
             Export
@@ -147,6 +148,12 @@ export function CodesPane({
         />
       )}
 
+      {savedTo && (
+        <div className="banner info">
+          <span className="b-code">saved</span>
+          <span className="mono" style={{ fontSize: 12, wordBreak: "break-all" }}>{savedTo}</span>
+        </div>
+      )}
       <ErrorBanner error={error} />
       {result && !result.success && <FailedResult result={result} onEvidence={onEvidence} />}
       {result && <Warnings warnings={result.warnings} />}

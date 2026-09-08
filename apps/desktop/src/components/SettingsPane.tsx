@@ -7,7 +7,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { api, describeError, type ProviderInput } from "../api/client";
-import type { ProbeResult, ProfilesResponse, ProviderKindId, ProviderView, ProvidersResponse, ScanPurpose, Tone } from "../api/types";
+import type { ProbeResult, ProfilesResponse, ProviderKindId, ProviderView, ProvidersResponse, ScanPurpose, Tone, Health } from "../api/types";
 import { ErrorBanner, Spinner } from "./primitives";
 
 const BLANK: ProviderInput = {
@@ -21,7 +21,13 @@ const BLANK: ProviderInput = {
   context_tokens: null,
 };
 
-export function SettingsPane({ onChanged }: { onChanged?: () => void }) {
+export function SettingsPane({
+  onChanged,
+  health,
+}: {
+  onChanged?: () => void;
+  health?: Health | null;
+}) {
   const [data, setData] = useState<ProvidersResponse | null>(null);
   const [error, setError] = useState<{ code: string; message: string } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -410,6 +416,8 @@ export function SettingsPane({ onChanged }: { onChanged?: () => void }) {
       />
 
       <VehicleProfiles />
+
+      <About health={health ?? null} />
     </div>
   );
 }
@@ -592,6 +600,65 @@ function AgentVoice({
             </button>
           ))}
         </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * What this app is, what it will not do, and what it is running.
+ *
+ * The build version matters more than it looks: this project ships by
+ * rebuilding an installer, and "which one am I actually running?" has been an
+ * open question more than once during development. The rest is the honest
+ * summary — what it reads, what it refuses, and where the data lives.
+ */
+function About({ health }: { health: Health | null }) {
+  return (
+    <div className="section" style={{ marginTop: 26 }}>
+      <h2>About</h2>
+      <div className="card">
+        <div style={{ fontSize: 15, fontWeight: 600 }}>
+          WTF<span style={{ color: "var(--accent)" }}>ault</span> Scanner
+        </div>
+        <div className="explain" style={{ fontStyle: "italic" }}>
+          Just ask your car what the fuck is wrong.
+        </div>
+
+        <div className="explain" style={{ marginTop: 12 }}>
+          An OBD-II scanner with a language model attached. It reads trouble codes from every
+          module that answers, the vehicle's own emissions self-tests and how close each one
+          is to failing, live sensor data, freeze frames, and the history since the codes
+          were last cleared — then explains all of it in plain language.
+        </div>
+
+        <div className="explain" style={{ marginTop: 10 }}>
+          <strong>What it will not do.</strong> It does not write configuration, program
+          modules, or touch anything to do with immobilisers or keys. Clearing trouble codes
+          is the single exception and needs typing a confirmation. It will not invent a
+          reading: every number on screen can show you the exact exchange with the vehicle
+          that produced it, and anything from the model's general knowledge rather than from
+          your car is labelled as such.
+        </div>
+
+        <div className="explain" style={{ marginTop: 10 }}>
+          <strong>Where your data is.</strong> Scans are stored on this machine only. API
+          keys sit in a file in your own profile, in plain text, readable by your Windows
+          account — the OS credential store would be better and is not implemented. Nothing
+          is uploaded anywhere except the questions you ask a hosted model, if you have
+          configured one.
+        </div>
+
+        <table style={{ marginTop: 12 }}>
+          <tbody>
+            <tr><td className="faint">Version</td><td className="mono">{health?.build_version ?? "?"}</td></tr>
+            <tr><td className="faint">Database schema</td><td className="mono">{health?.schema_version ?? "?"}</td></tr>
+            <tr>
+              <td className="faint">Scans stored in</td>
+              <td className="mono" style={{ wordBreak: "break-all" }}>{health?.database ?? "in memory"}</td>
+            </tr>
+          </tbody>
+        </table>
       </div>
     </div>
   );

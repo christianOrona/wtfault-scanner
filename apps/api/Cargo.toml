@@ -14,6 +14,7 @@ name = "aim-api"
 path = "src/main.rs"
 
 [dependencies]
+directories = "5"
 aim-agent = { version = "0.1.0", path = "../../core/agent" }
 async-trait = "0.1.89"
 aim-adapter = { version = "0.1.0", path = "../../core/adapter", default-features = false }

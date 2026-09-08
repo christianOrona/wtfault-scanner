@@ -47,6 +47,8 @@ export function Sparkline({
   const axis = useRef<{ min: number; max: number } | null>(null);
   const gradientId = useRef(`spark-${Math.random().toString(36).slice(2, 9)}`);
   const reduced = usePrefersReducedMotion();
+  const [box, setBox] = useState<HTMLDivElement | null>(null);
+  const width = useElementWidth(box);
 
   // One animation frame per repaint while the component is on screen. This is
   // what makes the trace slide between samples; without it the chart only
@@ -64,7 +66,15 @@ export function Sparkline({
 
   if (points.length < 2) return null;
 
-  const W = 400;
+  // The viewBox matches the element's real pixel width, so the scale factor is
+  // exactly 1 and nothing is distorted.
+  //
+  // Before this the SVG was a fixed 400-wide viewBox stretched to fit with
+  // `preserveAspectRatio="none"`, which does not only stretch the trace — it
+  // stretches the *text*. On a card about 240px wide the axis labels were
+  // squeezed horizontally and left at full height, which is why the numbers
+  // looked wrong without looking obviously broken.
+  const W = width || 400;
   const H = height;
   const PAD_L = 40;
   const PAD_R = 10;
@@ -113,10 +123,11 @@ export function Sparkline({
   const stroke = tone ?? "var(--accent)";
 
   return (
+    <div ref={setBox} className="chart-box">
     <svg
       className="chart"
       viewBox={`0 0 ${W} ${H}`}
-      preserveAspectRatio="none"
+      width={W}
       height={H}
       role="img"
       aria-label={`trend over the last ${Math.round(WINDOW_MS / 1000)} seconds`}
@@ -142,6 +153,7 @@ export function Sparkline({
           visibly drifts left instead of sticking to the edge. */}
       <circle className="head" cx={head.x} cy={head.y} r={2.6} fill={stroke} />
     </svg>
+    </div>
   );
 }
 
@@ -228,4 +240,30 @@ function fmt(v: number): string {
   if (a >= 1000) return v.toFixed(0);
   if (a >= 10) return v.toFixed(1);
   return v.toFixed(2);
+}
+
+/**
+ * The element's real width in CSS pixels.
+ *
+ * Needed so the SVG viewBox can match its rendered size exactly. The chart used
+ * to declare a fixed 400-unit viewBox and let the browser stretch it to fit,
+ * which distorts every glyph in it along with the trace — the axis numbers were
+ * squashed horizontally at full height, which reads as "wrong" long before it
+ * reads as "stretched".
+ */
+function useElementWidth(el: HTMLElement | null): number {
+  const [w, setW] = useState(0);
+  useEffect(() => {
+    if (!el) return;
+    const measure = () => setW(Math.max(0, Math.round(el.clientWidth)));
+    measure();
+    // ResizeObserver rather than a window listener: these live in a grid whose
+    // track width changes when the sidebar or the card count changes, with no
+    // window resize involved.
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [el]);
+  return w;
 }

@@ -18,7 +18,7 @@ import type {
 import { ErrorBanner, Spinner } from "./primitives";
 import { useAgentProgress, type ProgressLine } from "../hooks/useAgentProgress";
 import { reportToText } from "./reportText";
-import { download, scanFilename } from "./exportFile";
+import { saveFile, scanFilename } from "./exportFile";
 import { MonitorTestsCard } from "./MonitorTestsCard";
 import { ReadinessCard } from "./ReadinessCard";
 import { PaneIntro } from "../explain";
@@ -177,9 +177,23 @@ export function InspectPane({
             it changes what the report is written for.
           </div>
         </div>
-        <button className="primary" onClick={() => void run()} disabled={running || !connected}>
-          {running ? <Spinner label={`Inspecting… ${elapsed}s`} /> : "Inspect this vehicle"}
-        </button>
+        <div className="row">
+          {/* There was no way back from a finished report. The quick checks and
+              the Inspect button are replaced by the result and stay replaced,
+              so the only route to the pre-inspection screen was to disconnect.
+              The report is worth keeping until it is explicitly dismissed, so
+              this clears it rather than being a browser-style back button. */}
+          {result && !running && (
+            <button onClick={() => { setResult(null); setError(null); }}>
+              Back to checks
+            </button>
+          )}
+          <button className="primary" onClick={() => void run()} disabled={running || !connected}>
+            {running
+              ? <Spinner label={`Inspecting… ${elapsed}s`} />
+              : result ? "Inspect again" : "Inspect this vehicle"}
+          </button>
+        </div>
       </div>
 
       {!connected && (
@@ -280,6 +294,24 @@ function ShareReport({
   }
 
   const [showText, setShowText] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  async function save() {
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const r = await saveFile(scanFilename("report", vin, "txt"), text());
+      setSaved(r.path);
+    } catch (e) {
+      // Said out loud. The previous version failed silently, which is the one
+      // outcome a save button must never have.
+      setSaveError(describeError(e).message);
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
     <div className="card">
@@ -288,16 +320,30 @@ function ShareReport({
         <div className="row">
           <button onClick={() => void copy()}>{copied ? "Copied" : "Copy as text"}</button>
           <button
-            onClick={() => download(scanFilename("report", vin, "txt"), text(), "text/plain")}
-            title="Save the report as a text file. To make a PDF, open it and print to PDF - every browser and every text editor can, and the result is better than anything this app would generate."
+            disabled={saving}
+            onClick={() => void save()}
+            title="Save the report into your Downloads folder. To make a PDF, open it and print to PDF - the result is better than anything this app would generate."
           >
-            Save as file
+            {saving ? <Spinner label="Saving" /> : "Save as file"}
           </button>
           <button onClick={() => setShowText((v) => !v)}>
             {showText ? "Hide" : "Show text"}
           </button>
         </div>
       </div>
+
+      {saved && (
+        <div className="banner info" style={{ marginTop: 10, marginBottom: 0 }}>
+          <span className="b-code">saved</span>
+          <span className="mono" style={{ fontSize: 12, wordBreak: "break-all" }}>{saved}</span>
+        </div>
+      )}
+      {saveError && (
+        <div className="banner error" style={{ marginTop: 10, marginBottom: 0 }}>
+          <span className="b-code">not saved</span>
+          <span>{saveError}</span>
+        </div>
+      )}
       {showText && (
         <textarea
           readOnly

@@ -1,9 +1,9 @@
 {
-  "name": "wrenchgpt-desktop",
+  "name": "wtfault-scanner-desktop",
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Tauri 2 + React shell for the WrenchGPT diagnostic core.",
+  "description": "Tauri 2 + React shell for the WTFault Scanner diagnostic core.",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

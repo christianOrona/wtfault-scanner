@@ -118,6 +118,8 @@ export const api = {
   capabilities: () => request<CapabilitiesResponse>("/capabilities"),
   explanations: () => request<ExplanationsResponse>("/explanations"),
   profiles: () => request<ProfilesResponse>("/profiles"),
+  exportFile: (body: { filename: string; content: string }) =>
+    post<{ path: string; directory: string; filename: string }>("/export", body),
   setVoice: (body: { purpose?: ScanPurpose; tone?: Tone }) =>
     post<{ purpose: ScanPurpose; tone: Tone }>("/settings/voice", body),
   features: () => request<ToolResult<FeaturesData>>("/features"),

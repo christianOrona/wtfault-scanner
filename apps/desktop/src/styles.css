@@ -509,3 +509,45 @@ button.mini {
    over the panel beside it. */
 .value-card { min-width: 0; overflow: hidden; }
 .value-card .row > div { min-width: 0; }
+
+/* The chart sizes itself to this box, and the box to the card. Width is
+   measured rather than assumed so the SVG viewBox can be 1:1 with pixels; see
+   Sparkline.tsx for why that matters. */
+.chart-box { width: 100%; min-width: 0; }
+.chart { display: block; max-width: 100%; }
+
+/* ---------- splash ---------- */
+
+.splash {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 22px;
+  background: radial-gradient(ellipse at 50% 40%, #101922, var(--bg) 70%);
+  opacity: 1;
+  transition: opacity 400ms ease;
+}
+.splash-out { opacity: 0; pointer-events: none; }
+
+.splash-art {
+  width: min(880px, 88vw);
+  max-height: 62vh;
+  object-fit: contain;
+  border-radius: 12px;
+  /* The artwork already glows; this seats it on the background rather than
+     letting it float as a rectangle. */
+  box-shadow: 0 0 90px -30px var(--accent-glow);
+}
+
+.splash-status { color: var(--text-dim); font-size: 13px; min-height: 20px; }
+.splash-slow { color: var(--caution); }
+
+/* The wordmark, matching the artwork: "WTF" light, the rest in the accent. */
+.topbar .brand .brand-accent {
+  color: var(--accent);
+  text-shadow: 0 0 18px var(--accent-glow);
+}

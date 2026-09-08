@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.82"
 license = "MIT OR Apache-2.0"
-description = "Desktop shell for the WrenchGPT diagnostic core"
+description = "Desktop shell for the WTFault Scanner diagnostic core"
 
 # Deliberately its own workspace. The Tauri dependency tree is large and
 # platform-specific, and pulling it into the root workspace would make

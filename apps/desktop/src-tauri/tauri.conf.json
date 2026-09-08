@@ -1,9 +1,9 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "WrenchGPT",
-  "mainBinaryName": "WrenchGPT",
+  "productName": "WTFault Scanner",
+  "mainBinaryName": "WTFault Scanner",
   "version": "0.1.0",
-  "identifier": "com.wrenchgpt.desktop",
+  "identifier": "com.wtfault.scanner",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:5173",

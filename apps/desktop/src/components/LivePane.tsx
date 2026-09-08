@@ -14,7 +14,7 @@ import type { Sample } from "../hooks/useLive";
 import { ErrorBanner, FailedResult, Spinner, Value, Warnings } from "./primitives";
 import { Explain, PaneIntro, useExplain } from "../explain";
 import { Sparkline } from "./Sparkline";
-import { download, scanFilename, toCsv } from "./exportFile";
+import { saveFile, scanFilename, toCsv } from "./exportFile";
 
 const MAX_SIGNALS = 32;
 
@@ -39,6 +39,8 @@ export function LivePane({
   const [error, setError] = useState<{ code: string; message: string } | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
   const [interval, setIntervalMs] = useState(500);
+  /** Where the last export landed, or why it did not. Shown, never silent. */
+  const [savedTo, setSavedTo] = useState<string | null>(null);
 
   const live = useLive(!!moduleKey);
 
@@ -195,7 +197,7 @@ export function LivePane({
             disabled={!live.history.length}
             title="Save every reading captured so far as a spreadsheet."
             onClick={() =>
-              download(
+              void saveFile(
                 scanFilename("live", null, "csv"),
                 toCsv(
                   ["time", "signal", "value", "unit", "verification"],
@@ -211,8 +213,9 @@ export function LivePane({
                     ]),
                   ),
                 ),
-                "text/csv",
               )
+                .then((r) => setSavedTo(r.path))
+                .catch((e) => setSavedTo(`could not save: ${describeError(e).message}`))
             }
           >
             Export
@@ -220,6 +223,12 @@ export function LivePane({
         </div>
       </div>
 
+      {savedTo && (
+        <div className="banner info">
+          <span className="b-code">saved</span>
+          <span className="mono" style={{ fontSize: 12, wordBreak: "break-all" }}>{savedTo}</span>
+        </div>
+      )}
       <ErrorBanner error={error} />
       {signals && !signals.success && <FailedResult result={signals} onEvidence={onEvidence} />}
       {signals && <Warnings warnings={signals.warnings} />}

@@ -13,6 +13,7 @@ import { InspectPane } from "./components/InspectPane";
 import { AskPane } from "./components/AskPane";
 import { SettingsPane } from "./components/SettingsPane";
 import { FeaturesPane } from "./components/FeaturesPane";
+import { Splash } from "./components/Splash";
 import { ErrorBanner, FailedResult, Pill, Spinner, Warnings } from "./components/primitives";
 import { useFlightRecorder } from "./hooks/useFlightRecorder";
 import { Explain, ExplainToggle, useExplain } from "./explain";
@@ -62,6 +63,8 @@ export default function App() {
   const [browsing, setBrowsing] = useState(false);
 
   const { easy } = useExplain();
+  /** True once the core has answered at least once. Drives the splash. */
+  const coreUp = booted && !!health;
   const sessionId = adapter?.session_id ?? null;
   const recorder = useFlightRecorder(sessionId, true);
 
@@ -216,11 +219,29 @@ export default function App() {
   const vinDecoded = identify?.data?.vin_decoded;
 
   return (
+    <>
+    <Splash ready={coreUp} stalled={!coreUp && !suppressBootError} />
     <div className="app">
       <div className="topbar">
         <span className="brand-mark" aria-hidden="true" />
-        <span className="brand">Wrench<span className="brand-gpt">GPT</span></span>
+        <span className="brand">WTF<span className="brand-accent">ault</span> Scanner</span>
         {adapter && <Pill state={adapter.state} />}
+        {/* Two separate things, and the old header only showed one.
+            The green light meant "the adapter is talking to the car" and was
+            being read as "the AI is working". They fail independently: an
+            adapter can be perfect with no model configured, and a model can be
+            ready with nothing plugged in. */}
+        <span
+          className="pill"
+          title={
+            agent?.ready
+              ? `Assistant ready: ${agent.provider?.label ?? "model"} (${agent.provider?.model ?? "?"})`
+              : agent?.reason ?? "No model provider is set up. Settings > Model providers."
+          }
+        >
+          <span className={`dot ${agent?.ready ? "ready" : "failed"}`} />
+          {agent?.ready ? "assistant" : "no model"}
+        </span>
         {adapter?.descriptor && <span className="faint mono">{adapter.descriptor}</span>}
         {vin && (
           <span className="row" style={{ gap: 6 }}>
@@ -373,6 +394,14 @@ export default function App() {
                   onFinished={refreshAfterAgent}
                 />
               </div>
+              {/* Live data stays mounted for the same reason the agent panes do,
+                  and it is a worse bug here: the websocket subscription lives
+                  in the component, so switching tabs mid-capture tore down the
+                  socket and silently ended the stream. Coming back showed an
+                  idle pane with no explanation, and the history was gone. */}
+              <div className="tab-panel" hidden={tab !== "live"}>
+                <LivePane moduleKey={selectedModule} onEvidence={showEvidence} />
+              </div>
               <div className="tab-panel" hidden={tab !== "ask"}>
                 <AskPane
                   agent={agent}
@@ -382,9 +411,8 @@ export default function App() {
                   onFinished={refreshAfterAgent}
                 />
               </div>
-              {tab === "settings" && <SettingsPane onChanged={refreshAgent} />}
+              {tab === "settings" && <SettingsPane onChanged={refreshAgent} health={health} />}
               {tab === "codes" && <CodesPane moduleKey={selectedModule} onEvidence={showEvidence} />}
-              {tab === "live" && <LivePane moduleKey={selectedModule} onEvidence={showEvidence} />}
               {tab === "features" && <FeaturesPane connected={connected} />}
               {tab === "adapter" && <AdapterPane adapter={adapter} />}
               {tab === "recorder" && (
@@ -411,5 +439,6 @@ export default function App() {
         />
       )}
     </div>
+    </>
   );
 }

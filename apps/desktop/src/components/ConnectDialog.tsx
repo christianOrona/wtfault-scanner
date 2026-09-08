@@ -103,7 +103,7 @@ export function ConnectDialog({
         </div>
         <p className="muted">
           {health
-            ? `${health.service} ${health.build_version} - API ${health.api_version} on ${health.bind}`
+            ? "Just ask your car what the fuck is wrong."
             : "Looking for the diagnostic core..."}
         </p>
 

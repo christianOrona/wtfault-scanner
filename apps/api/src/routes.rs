@@ -56,6 +56,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/modules/{key}/read", post(module_read))
         .route("/api/v1/dtcs/clear", post(clear_dtcs))
         .route("/api/v1/readiness", get(readiness))
+        .route("/api/v1/export", post(export_file))
         .route("/api/v1/modules/{key}/freeze-frame", get(freeze_frame))
         .route(
             "/api/v1/modules/{key}/tests/{test_id}/run",
@@ -622,4 +623,81 @@ async fn session_measurements(
             .store
             .measurements(&id, q.signal.as_deref(), q.limit.min(10_000))?;
     Ok(Json(json!({ "measurements": measurements })))
+}
+
+/// A file the user asked to keep.
+#[derive(Debug, Deserialize)]
+struct ExportBody {
+    /// Base file name. Path separators are stripped; see `safe_name`.
+    filename: String,
+    /// The whole file, as text.
+    content: String,
+}
+
+/// Write an export to the user's Downloads folder and say where it went.
+///
+/// The obvious implementation — a blob URL and an `<a download>` — does nothing
+/// inside the desktop shell. A Tauri webview has no download manager, so the
+/// click is swallowed silently: the button appeared to work, no file appeared,
+/// and there was no error anywhere to explain it.
+///
+/// Doing it server-side sidesteps the whole problem and is better anyway,
+/// because it can report the actual path. The UI shows where the file is rather
+/// than leaving the user to guess which folder their browser chose.
+async fn export_file(
+    State(_state): State<AppState>,
+    Json(body): Json<ExportBody>,
+) -> ApiResult<Json<Value>> {
+    if body.content.is_empty() {
+        return Err(ApiError::bad_request("nothing to export"));
+    }
+    // A quarter of a megabyte of text is a very large report. The cap exists so
+    // a bug upstream cannot fill a disk through this endpoint.
+    const MAX_BYTES: usize = 256 * 1024;
+    if body.content.len() > MAX_BYTES {
+        return Err(ApiError::bad_request(format!(
+            "export is {} bytes; the limit is {MAX_BYTES}",
+            body.content.len()
+        )));
+    }
+
+    let name = safe_name(&body.filename)?;
+    let dir = directories::UserDirs::new()
+        .and_then(|d| d.download_dir().map(|p| p.to_path_buf()))
+        .ok_or_else(|| ApiError::internal("cannot locate the Downloads folder"))?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| ApiError::internal(format!("cannot create {}: {e}", dir.display())))?;
+
+    let path = dir.join(&name);
+    std::fs::write(&path, body.content.as_bytes())
+        .map_err(|e| ApiError::internal(format!("cannot write {}: {e}", path.display())))?;
+
+    tracing::info!(path = %path.display(), "wrote an export");
+    Ok(Json(json!({
+        "path": path.display().to_string(),
+        "directory": dir.display().to_string(),
+        "filename": name,
+    })))
+}
+
+/// Reduce a caller-supplied name to a bare filename inside the target folder.
+///
+/// The caller is this app's own UI, but that is not a reason to trust the
+/// string: a path traversal here writes anywhere the user can write, and the
+/// check is three lines.
+fn safe_name(raw: &str) -> ApiResult<String> {
+    let base = raw.rsplit(['/', '\\']).next().unwrap_or("").trim();
+    let ok = !base.is_empty()
+        && base != "."
+        && base != ".."
+        && !base.contains("..")
+        && base.len() <= 120
+        && base
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ' '));
+    if ok {
+        Ok(base.to_string())
+    } else {
+        Err(ApiError::bad_request(format!("unusable file name {raw:?}")))
+    }
 }
