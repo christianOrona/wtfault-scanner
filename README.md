@@ -9,7 +9,18 @@
 An OBD-II scanner with a language model attached — and a hard rule that it
 never makes anything up.
 
+[![CI](https://github.com/christianOrona/wtfault-scanner/actions/workflows/check.yml/badge.svg)](https://github.com/christianOrona/wtfault-scanner/actions/workflows/check.yml)
+[![status: work in progress](https://img.shields.io/badge/status-work%20in%20progress-orange)](WORKPROGRESS.md)
+[![release](https://img.shields.io/github/v/release/christianOrona/wtfault-scanner?include_prereleases&sort=semver)](https://github.com/christianOrona/wtfault-scanner/releases)
+[![licence](https://img.shields.io/badge/licence-MIT%20OR%20Apache--2.0-blue)](#licence)
+[![platform](https://img.shields.io/badge/platform-Windows-lightgrey)](#getting-started)
+
 </div>
+
+> **Work in progress.** It reads real vehicles today — verified on a 2019 F-250
+> over a real adapter. The screenshots below are from the built-in virtual
+> truck, which is said here rather than left for you to assume. It is also
+> unfinished in ways worth knowing before you rely on it: see [Status](#status).
 
 ---
 
@@ -285,6 +296,39 @@ Not a limitation to work around — a design decision:
 
 ---
 
+## Status
+
+Working, on real vehicles, and unfinished. Both halves are true, so here is the
+line between them.
+
+**Works today, verified on hardware**
+
+- OBD-II services 01–0A and UDS 0x10/0x19/0x22/0x3E over an ELM327-class adapter
+- Full-bus module sweep, live data, Mode 06, readiness, session comparison
+- The agent loop against Anthropic, xAI, Ollama or any OpenAI-shaped endpoint
+- The flight recorder, and the evidence link from every number on screen
+
+**Known gaps, in the order they matter**
+
+- **Windows only in practice.** The core is portable and CI builds it on Linux,
+  but the desktop shell has only ever been built and run on Windows.
+- **Mode 06 scalings are unverified.** Pass/fail and margin are exact regardless,
+  because they come from the same scaling on both sides — but the *units* on a
+  monitor value are a best guess and are labelled as one.
+- **Manufacturer-specific decoding is not there yet.** Everything is the public
+  standard, which is why it works across brands; it also means a module can
+  answer with a code nobody has a description for.
+- **Profile import is folder-only.** Dropping a YAML file in works; importing one
+  from a URL, with a count of how many people have verified it, does not exist.
+- **RAM 2018 and newer** put a Security Gateway between the port and the bus. No
+  standards-based tool reaches past it, this one included.
+- **Configuration writes are compiled off** — a design decision rather than a
+  gap, but worth stating in the same list so nobody discovers it by surprise.
+
+`WORKPROGRESS.md` has the full history, including the bugs.
+
+---
+
 ## Documentation
 
 | | |
@@ -308,3 +352,23 @@ cargo run -p aim-adapter --example probe_port -- COM5    # what is on that port?
 ```
 
 Screenshots above are from the virtual vehicle.
+
+---
+
+## Licence
+
+Dual-licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+- MIT License ([LICENSE-MIT](LICENSE-MIT))
+
+at your option. Unless you state otherwise, any contribution you intentionally
+submit for inclusion in this work shall be dual-licensed as above, with no
+additional terms.
+
+### A word about what this touches
+
+It talks to a vehicle. Read-only by construction, but a vehicle is not a text
+editor: run it on a car you own or have permission to work on, and do not read
+live data while driving. The licences above disclaim warranty, and that
+disclaimer is not decoration here.
