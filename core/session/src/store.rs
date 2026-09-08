@@ -74,8 +74,18 @@ impl SessionStore {
                 })?;
             }
         }
-        let conn = Connection::open(p).map_err(storage)?;
+        let conn = Connection::open(p).map_err(|e| open_failure(p, e))?;
+        // `Connection::open` does not read the file - it only creates a handle,
+        // so a damaged database opens happily and fails later, somewhere in
+        // migration, as an error that no longer knows it came from SQLite.
+        // Reading the schema forces the header now, while the error is still
+        // typed and can be classified as corruption rather than guessed at.
+        conn.query_row("SELECT count(*) FROM sqlite_master", [], |r| {
+            r.get::<_, i64>(0)
+        })
+        .map_err(|e| open_failure(p, e))?;
         SessionStore::from_connection(conn, Some(p.display().to_string()))
+            .map_err(|e| enrich_open_failure(p, e))
     }
 
     /// An in-memory database. Used by tests and by `--ephemeral` runs.
@@ -89,6 +99,12 @@ impl SessionStore {
         // in-memory databases, where it is also unnecessary.
         if path.is_some() {
             let _ = conn.pragma_update(None, "journal_mode", "WAL");
+            // A second process - an older build left installed, or a copy
+            // launched twice - should wait its turn rather than fail instantly.
+            // Five seconds is far longer than any write this app makes and
+            // still short enough that a genuine deadlock surfaces as an error
+            // rather than as a hang.
+            let _ = conn.pragma_update(None, "busy_timeout", 5000);
         }
         conn.pragma_update(None, "foreign_keys", "ON")
             .map_err(storage)?;
@@ -118,6 +134,51 @@ impl SessionStore {
     /// [`SessionStore::events_since`] rather than pretend it saw everything.
     pub fn subscribe(&self) -> broadcast::Receiver<SessionEvent> {
         self.events.subscribe()
+    }
+
+    /// Read a pragma back as text.
+    ///
+    /// Pragmas are asked for by name rather than assumed, because "we set WAL
+    /// on open" and "this database is in WAL mode" are different claims - the
+    /// `pragma_update` in [`SessionStore::from_connection`] deliberately
+    /// ignores its own failure.
+    pub fn pragma_string(&self, name: &str) -> AimResult<String> {
+        let conn = self.lock()?;
+        // Pragma names cannot be bound as parameters. Only accept the ones we
+        // ask for, so this cannot become a way to interpolate arbitrary SQL.
+        const ALLOWED: [&str; 6] = [
+            "journal_mode",
+            "foreign_keys",
+            "user_version",
+            "page_size",
+            "page_count",
+            "freelist_count",
+        ];
+        if !ALLOWED.contains(&name) {
+            return Err(AimError::new(
+                ErrorCode::StorageError,
+                format!("pragma {name} is not one this build reads back"),
+            ));
+        }
+        conn.query_row(&format!("PRAGMA {name}"), [], |r| {
+            r.get_ref(0).map(|v| match v {
+                rusqlite::types::ValueRef::Text(t) => String::from_utf8_lossy(t).into_owned(),
+                rusqlite::types::ValueRef::Integer(i) => i.to_string(),
+                other => format!("{other:?}"),
+            })
+        })
+        .map_err(storage)
+    }
+
+    /// `PRAGMA integrity_check`, returning whatever SQLite says.
+    ///
+    /// Returns the string `ok` for a healthy database. This is the check that
+    /// distinguishes a genuinely damaged file from one that merely failed to
+    /// open - a distinction worth having before anyone deletes anything.
+    pub fn integrity_check(&self) -> AimResult<String> {
+        let conn = self.lock()?;
+        conn.query_row("PRAGMA integrity_check(20)", [], |r| r.get::<_, String>(0))
+            .map_err(storage)
     }
 
     fn lock(&self) -> AimResult<MutexGuard<'_, Connection>> {
@@ -1101,4 +1162,116 @@ fn from_json_str<T: for<'de> Deserialize<'de>>(s: &str) -> AimResult<T> {
 
 fn storage(e: rusqlite::Error) -> AimError {
     AimError::new(ErrorCode::StorageError, e.to_string())
+}
+
+/// True when SQLite is claiming the file itself is damaged.
+///
+/// These are the two codes that produce the bare string "database disk image is
+/// malformed", which tells a person nothing they can act on.
+fn is_corruption(e: &rusqlite::Error) -> bool {
+    matches!(
+        e.sqlite_error_code(),
+        Some(rusqlite::ErrorCode::DatabaseCorrupt) | Some(rusqlite::ErrorCode::NotADatabase)
+    )
+}
+
+/// Turn a failed open into something a person can act on.
+///
+/// "database disk image is malformed" is SQLite telling the truth in a way that
+/// helps nobody: it names no file, and it is reported identically whether the
+/// data is destroyed or a write-ahead log was simply left behind by a crash.
+/// The second case is far more common and is recoverable, so the message says
+/// which file, and what to do, in that order.
+fn open_failure(path: &Path, e: rusqlite::Error) -> AimError {
+    if !is_corruption(&e) {
+        return AimError::new(
+            ErrorCode::StorageError,
+            format!("cannot open {}: {e}", path.display()),
+        );
+    }
+    let wal = path.with_extension("sqlite-wal");
+    let stale_wal = wal.exists();
+    let mut msg = format!(
+        "{} could not be opened ({e}). The history is not necessarily lost",
+        path.display()
+    );
+    if stale_wal {
+        msg.push_str(
+            ": a write-ahead log is still sitting beside it, which is what an app \
+             that was killed rather than closed leaves behind. Make sure no other \
+             copy of the app is running and open it again",
+        );
+    } else {
+        msg.push_str(
+            ". Close any other copy of the app and try again; if it still fails, \
+             move the file aside and a fresh database will be created",
+        );
+    }
+    AimError::new(ErrorCode::StorageError, msg)
+}
+
+/// Add the file path to a failure that happened after the handle was open.
+///
+/// Migration and the first pragma both touch pages, so corruption frequently
+/// surfaces here rather than at `open`.
+fn enrich_open_failure(path: &Path, e: AimError) -> AimError {
+    if e.message.contains(&path.display().to_string()) {
+        return e;
+    }
+    AimError::new(
+        ErrorCode::StorageError,
+        format!("{} could not be prepared: {}", path.display(), e.message),
+    )
+}
+
+#[cfg(test)]
+mod open_failure_tests {
+    use super::*;
+
+    /// A file that is not a database at all must not be reported with SQLite's
+    /// own wording. "database disk image is malformed" names no file and
+    /// suggests no action, which is exactly how a person ends up believing
+    /// their history is gone when it is not.
+    #[test]
+    fn a_non_database_file_reports_which_file_and_what_to_do() {
+        let dir = std::env::temp_dir().join(format!("aim-open-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("not-a-database.sqlite");
+        std::fs::write(&path, b"this is plainly not a SQLite file").unwrap();
+
+        let err = SessionStore::open(&path).expect_err("must not open");
+
+        let msg = err.message.to_lowercase();
+        assert!(
+            msg.contains("not-a-database.sqlite"),
+            "the message must name the file: {}",
+            err.message
+        );
+        assert!(
+            msg.contains("try again") || msg.contains("open it again"),
+            "the message must suggest an action: {}",
+            err.message
+        );
+        assert_eq!(err.code, ErrorCode::StorageError);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// The happy path must keep working, and must actually be in WAL mode with
+    /// a busy timeout - both are set with `let _ =`, so a regression would
+    /// otherwise be silent.
+    #[test]
+    fn a_fresh_database_is_wal_with_a_busy_timeout() {
+        let dir = std::env::temp_dir().join(format!("aim-fresh-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("fresh.sqlite");
+        let _ = std::fs::remove_file(&path);
+
+        let store = SessionStore::open(&path).expect("opens");
+        assert_eq!(store.pragma_string("journal_mode").unwrap(), "wal");
+        assert_eq!(store.integrity_check().unwrap(), "ok");
+
+        drop(store);
+        let _ = std::fs::remove_file(&path);
+    }
 }
