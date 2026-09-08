@@ -534,8 +534,10 @@ button.mini {
 .splash-out { opacity: 0; pointer-events: none; }
 
 .splash-art {
-  width: min(880px, 88vw);
-  max-height: 62vh;
+  /* Square artwork, not a banner: constrain by the shorter axis so it never
+     overflows a short window. */
+  width: min(420px, 60vw);
+  max-height: 55vh;
   object-fit: contain;
   border-radius: 12px;
   /* The artwork already glows; this seats it on the background rather than

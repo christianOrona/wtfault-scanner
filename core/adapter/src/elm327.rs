@@ -112,6 +112,9 @@ pub struct Elm327Adapter {
     adapter_errors: u64,
     latency_total_ms: u64,
     latency_samples: u64,
+    /// Set when the device answered `STI`, proving STN-series firmware rather
+    /// than a clone that borrowed the name.
+    stn_confirmed: bool,
     battery_voltage: Option<f64>,
 }
 
@@ -137,6 +140,7 @@ impl Elm327Adapter {
             adapter_errors: 0,
             latency_total_ms: 0,
             latency_samples: 0,
+            stn_confirmed: false,
             battery_voltage: None,
         }
     }
@@ -325,6 +329,56 @@ impl Elm327Adapter {
             );
         }
 
+        // Better silicon, recognised and used.
+        //
+        // "ELM327-compatible" spans a very wide range of hardware. At the
+        // bottom is a counterfeit chip that drops multi-frame responses; at the
+        // top is an STN-series device (OBDLink and similar) that is a different
+        // class of thing — several times the throughput, real multi-frame
+        // handling, and on the dual-bus models a second CAN bus that reaches
+        // the modules a plain ELM327 cannot see at all.
+        //
+        // This is checked and recorded, never assumed. Everything downstream —
+        // how many live signals fit in an interval, how long a discovery sweep
+        // waits per address — is derived from observed throughput, so an
+        // adapter that reports itself as better is *tested* as better and earns
+        // the benefit automatically. Nothing here hard-codes a device.
+        let vendor_upper = self.caps.vendor.to_ascii_uppercase();
+        let stn = upper.contains("STN")
+            || vendor_upper.contains("STN")
+            || vendor_upper.contains("OBDLINK")
+            || vendor_upper.contains("SCANTOOL");
+        if stn {
+            // ST is the STN command prefix. A device that answers `STI` with a
+            // version string is genuinely STN firmware rather than a clone that
+            // merely borrowed the name for its product page.
+            let sti = self.send_raw("STI", self.config.at_timeout)?;
+            if sti.class.is_success() && !sti.lines.is_empty() {
+                self.caps.add_caveat(format!(
+                    "STN-series firmware confirmed ({}); multi-frame handling and throughput \
+                     are materially better than a generic ELM327 clone",
+                    sti.lines.join(" ").trim()
+                ));
+                self.caps.supports_long_messages = true;
+                self.stn_confirmed = true;
+
+                // Ask, rather than assume, whether this is a dual-bus device.
+                // Reaching the second bus is what makes door, body and chassis
+                // modules addressable on vehicles that put them there, and it
+                // is the single capability that most changes what the product
+                // can do.
+                let buses = self.send_raw("STPX", self.config.at_timeout)?;
+                if buses.class.is_success() {
+                    self.caps.multiple_can_buses = true;
+                }
+            } else {
+                self.caps.add_caveat(
+                    "the banner mentions STN but the device did not answer STI, so it is \
+                     treated as a generic ELM327-compatible device",
+                );
+            }
+        }
+
         // Version claims from ELM327-class hardware are not trustworthy: clone
         // firmware routinely reports v2.1 on v1.5-era silicon. Record the claim
         // and the doubt; never act on the version number.
@@ -497,6 +551,12 @@ impl Elm327Adapter {
         // Throughput is measured, not declared: the round trips we just made
         // are the only honest evidence available at connect time.
         let mean = self.mean_latency_ms();
+        // The ceiling follows the hardware, not the product.
+        let ceiling = if self.stn_confirmed {
+            THROUGHPUT_CEILING_STN
+        } else {
+            THROUGHPUT_CEILING
+        };
         self.caps.max_reliable_throughput = if self.latency_samples == 0 {
             0.0
         } else if mean <= 0.0 {
@@ -507,9 +567,9 @@ impl Elm327Adapter {
                 "throughput is a floor estimate: round trips completed faster than the \
                  millisecond clock could measure",
             );
-            THROUGHPUT_CEILING
+            ceiling
         } else {
-            (1000.0 / mean).clamp(0.5, THROUGHPUT_CEILING)
+            (1000.0 / mean).clamp(0.5, ceiling)
         };
         Ok(true)
     }
@@ -813,9 +873,13 @@ impl DiagnosticAdapter for Elm327Adapter {
     }
 }
 
-/// Upper bound on the requests-per-second figure reported in capabilities. No
-/// ELM327-class adapter sustains more than this, so a faster measurement means
-/// the measurement, not the adapter, is the limit.
+/// Upper bound on the requests-per-second figure, for a generic ELM327-class
+/// device. A faster measurement than this means the measurement, not the
+/// adapter, is the limit.
+///
+/// Not a property of the product. STN-series hardware genuinely exceeds it, and
+/// clamping such a device to a number learned from a cheap clone would make the
+/// app slower on better hardware for no reason - see `THROUGHPUT_CEILING_STN`.
 /// What a vehicle electrical system can actually sit at, key on or engine
 /// running. Deliberately wide: 12 V systems idle near 14.5 V charging and can
 /// dip to 11 V cranking, and 24 V commercial systems exist. A reading outside
@@ -823,6 +887,15 @@ impl DiagnosticAdapter for Elm327Adapter {
 const PLAUSIBLE_SYSTEM_VOLTS: std::ops::RangeInclusive<f64> = 9.0..=32.0;
 
 const THROUGHPUT_CEILING: f64 = 100.0;
+
+/// The same bound for confirmed STN-series firmware.
+///
+/// A different class of hardware, not a faster version of the same one: real
+/// multi-frame handling, hardware-timed request pipelining, and no need for the
+/// text-terminal round trip that limits a generic ELM327. Clamping such a
+/// device to the generic ceiling would make the app slower on better hardware
+/// for no reason other than a constant.
+const THROUGHPUT_CEILING_STN: f64 = 400.0;
 
 /// True for errors that mean the link itself is gone rather than the request
 /// being wrong.
