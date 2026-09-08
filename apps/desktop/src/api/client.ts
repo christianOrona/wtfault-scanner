@@ -14,7 +14,7 @@ import type {
   Health, IdentifyData, Measurement, ModuleIdentity, ModuleRecord, PortsResponse,
   SessionEvent, SessionSummary, SignalsData, ToolResult, ApiError, Dtc, MonitorTestsData,
   AgentStatus, InspectResponse, ChatResponse as AgentChatResponse,
-  ProvidersResponse, ProviderView, ProviderKindId, ProbeResult, Speed, ExplanationsResponse, FeaturesData, ChangePlan, ProfilesResponse, ClearResult, ReadinessData, ScanPurpose, Tone, FullScanData,
+  ProvidersResponse, ProviderView, ProviderKindId, ProbeResult, Speed, ExplanationsResponse, FeaturesData, ChangePlan, ProfilesResponse, ClearResult, ReadinessData, ScanPurpose, Tone, FullScanData, ComparisonResponse,
 } from "./types";
 
 /**
@@ -144,6 +144,8 @@ export const api = {
   dtcs: (key: string) => request<ToolResult<DtcData>>(`/modules/${enc(key)}/dtcs`),
   readiness: () => request<ToolResult<ReadinessData>>("/readiness"),
   scanAllModules: () => post<ToolResult<FullScanData>>("/modules/scan-all"),
+  compareSessions: (before: string, after: string) =>
+    request<ComparisonResponse>(`/sessions/${enc(before)}/compare/${enc(after)}`),
   clearDtcs: (confirmation: string, module?: string) =>
     post<ToolResult<ClearResult>>("/dtcs/clear", { confirmation, module }),
   freezeFrame: (key: string, frame = 0) =>

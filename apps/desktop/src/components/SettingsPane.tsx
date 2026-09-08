@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, describeError, type ProviderInput } from "../api/client";
 import type { ProbeResult, ProfilesResponse, ProviderKindId, ProviderView, ProvidersResponse, ScanPurpose, Tone, Health } from "../api/types";
+import { LINKEDIN_URL, PRODUCT_NAME, REPO_URL, TAGLINE } from "../branding";
 import { ErrorBanner, Spinner } from "./primitives";
 
 const BLANK: ProviderInput = {
@@ -618,12 +619,8 @@ function About({ health }: { health: Health | null }) {
     <div className="section" style={{ marginTop: 26 }}>
       <h2>About</h2>
       <div className="card">
-        <div style={{ fontSize: 15, fontWeight: 600 }}>
-          WTF<span style={{ color: "var(--accent)" }}>ault</span> Scanner
-        </div>
-        <div className="explain" style={{ fontStyle: "italic" }}>
-          Just ask your car what the fuck is wrong.
-        </div>
+        <div style={{ fontSize: 15, fontWeight: 600 }}>{PRODUCT_NAME}</div>
+        <div className="explain" style={{ fontStyle: "italic" }}>{TAGLINE}</div>
 
         <div className="explain" style={{ marginTop: 12 }}>
           An OBD-II scanner with a language model attached. It reads trouble codes from every
@@ -657,9 +654,33 @@ function About({ health }: { health: Health | null }) {
               <td className="faint">Scans stored in</td>
               <td className="mono" style={{ wordBreak: "break-all" }}>{health?.database ?? "in memory"}</td>
             </tr>
+            <tr>
+              <td className="faint">Source</td>
+              <td><ExternalLink href={REPO_URL} /></td>
+            </tr>
+            <tr>
+              <td className="faint">Author</td>
+              <td><ExternalLink href={LINKEDIN_URL} /></td>
+            </tr>
           </tbody>
         </table>
       </div>
     </div>
+  );
+}
+
+/**
+ * A link, or an honest gap.
+ *
+ * An About box with a dead link in it is worse than one with a visible blank:
+ * the blank tells you it has not been set, the dead link wastes a click and
+ * makes the whole box look unmaintained. Set both in `src/branding.ts`.
+ */
+function ExternalLink({ href }: { href: string | null }) {
+  if (!href) return <span className="faint">not set yet</span>;
+  return (
+    <a href={href} target="_blank" rel="noreferrer noopener" className="mono">
+      {href.replace(/^https?:\/\//, "")}
+    </a>
   );
 }

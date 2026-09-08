@@ -7,6 +7,7 @@ import { api, describeError, type SessionDetail } from "../api/client";
 import type { Health, SessionSummary } from "../api/types";
 import { ErrorBanner, Spinner, localTime } from "./primitives";
 import { PaneIntro } from "../explain";
+import { CompareSessions } from "./CompareSessions";
 
 export function SessionsPane({ health }: { health: Health | null }) {
   const [sessions, setSessions] = useState<SessionSummary[] | null>(null);
@@ -87,6 +88,8 @@ export function SessionsPane({ health }: { health: Health | null }) {
           </tbody>
         </table>
       )}
+
+      {sessions && sessions.length > 1 && <CompareSessions sessions={sessions} />}
 
       {detail && (
         <div className="section" style={{ marginTop: 20 }}>

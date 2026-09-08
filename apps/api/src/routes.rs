@@ -74,6 +74,7 @@ pub fn router(state: AppState) -> Router {
             get(session_measurements),
         )
         .route("/api/v1/sessions/{id}/stream", get(ws::session_events_ws))
+        .route("/api/v1/sessions/{before}/compare/{after}", get(compare_sessions))
         // ---- agent seam ----
         .route("/api/v1/agent", get(crate::agent_routes::agent_status))
         .route("/api/v1/agent/messages", post(crate::agent_routes::messages))
@@ -708,4 +709,31 @@ fn safe_name(raw: &str) -> ApiResult<String> {
     } else {
         Err(ApiError::bad_request(format!("unusable file name {raw:?}")))
     }
+}
+
+/// What changed between two recorded scans of the same vehicle.
+///
+/// The most useful diagnostic question a single scan cannot answer. Every scan
+/// this app has ever done is already on disk; nothing compared them, so a fuel
+/// trim that has been creeping for six months looked exactly like one that was
+/// always where it is.
+async fn compare_sessions(
+    State(state): State<AppState>,
+    Path((before, after)): Path<(String, String)>,
+) -> ApiResult<Json<Value>> {
+    let cmp = aim_session::compare_sessions(
+        &state.store,
+        &SessionId(before),
+        &SessionId(after),
+    )?;
+    // `notable` is the store's own judgement about what is worth a person's
+    // attention. Sent alongside rather than used to filter, so the UI can show
+    // everything if asked and the API never silently drops data.
+    let notable: Vec<&str> = cmp
+        .signals
+        .iter()
+        .filter(|s| s.notable())
+        .map(|s| s.signal_id.as_str())
+        .collect();
+    Ok(Json(json!({ "comparison": cmp, "notable_signals": notable })))
 }

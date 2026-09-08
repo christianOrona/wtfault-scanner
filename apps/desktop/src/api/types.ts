@@ -659,3 +659,41 @@ export interface FullScanData {
   fault_count: number;
   addresses_probed: number;
 }
+
+export type FaultChange = "appeared" | "gone" | "unchanged";
+
+export interface FaultDelta {
+  code: string;
+  module: string;
+  description: string | null;
+  change: FaultChange;
+}
+
+export interface SignalDelta {
+  signal_id: string;
+  unit: string | null;
+  before: number;
+  after: number;
+  delta: number;
+  /** Null when the earlier reading was zero. */
+  relative: number | null;
+  samples_before: number;
+  samples_after: number;
+}
+
+export interface SessionComparison {
+  before: string;
+  after: string;
+  before_at: string;
+  after_at: string;
+  days_apart: number;
+  faults: FaultDelta[];
+  signals: SignalDelta[];
+  /** Null when either scan did not read a VIN. */
+  same_vehicle: boolean | null;
+}
+
+export interface ComparisonResponse {
+  comparison: SessionComparison;
+  notable_signals: string[];
+}

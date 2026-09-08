@@ -19,8 +19,10 @@
 
 #![warn(missing_docs)]
 
+pub mod compare;
 pub mod schema;
 pub mod store;
 
+pub use compare::{compare_sessions, FaultChange, FaultDelta, SessionComparison, SignalDelta};
 pub use schema::{latest_version, Migration, MIGRATIONS};
 pub use store::{measurement_from, SessionStore, SessionSummary};
