@@ -22,4 +22,5 @@ export const REPO_URL: string | null =
  *
  * Example: "https://www.linkedin.com/in/your-name"
  */
-export const LINKEDIN_URL: string | null = null;
+export const LINKEDIN_URL: string | null =
+  "https://www.linkedin.com/in/christian-orona-30957335/";
