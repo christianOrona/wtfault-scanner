@@ -171,6 +171,53 @@ pub struct AdapterCapabilities {
     pub caveats: Vec<String>,
 }
 
+/// How long different kinds of request are worth waiting for on this adapter.
+///
+/// Derived from what the adapter was *observed* to sustain, never from a
+/// constant. The app used to carry `75 ms per PID` in the UI, measured on one
+/// ELM327 clone, which quietly became the ceiling for every adapter that would
+/// ever be plugged in - including the faster ones this design exists to
+/// support. An STN-based or J2534 device is several times quicker and should
+/// not be throttled by a number learned from a $10 cable.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RequestBudget {
+    /// Waiting for a module that may simply not exist. Short on purpose: a
+    /// discovery sweep spends most of its time being ignored.
+    pub probe: std::time::Duration,
+    /// Reading something a module has to look up, such as its fault memory.
+    pub read: std::time::Duration,
+    /// Round-trip cost of one live-data parameter, used to work out how many
+    /// fit inside a sampling interval.
+    pub per_signal: std::time::Duration,
+}
+
+impl AdapterCapabilities {
+    /// Timing budgets implied by this adapter's observed throughput.
+    ///
+    /// One measured number drives all three, so an adapter that turns out to be
+    /// fast gets the benefit everywhere at once rather than in whichever call
+    /// site somebody remembered to update.
+    pub fn discovery_budget(&self) -> RequestBudget {
+        // Fall back to something an ELM327 clone manages when nothing has been
+        // measured yet. A default is not a limit: it is replaced the moment the
+        // adapter reports what it actually did.
+        let per_second = if self.max_reliable_throughput > 0.1 {
+            self.max_reliable_throughput
+        } else {
+            14.0
+        };
+        let one = std::time::Duration::from_secs_f64(1.0 / per_second);
+        RequestBudget {
+            // Silence is the common answer during discovery, so this only has
+            // to be long enough for a module that *is* there to speak.
+            probe: one.max(std::time::Duration::from_millis(40)),
+            // Fault memory can take a module real time to assemble.
+            read: (one * 12).max(std::time::Duration::from_millis(600)),
+            per_signal: one,
+        }
+    }
+}
+
 impl AdapterCapabilities {
     /// The safest possible starting point: nothing is assumed to work.
     pub fn unknown(transport: TransportKind) -> Self {

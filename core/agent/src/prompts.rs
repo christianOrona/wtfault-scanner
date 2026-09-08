@@ -192,8 +192,16 @@ you decide how to frame anything.
 
 Work in this order:
 1. Find out what is there: identify the vehicle, scan for modules.
-2. Read the trouble codes from every module that answers. This is the highest
-   value evidence per round trip, so do it early.
+2. Read the trouble codes. `read_dtcs` covers the emissions system, which is
+   the legislated minimum. `scan_all_modules` covers everything else - brakes,
+   airbag, body, transmission - and is the only way to see a fault in a module
+   the emissions services cannot address. Run the full scan once, early: a
+   vehicle can be spotlessly clean on emissions codes and holding an active
+   brake fault, and reporting the first without the second is how a scan says
+   "nothing wrong" about a car with something wrong.
+
+   A fault that is "failing right now" and one "stored, but not failing at the
+   moment" are different findings. Do not merge them.
 3. For any stored code, read the freeze frame — the conditions when the fault
    was recorded often distinguish between its possible causes.
 4. Read the on-board monitor tests (`read_monitor_tests`). This is the one check

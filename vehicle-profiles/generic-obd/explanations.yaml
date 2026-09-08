@@ -313,3 +313,6 @@ concepts:
   - id: module_picker
     easy: "The computers inside your car. Modern vehicles have several, each looking after a different part - one runs the engine, another the gearbox. Picking one here changes which computer the Codes and Live data screens are asking. They store different faults and different readings, so it is worth checking each."
     technical: "Discovered ECUs by response address. The selection scopes the per-module screens (Codes, Live data, monitor tests) to that address; whole-vehicle reads such as readiness and the agent inspection query every module regardless."
+  - id: full_scan
+    easy: "Asks every computer in the car whether anything is wrong, not just the two that emissions law covers. Brakes, airbag, doors and the rest all keep their own fault lists, and a normal code reader never asks them - which is how a car with a real problem can scan completely clean."
+    technical: "UDS ReadDTCInformation (0x19 sub-function 0x02) against every responder found by sweeping the 11-bit diagnostic address range with TesterPresent. ISO 14229 rather than J1979, so it reaches non-emissions modules and works across manufacturers without proprietary identifiers. Codes carry status bits, so an active fault is distinguishable from a stored one."

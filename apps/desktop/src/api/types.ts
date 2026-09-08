@@ -626,3 +626,36 @@ export interface ReadinessData {
 
 export type ScanPurpose = "owner" | "buyer";
 export type Tone = "practical" | "neutral" | "blunt";
+
+/** One fault as UDS reports it: three-byte code plus status bits. */
+export interface UdsFault {
+  code: string;
+  base_code: string;
+  description: string | null;
+  structural_summary: string | null;
+  is_generic: boolean | null;
+  status: number;
+  status_summary: string;
+  failing_now: boolean;
+  confirmed: boolean;
+  warning_lamp: boolean;
+}
+
+export interface ScannedModule {
+  request_address: string;
+  address: string;
+  name: string;
+  /** True for the legislated emissions block a code reader can also see. */
+  in_legislated_range: boolean;
+  faults: UdsFault[];
+  fault_count: number;
+  /** Why this module produced no faults, when that needs explaining. */
+  note: string | null;
+}
+
+export interface FullScanData {
+  modules: ScannedModule[];
+  module_count: number;
+  fault_count: number;
+  addresses_probed: number;
+}

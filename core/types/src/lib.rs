@@ -23,7 +23,7 @@ pub mod tool;
 pub mod value;
 
 pub use capability::{
-    AdapterCapabilities, AdapterHealth, ConnectionState, ObdProtocol, TransportKind,
+    AdapterCapabilities, AdapterHealth, ConnectionState, ObdProtocol, RequestBudget, TransportKind,
 };
 pub use domain::{
     AgentTrace, Connection, Diagnosis, DtcRecord, DtcStatus, Measurement, Module, ModuleIdentity,

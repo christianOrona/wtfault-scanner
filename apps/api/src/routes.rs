@@ -56,6 +56,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/modules/{key}/read", post(module_read))
         .route("/api/v1/dtcs/clear", post(clear_dtcs))
         .route("/api/v1/readiness", get(readiness))
+        .route("/api/v1/modules/scan-all", post(scan_all_modules))
         .route("/api/v1/export", post(export_file))
         .route("/api/v1/modules/{key}/freeze-frame", get(freeze_frame))
         .route(
@@ -420,6 +421,13 @@ struct ClearBody {
     /// One module, or every module that answers when absent.
     #[serde(default)]
     module: Option<String>,
+}
+
+/// Sweep the diagnostic address range and read every module's fault memory.
+async fn scan_all_modules(State(state): State<AppState>) -> ApiResult<Json<ToolResult>> {
+    Ok(Json(
+        state.with_service(|s| s.scan_all_modules("user:api")).await?,
+    ))
 }
 
 /// Emissions readiness from every module that keeps it.

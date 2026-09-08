@@ -28,4 +28,6 @@ pub use obd2::{
     decode_monitor_tests, decode_supported_pids, decode_vin, encode_dtc, encode_supported_pids,
     strip_dtc_count, MonitorTest, ObdRequest, ObdResponse, Service,
 };
-pub use uds::{NegativeResponseCode, UdsRequest, UdsResponse, UdsService};
+pub use uds::{
+    decode_dtc_by_status_mask, NegativeResponseCode, UdsDtc, UdsRequest, UdsResponse, UdsService,
+};

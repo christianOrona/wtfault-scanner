@@ -177,6 +177,27 @@ pub trait DiagnosticAdapter: Send {
         target: &RequestTarget,
     ) -> AimResult<Vec<EcuMessage>>;
 
+    /// Send an arbitrary service PDU and collect what answers.
+    ///
+    /// The protocol-neutral primitive. [`DiagnosticAdapter::request`] is the
+    /// OBD-II-shaped convenience over the top of it; UDS goes through here,
+    /// and so would anything else that is "put these service bytes on the bus
+    /// and tell me who replied".
+    ///
+    /// Separate from [`DiagnosticAdapter::raw_command`], which sends adapter
+    /// commands (`ATZ`, `ATSP0`) rather than vehicle traffic.
+    ///
+    /// `timeout` is the caller's budget, because the right value is not a
+    /// property of the adapter: a discovery sweep across 240 addresses wants a
+    /// short one and is happy with silence, while a module reading its whole
+    /// fault memory may legitimately take seconds.
+    fn request_pdu(
+        &mut self,
+        pdu: &[u8],
+        target: &RequestTarget,
+        timeout: std::time::Duration,
+    ) -> AimResult<Vec<EcuMessage>>;
+
     /// Send a raw adapter command. Escape hatch for diagnostics and probing;
     /// the safety gate is what decides whether a caller may reach it.
     fn raw_command(&mut self, command: &str) -> AimResult<AdapterResponse>;

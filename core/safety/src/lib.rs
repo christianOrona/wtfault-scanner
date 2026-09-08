@@ -161,6 +161,10 @@ impl CapabilityRegistry {
             Capability::read_only("obd2.read_live_data", "Read several PIDs as a sample"),
             Capability::read_only("obd2.read_supported_pids", "Enumerate supported PIDs"),
             Capability::read_only(
+                "obd2.scan_all_modules",
+                "Discover every module on the diagnostic bus and read its fault memory",
+            ),
+            Capability::read_only(
                 "obd2.read_monitor_tests",
                 "Read on-board monitor test results and their pass or fail limits",
             ),

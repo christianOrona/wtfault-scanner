@@ -63,6 +63,8 @@ pub mod capabilities {
     pub const READ_SUPPORTED_PIDS: &str = "obd2.read_supported_pids";
     /// Read service 06 on-board monitor test results.
     pub const READ_MONITOR_TESTS: &str = "obd2.read_monitor_tests";
+    /// Discover every module on the bus and read its fault memory.
+    pub const SCAN_ALL_MODULES: &str = "obd2.scan_all_modules";
     /// List configurable features applicable to this vehicle.
     pub const LIST_FEATURES: &str = "config.list_features";
     /// Evaluate a proposed configuration change without applying it.
@@ -75,6 +77,17 @@ pub mod capabilities {
 ///
 /// Only those the module reports as supported are actually requested, so this
 /// is a preference list rather than an assumption about any vehicle.
+/// The 11-bit diagnostic address range swept by a full-vehicle scan.
+///
+/// `0x700..=0x7EF` is where ISO 15765-4 puts diagnostic request identifiers.
+/// The legislated emissions block is `0x7E0..=0x7E7`; everything below it is
+/// where manufacturers put brakes, body, airbag and the rest, and is exactly
+/// the region a code reader never looks at.
+///
+/// Swept exhaustively rather than from a per-manufacturer list, because a list
+/// is a guess about a vehicle and a sweep is a measurement of one.
+const UDS_SCAN_RANGE: std::ops::RangeInclusive<u16> = 0x700..=0x7EF;
+
 const FREEZE_FRAME_PIDS: [u8; 14] = [
     0x03, 0x04, 0x05, 0x0B, 0x0C, 0x0D, 0x0F, 0x10, 0x11, 0x1F, 0x21, 0x2F, 0x33, 0x42,
 ];
@@ -1724,6 +1737,200 @@ impl DiagnosticService {
             evidence,
             module: Some(module_key.to_string()),
         })
+    }
+
+    /// Find every module on the bus, and read its faults.
+    ///
+    /// This is the difference between a code reader and a scan tool, and it
+    /// needs no manufacturer secrets to do.
+    ///
+    /// Service 03 — everything this app used before — is legislated *emissions*
+    /// diagnostics. It reaches the engine and transmission controllers and
+    /// nothing else, which is why a scan of a vehicle with a dead airbag
+    /// module, a faulty wheel speed sensor and a failing body controller comes
+    /// back clean. Those modules are on the same wires, answering the same way;
+    /// nobody was asking them.
+    ///
+    /// UDS `ReadDTCInformation` (0x19) asks them. It is ISO 14229, a public
+    /// standard, and it works identically on every manufacturer — the parts of
+    /// UDS that are proprietary are the data identifiers and the security
+    /// algorithms, neither of which this needs.
+    ///
+    /// Two steps:
+    ///
+    /// 1. **Discovery.** `TesterPresent` (0x3E 0x00) to each address in the
+    ///    diagnostic range. It is the most inert request in the protocol — a
+    ///    keep-alive that does nothing — and anything that answers it is a
+    ///    module that exists. Which address it *replies* on is recorded rather
+    ///    than assumed, because the request-plus-eight convention holds for the
+    ///    legislated range and is only a convention elsewhere.
+    /// 2. **Fault memory.** `0x19 0x02 0xFF` to each module that answered.
+    pub fn scan_all_modules(&mut self, initiator: &str) -> ToolResult {
+        let t0 = Instant::now();
+        self.record_invocation("scan_all_modules", initiator, serde_json::json!({}));
+        let outcome = self
+            .authorize(capabilities::SCAN_ALL_MODULES, initiator, None)
+            .and_then(|_| self.scan_all_inner());
+        self.finish(
+            "scan_all_modules",
+            capabilities::SCAN_ALL_MODULES,
+            t0,
+            outcome,
+        )
+    }
+
+    fn scan_all_inner(&mut self) -> AimResult<Payload> {
+        self.require_usable()?;
+        let budget = self.adapter.capabilities().discovery_budget();
+
+        let mut found = Vec::new();
+        let mut warnings = Vec::new();
+        let probe = aim_protocols::UdsRequest::tester_present(false).to_bytes();
+
+        // The 11-bit diagnostic range. 0x7DF is the functional broadcast and is
+        // skipped: it is not a module, and probing it produces a reply from
+        // every emissions ECU at once.
+        for addr in UDS_SCAN_RANGE {
+            if addr == 0x7DF {
+                continue;
+            }
+            let target = RequestTarget::Physical(format!("{addr:03X}"));
+            let replies = match self.adapter.request_pdu(&probe, &target, budget.probe) {
+                Ok(r) => r,
+                // A link that has genuinely fallen over should stop the sweep
+                // rather than produce 240 identical failures.
+                Err(e) if e.code == ErrorCode::TransportDisconnected => return Err(e),
+                Err(_) => continue,
+            };
+            for m in replies {
+                found.push((addr, m.address.clone()));
+            }
+        }
+
+        if found.is_empty() {
+            return Err(AimError::no_data(
+                "no module answered on any diagnostic address; the vehicle may be \
+                 asleep, or this adapter may not reach the bus the modules are on",
+            ));
+        }
+
+        // Read fault memory from each responder.
+        let dtc_request = aim_protocols::UdsRequest::read_dtc_by_status_mask(0xFF).to_bytes();
+        let mut modules = Vec::new();
+        let mut total_faults = 0usize;
+        let mut refused = 0usize;
+
+        for (request_addr, response_addr) in &found {
+            let target = RequestTarget::Physical(format!("{request_addr:03X}"));
+            let reply = self.adapter.request_pdu(&dtc_request, &target, budget.read);
+
+            let (dtcs, note) = match reply {
+                Ok(messages) => match messages.into_iter().find(|m| &m.address == response_addr) {
+                    Some(m) => self.decode_uds_dtcs(&m.payload),
+                    None => (Vec::new(), Some("did not answer the fault request".to_string())),
+                },
+                Err(e) => (Vec::new(), Some(e.message.clone())),
+            };
+            if note.is_some() {
+                refused += 1;
+            }
+            total_faults += dtcs.len();
+            let fault_count = dtcs.len();
+
+            // Described, never named. A module at 0x760 is "the module at 760"
+            // until something it says identifies it — guessing that it is the
+            // ABS controller because it usually is on some vehicles is exactly
+            // the invention this project refuses.
+            modules.push(serde_json::json!({
+                "request_address": format!("{request_addr:03X}"),
+                "address": response_addr,
+                "name": format!("Module at {response_addr}"),
+                "in_legislated_range": (0x7E0..=0x7E7).contains(request_addr),
+                "faults": dtcs,
+                "fault_count": fault_count,
+                "note": note,
+            }));
+        }
+
+        if refused > 0 {
+            warnings.push(Warning::info(
+                "modules_without_fault_memory",
+                format!(
+                    "{refused} of {} modules answered the discovery probe but not the fault \
+                     request. That is normal: not every module implements the standard fault \
+                     service, and some only answer it in a diagnostic session this build does \
+                     not open.",
+                    found.len()
+                ),
+            ));
+        }
+        warnings.push(Warning::info(
+            "uds_scan_scope",
+            "This reads every module that answers on the standard diagnostic addresses, not \
+             only the emissions ones. Codes outside the emissions system are reported with \
+             their raw identifier when this build has no description for them.",
+        ));
+
+        Ok(Payload {
+            data: Some(serde_json::json!({
+                "modules": modules,
+                "module_count": modules.len(),
+                "fault_count": total_faults,
+                "addresses_probed": UDS_SCAN_RANGE.count(),
+            })),
+            warnings,
+            evidence: self.recorder.last_response_event(),
+            ..Default::default()
+        })
+    }
+
+    /// Turn a `0x19 0x02` reply into described faults.
+    ///
+    /// Returns the note separately so a module that answered something other
+    /// than a positive response is reported as such rather than as "no faults",
+    /// which are very different things to a person deciding whether to worry.
+    fn decode_uds_dtcs(&self, payload: &[u8]) -> (Vec<serde_json::Value>, Option<String>) {
+        use aim_protocols::UdsResponse;
+        let parsed = match UdsResponse::parse(payload) {
+            Ok(p) => p,
+            Err(e) => return (Vec::new(), Some(e.message)),
+        };
+        let data = match &parsed {
+            UdsResponse::Positive { data, .. } => data.clone(),
+            UdsResponse::Negative { nrc, .. } => {
+                return (Vec::new(), Some(format!("declined: {}", nrc.description())))
+            }
+        };
+        // Skip the echoed sub-function byte before the availability mask.
+        let body = data.split_first().map(|(_, rest)| rest).unwrap_or(&[]);
+        let dtcs = aim_protocols::decode_dtc_by_status_mask(body);
+        (
+            dtcs.iter()
+                .map(|d| {
+                    // Looked up on the two-byte base code, because that is what
+                    // the catalogue is keyed on. A code with no entry keeps its
+                    // structural decoding and gets no description rather than
+                    // an invented one — the same rule service 03 follows, and
+                    // it matters more here: a body or chassis code from a
+                    // module nobody legislated is exactly the case where this
+                    // build is most likely to have nothing to say.
+                    let info = self.decoders.dtcs.describe(&d.base_code).ok();
+                    serde_json::json!({
+                        "code": d.code,
+                        "base_code": d.base_code,
+                        "description": info.as_ref().and_then(|i| i.description.clone()),
+                        "structural_summary": info.as_ref().map(|i| i.structural_summary.clone()),
+                        "is_generic": info.as_ref().map(|i| i.is_generic),
+                        "status": d.status,
+                        "status_summary": d.status_summary(),
+                        "failing_now": d.test_failed(),
+                        "confirmed": d.confirmed(),
+                        "warning_lamp": d.warning_indicator_requested(),
+                    })
+                })
+                .collect(),
+            None,
+        )
     }
 
     /// Emissions readiness from every module that keeps it.

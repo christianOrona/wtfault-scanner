@@ -13,12 +13,15 @@ import { InspectPane } from "./components/InspectPane";
 import { AskPane } from "./components/AskPane";
 import { SettingsPane } from "./components/SettingsPane";
 import { FeaturesPane } from "./components/FeaturesPane";
+import { FullScanPane } from "./components/FullScanPane";
 import { Splash } from "./components/Splash";
 import { ErrorBanner, FailedResult, Pill, Spinner, Warnings } from "./components/primitives";
 import { useFlightRecorder } from "./hooks/useFlightRecorder";
 import { Explain, ExplainToggle, useExplain } from "./explain";
 
-type Tab = "inspect" | "ask" | "codes" | "live" | "features" | "adapter" | "recorder" | "sessions" | "settings";
+type Tab =
+  | "inspect" | "ask" | "codes" | "fullscan" | "live" | "features"
+  | "adapter" | "recorder" | "sessions" | "settings";
 
 /**
  * The tab bar.
@@ -34,7 +37,8 @@ const TABS: { id: Tab; label: string; hint: string }[] = [
   { id: "inspect", label: "Inspect", hint: "Let the assistant check the whole car and write you a report." },
   { id: "ask", label: "Ask", hint: "Ask a question about this car in your own words." },
   { id: "codes", label: "Codes", hint: "Fault codes the car has stored, and what each one means." },
-  { id: "live", label: "Live data", hint: "Watch the car's sensors move while the engine runs." },
+  { id: "fullscan", label: "Full scan", hint: "Ask every computer in the car for its faults, not just the emissions ones." },
+  { id: "live", label: "Live data", hint: "Watch the car sensors move while the engine runs." },
   { id: "features", label: "Settings on the car", hint: "Things this car can be configured to do, and how far this app can go." },
   { id: "adapter", label: "Adapter", hint: "The box plugged into the car: what it is and how it is doing." },
   { id: "recorder", label: "Flight recorder", hint: "Every question asked and every answer given, in order. The proof." },
@@ -413,6 +417,7 @@ export default function App() {
               </div>
               {tab === "settings" && <SettingsPane onChanged={refreshAgent} health={health} />}
               {tab === "codes" && <CodesPane moduleKey={selectedModule} onEvidence={showEvidence} />}
+              {tab === "fullscan" && <FullScanPane connected={connected} />}
               {tab === "features" && <FeaturesPane connected={connected} />}
               {tab === "adapter" && <AdapterPane adapter={adapter} />}
               {tab === "recorder" && (

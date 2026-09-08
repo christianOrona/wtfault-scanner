@@ -695,3 +695,108 @@ fn a_live_sample_stops_asking_once_the_bus_is_unhappy() {
     let result = service.read_live_data("ECU_7E8", &signals, USER);
     assert!(!result.success, "a silent bus cannot produce a sample");
 }
+
+#[test]
+fn a_full_scan_finds_modules_a_code_reader_never_sees() {
+    // The whole reason this exists. The virtual vehicle has two modules outside
+    // the legislated emissions block that answer UDS and nothing else: they do
+    // not reply to the 0x7DF broadcast, they implement no service 01 PIDs, and
+    // service 03 cannot reach them. A scan that only reads trouble codes the
+    // legislated way reports a clean vehicle while one of them has a confirmed,
+    // currently-failing fault.
+    let (mut service, _) = connected(ScenarioId::Healthy);
+
+    // Baseline: the emissions path says everything is fine.
+    service.scan_modules(USER);
+    let dtcs = service.read_dtcs(None, USER);
+    assert!(dtcs.success, "{:?}", dtcs.error);
+    assert_eq!(
+        dtcs.data.unwrap()["dtcs"].as_array().unwrap().len(),
+        0,
+        "the healthy scenario stores no emissions codes"
+    );
+
+    // The full scan disagrees, and is right.
+    let result = service.scan_all_modules(USER);
+    assert!(result.success, "{:?}", result.error);
+    let data = result.data.unwrap();
+    let modules = data["modules"].as_array().unwrap();
+
+    // It reached past the legislated block.
+    assert!(
+        modules.iter().any(|m| m["in_legislated_range"] == false),
+        "the sweep must reach outside 7E0-7E7: {modules:#?}"
+    );
+
+    let faults = data["fault_count"].as_u64().unwrap();
+    assert!(faults > 0, "the brake module has faults service 03 cannot see");
+}
+
+#[test]
+fn a_uds_fault_carries_its_status_and_a_description_when_one_exists() {
+    let (mut service, _) = connected(ScenarioId::Healthy);
+    let data = service.scan_all_modules(USER).data.unwrap();
+
+    let all: Vec<&serde_json::Value> = data["modules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|m| m["faults"].as_array().unwrap())
+        .collect();
+    assert!(!all.is_empty());
+
+    // A three-byte code keeps its failure type and its two-byte base, because
+    // the catalogue is keyed on the base.
+    let f = all
+        .iter()
+        .find(|f| f["base_code"] == "C0035")
+        .expect("the wheel speed sensor fault");
+    assert_eq!(f["code"], "C0035-00");
+    assert_eq!(f["failing_now"], true);
+    assert_eq!(f["confirmed"], true);
+    assert_eq!(f["status_summary"], "failing right now");
+
+    // Stored-but-not-failing is reported as its own thing, not as "fine".
+    let stored = all
+        .iter()
+        .find(|f| f["base_code"] == "U0121")
+        .expect("the lost-communication fault");
+    assert_eq!(stored["failing_now"], false);
+    assert_eq!(stored["confirmed"], true);
+    assert_eq!(stored["status_summary"], "stored, but not failing at the moment");
+}
+
+#[test]
+fn a_module_with_no_fault_service_is_distinguished_from_one_with_no_faults() {
+    // Both look like zero codes and mean completely different things. The
+    // simulator models one of each on purpose.
+    let (mut service, _) = connected(ScenarioId::Healthy);
+    let data = service.scan_all_modules(USER).data.unwrap();
+    let modules = data["modules"].as_array().unwrap();
+
+    let healthy = modules
+        .iter()
+        .find(|m| m["address"] == "7A8")
+        .expect("the module that answers with an empty fault list");
+    assert_eq!(healthy["fault_count"], 0);
+    assert!(healthy["note"].is_null(), "it answered; there is nothing to explain");
+
+    let no_service = modules
+        .iter()
+        .find(|m| m["address"] == "7EB")
+        .expect("the module that does not implement the fault service");
+    assert_eq!(no_service["fault_count"], 0);
+    assert!(
+        !no_service["note"].is_null(),
+        "a module that declined must say so rather than read as healthy"
+    );
+}
+
+#[test]
+fn a_silent_bus_reports_no_modules_rather_than_an_empty_success() {
+    let (mut service, _) = connected(ScenarioId::BusSilent);
+    let result = service.scan_all_modules(USER);
+    assert!(!result.success);
+    assert_eq!(result.error.unwrap().code, ErrorCode::NoData);
+}
+

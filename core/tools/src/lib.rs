@@ -176,6 +176,14 @@ impl ToolRegistry {
                 module_arg(true),
             ),
             ToolSchema::new(
+                "scan_all_modules",
+                capabilities::SCAN_ALL_MODULES,
+                PermissionLevel::L0,
+                "Find every control module on the vehicle and read its stored faults. This \n                 reaches far beyond the emissions system that `read_dtcs` covers - brakes, \n                 airbag, body, transmission - and is the only way to see a fault in a module \n                 the legislated services cannot address. Slower than `read_dtcs` because it \n                 sweeps the whole diagnostic address range, so run it once, early, rather \n                 than repeatedly. Each fault says whether it is failing right now or merely \n                 stored from an earlier drive; those mean very different things.",
+                "Every module that answered, with its address and its faults, each carrying \n                 status and a description when this build has one.",
+                no_args(),
+            ),
+            ToolSchema::new(
                 "list_vehicle_features",
                 capabilities::LIST_FEATURES,
                 PermissionLevel::L0,
@@ -510,6 +518,7 @@ pub fn execute(
         "read_monitor_tests" => {
             service.read_monitor_tests(module.unwrap_or_default(), initiator)
         }
+        "scan_all_modules" => service.scan_all_modules(initiator),
         "list_vehicle_features" => service.list_features(initiator),
         "preview_configuration_change" => {
             // The model supplies a feature id and a value. Nothing else it

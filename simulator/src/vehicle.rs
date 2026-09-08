@@ -107,6 +107,14 @@ pub struct VirtualEcu {
     pub runs_monitors: bool,
     /// Whether this ECU answers the VIN request.
     pub reports_vin: bool,
+    /// Fault records this module returns to UDS `0x19 0x02`, as raw 4-byte
+    /// entries.
+    ///
+    /// `None` means the module does not implement the service at all, which is
+    /// a genuinely different answer from an empty list — "I have no fault
+    /// memory" versus "my fault memory is empty" — and both occur on real
+    /// vehicles, so both are modelled.
+    pub uds_faults: Option<Vec<[u8; 4]>>,
 }
 
 impl VirtualEcu {
@@ -172,6 +180,7 @@ impl VirtualVehicle {
             reports_dtcs: true,
             runs_monitors: true,
             reports_vin: true,
+            uds_faults: Some(Vec::new()),
         };
         // Two further modules answer the standard broadcast. Their function is
         // not asserted: on a given vehicle 7EA and 7EB could be almost
@@ -188,6 +197,7 @@ impl VirtualVehicle {
             reports_dtcs: true,
             runs_monitors: false,
             reports_vin: false,
+            uds_faults: Some(Vec::new()),
         };
         let third = VirtualEcu {
             response_id: 0x7EB,
@@ -200,12 +210,65 @@ impl VirtualVehicle {
             reports_dtcs: false,
             runs_monitors: false,
             reports_vin: false,
+            uds_faults: None,
+        };
+
+        // Two modules outside the legislated emissions block, answering UDS and
+        // nothing else.
+        //
+        // This is the case the product existed without for months: a vehicle
+        // whose engine controller is spotlessly clean while something else on
+        // the same wires has faults nobody was asking about. Service 03 cannot
+        // see these modules at all — they are not emissions controllers, they
+        // do not answer the 0x7DF broadcast, and no amount of reading trouble
+        // codes the legislated way will ever mention them.
+        //
+        // Their addresses and their codes are invented, and are meant to be:
+        // the point is to exercise the discovery sweep, not to claim that any
+        // particular vehicle puts a brake controller at 0x760.
+        let brakes = VirtualEcu {
+            response_id: 0x768,
+            label: String::from("OBD module at 768"),
+            ecu_name: None,
+            calibration_ids: Vec::new(),
+            cvns: Vec::new(),
+            // Answers no service 01 PIDs at all: invisible to a code reader.
+            supported_service01: Vec::new(),
+            supported_service09: Vec::new(),
+            reports_dtcs: false,
+            runs_monitors: false,
+            reports_vin: false,
+            uds_faults: Some(vec![
+                // C0035-00, wheel speed sensor circuit. Confirmed and failing.
+                // 0x40 not 0xC0: the top two bits select the system letter, and
+                // 0xC0 is a U-code. Getting this wrong in the fixture is how a
+                // decoder bug and a fixture bug look identical.
+                [0x40, 0x35, 0x00, 0x09],
+                // U0121-87, lost communication with the ABS module. Stored,
+                // not currently failing — the common and confusing case.
+                [0xC1, 0x21, 0x87, 0x08],
+            ]),
+        };
+        let body = VirtualEcu {
+            response_id: 0x7A8,
+            label: String::from("OBD module at 7A8"),
+            ecu_name: None,
+            calibration_ids: Vec::new(),
+            cvns: Vec::new(),
+            supported_service01: Vec::new(),
+            supported_service09: Vec::new(),
+            reports_dtcs: false,
+            runs_monitors: false,
+            reports_vin: false,
+            // Present, healthy, and worth reporting as such: "we asked and it
+            // said nothing is wrong" is a finding.
+            uds_faults: Some(Vec::new()),
         };
 
         VirtualVehicle {
             vin: String::from(SIMULATED_VIN),
             scenario: Scenario::new(scenario),
-            ecus: vec![engine, second, third],
+            ecus: vec![engine, second, third, brakes, body],
             time: TimeSource::deterministic(),
             dtcs_cleared: false,
         }
@@ -413,6 +476,28 @@ impl VirtualVehicle {
             // An unimplemented service gets a proper negative response from a
             // module that is listening, so the negative-response path is
             // exercised rather than being indistinguishable from silence.
+            // UDS. Handled after the OBD-II services so a J1979 request is
+            // never mistaken for one, and deliberately answered by every
+            // module rather than only the emissions pair - modelling the whole
+            // point of a UDS scan, which is that the body and chassis
+            // controllers are there and nobody was asking them.
+            None if service == 0x3E => {
+                // TesterPresent: inert, and the discovery probe.
+                Some(vec![0x7E, 0x00])
+            }
+            None if service == 0x19 && ecu.uds_faults.is_some() => {
+                let faults = ecu.uds_faults.as_ref().expect("checked");
+                let mut v = vec![0x59, 0x02, 0xFF];
+                for f in faults.iter() {
+                    v.extend_from_slice(f);
+                }
+                Some(v)
+            }
+            None if service == 0x19 => {
+                // A module with no fault memory service. Common, and a
+                // different answer from "no faults".
+                Some(vec![0x7F, 0x19, 0x11])
+            }
             None if ecu.reports_dtcs => Some(vec![0x7F, service, 0x11]),
             None => None,
         }
@@ -643,4 +728,5 @@ mod tests {
         let cvn = v.handle(0x7E0, &[0x09, 0x06]).remove(0).payload;
         assert_eq!(cvn.len(), 3 + 4);
     }
+
 }

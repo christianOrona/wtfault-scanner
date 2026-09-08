@@ -19,13 +19,15 @@ import { saveFile, scanFilename, toCsv } from "./exportFile";
 const MAX_SIGNALS = 32;
 
 /**
- * Roughly how long one PID costs on an ELM327-class adapter, round trip.
+ * Fallback cost of one reading, used only until the adapter reports its own.
  *
- * Measured on the development truck at 500000 baud: a 32-signal set on a 100 ms
- * interval took 2286 ms, which is about 71 ms per signal. Used to stop the app
- * from letting someone request a set it cannot possibly deliver on time.
+ * Deliberately not a constant the app reasons with. This number was measured on
+ * one cheap ELM327 clone, and baking it in made a $10 cable the ceiling for
+ * every adapter that would ever be plugged in - including the faster ones. The
+ * live socket reports what the current adapter actually achieved, and that
+ * replaces this the moment a first sample arrives.
  */
-const ROUND_TRIP_PER_SIGNAL_MS = 75;
+const ASSUMED_COST_PER_SIGNAL_MS = 75;
 
 export function LivePane({
   moduleKey,
@@ -135,11 +137,20 @@ export function LivePane({
     setSelected(measurements.slice(0, affordable).map((p) => p.signal_id!));
   }
 
-  /** How many signals this interval can realistically carry. */
-  const affordable = Math.max(
-    3,
-    Math.min(maxSignals, Math.floor(interval / ROUND_TRIP_PER_SIGNAL_MS)),
-  );
+  /**
+   * How many readings this interval can realistically carry on THIS adapter.
+   *
+   * Measured, not assumed. The socket reports how long the last round trip
+   * actually took for a known number of signals, which gives a real per-signal
+   * cost for whatever hardware is plugged in right now. A faster adapter earns
+   * a bigger set immediately, with no constant to edit.
+   */
+  const measuredCost =
+    live.latest?.execution_time_ms && live.subscribed?.signals.length
+      ? live.latest.execution_time_ms / live.subscribed.signals.length
+      : null;
+  const costPerSignal = measuredCost ?? ASSUMED_COST_PER_SIGNAL_MS;
+  const affordable = Math.max(3, Math.min(maxSignals, Math.floor(interval / costPerSignal)));
   const allSelected =
     measurements.length > 0 && selected.length >= Math.min(measurements.length, affordable);
   const overCap = measurements.length > affordable;

@@ -274,6 +274,36 @@ impl UdsRequest {
         }
     }
 
+    /// DiagnosticSessionControl.
+    ///
+    /// `0x01` (default session) is inert — every module is already in it — and
+    /// is therefore usable as a discovery probe on modules that ignore
+    /// TesterPresent outside a session.
+    pub fn diagnostic_session_control(session: u8) -> Self {
+        UdsRequest {
+            service: UdsService::DiagnosticSessionControl,
+            sub_function: Some(session),
+            data: Vec::new(),
+        }
+    }
+
+    /// ReadDTCInformation, sub-function `reportDTCByStatusMask` (0x02).
+    ///
+    /// This is the request that makes a full-vehicle fault scan possible.
+    /// Service 03 only reaches emissions-related controllers; this reaches
+    /// anything that speaks UDS — brakes, airbag, body, transmission — and it
+    /// is a public ISO standard, so it works identically across manufacturers
+    /// without a single reverse-engineered identifier.
+    ///
+    /// `status_mask` of `0xFF` asks for every code whatever its status bits.
+    pub fn read_dtc_by_status_mask(status_mask: u8) -> Self {
+        UdsRequest {
+            service: UdsService::ReadDtcInformation,
+            sub_function: Some(0x02),
+            data: vec![status_mask],
+        }
+    }
+
     /// Serialize to wire bytes.
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut v = vec![self.service.id()];
@@ -379,6 +409,165 @@ impl UdsResponse {
                 Ok(data)
             }
         }
+    }
+}
+
+/// One trouble code as UDS service 0x19 reports it.
+///
+/// Three bytes plus a status byte, where service 03 used two bytes. The first
+/// two bytes are the same J2012 encoding — `P0301` decodes identically — and
+/// the third is a failure type that says *how* the thing failed rather than
+/// what failed: `P0301-00` and `P0301-1C` are the same circuit with different
+/// symptoms.
+///
+/// The status byte is the part service 03 never had. It distinguishes a fault
+/// happening right now from one that happened once last winter, which is the
+/// difference between a repair and a note.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UdsDtc {
+    /// SAE J2012 code with its failure type, e.g. `P0301-00`.
+    pub code: String,
+    /// The code without the failure type, e.g. `P0301`, for catalogue lookup.
+    pub base_code: String,
+    /// Failure type byte. `0x00` when the ECU does not use them.
+    pub failure_type: u8,
+    /// Raw status bits, as reported.
+    pub status: u8,
+}
+
+impl UdsDtc {
+    /// The fault is present at this moment.
+    pub fn test_failed(&self) -> bool {
+        self.status & 0x01 != 0
+    }
+
+    /// The fault has been seen at some point in the current cycle.
+    pub fn test_failed_this_cycle(&self) -> bool {
+        self.status & 0x02 != 0
+    }
+
+    /// Stored in memory, whether or not it is currently failing.
+    pub fn confirmed(&self) -> bool {
+        self.status & 0x08 != 0
+    }
+
+    /// The module is asking for the warning lamp.
+    pub fn warning_indicator_requested(&self) -> bool {
+        self.status & 0x80 != 0
+    }
+
+    /// A short, plain-language reading of the status bits.
+    ///
+    /// The bits are what the module said; this sentence is how a person should
+    /// take it. A confirmed code that is not currently failing is the common
+    /// and confusing case — something went wrong, and it is not wrong now.
+    pub fn status_summary(&self) -> &'static str {
+        match (self.test_failed(), self.confirmed()) {
+            (true, _) => "failing right now",
+            (false, true) => "stored, but not failing at the moment",
+            (false, false) => "recorded, not confirmed",
+        }
+    }
+}
+
+/// Decode the payload of a `0x19` sub-function `0x02` response.
+///
+/// Layout after the service and sub-function bytes: one availability mask, then
+/// four bytes per code. A trailing partial record is dropped rather than
+/// guessed at, exactly as service 06 records are.
+pub fn decode_dtc_by_status_mask(payload: &[u8]) -> Vec<UdsDtc> {
+    // The first byte is the status-availability mask: which status bits this
+    // ECU actually maintains. Useful for interpreting the bits strictly; not
+    // needed to read the codes themselves.
+    let records = match payload.split_first() {
+        Some((_availability, rest)) => rest,
+        None => return Vec::new(),
+    };
+    records
+        .chunks_exact(4)
+        .map(|c| {
+            let base = crate::obd2::decode_dtc(c[0], c[1]);
+            UdsDtc {
+                code: format!("{base}-{:02X}", c[2]),
+                base_code: base,
+                failure_type: c[2],
+                status: c[3],
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod dtc_tests {
+    use super::*;
+
+    #[test]
+    fn a_status_mask_response_decodes_into_codes() {
+        // 59 02 <avail> then 4-byte records. Header already stripped.
+        let payload = [
+            0xFF, // availability mask
+            0x03, 0x01, 0x00, 0x09, // P0301-00, confirmed + failing
+            0xC1, 0x23, 0x1C, 0x08, // U0123-1C, confirmed, not failing now
+        ];
+        let dtcs = decode_dtc_by_status_mask(&payload);
+        assert_eq!(dtcs.len(), 2);
+
+        assert_eq!(dtcs[0].code, "P0301-00");
+        assert_eq!(dtcs[0].base_code, "P0301");
+        assert!(dtcs[0].test_failed(), "bit 0 means failing now");
+        assert!(dtcs[0].confirmed());
+        assert_eq!(dtcs[0].status_summary(), "failing right now");
+
+        assert_eq!(dtcs[1].code, "U0123-1C");
+        assert_eq!(dtcs[1].base_code, "U0123");
+        assert!(!dtcs[1].test_failed());
+        assert!(dtcs[1].confirmed());
+        assert_eq!(dtcs[1].status_summary(), "stored, but not failing at the moment");
+    }
+
+    #[test]
+    fn the_base_code_matches_what_service_03_would_have_said() {
+        // The whole point of keeping both: the catalogue is keyed on the
+        // two-byte form, so a three-byte UDS code still gets a description.
+        let payload = [0xFF, 0x01, 0x71, 0x00, 0x08];
+        let d = &decode_dtc_by_status_mask(&payload)[0];
+        assert_eq!(d.base_code, crate::obd2::decode_dtc(0x01, 0x71));
+        assert!(d.code.starts_with(&d.base_code));
+    }
+
+    #[test]
+    fn an_empty_or_truncated_payload_yields_nothing_rather_than_guessing() {
+        assert!(decode_dtc_by_status_mask(&[]).is_empty());
+        // Availability mask only: the module has no codes.
+        assert!(decode_dtc_by_status_mask(&[0xFF]).is_empty());
+        // A partial record is dropped, not padded.
+        assert_eq!(decode_dtc_by_status_mask(&[0xFF, 0x03, 0x01]).len(), 0);
+    }
+
+    #[test]
+    fn a_module_with_no_faults_answers_with_just_the_mask() {
+        let dtcs = decode_dtc_by_status_mask(&[0x2F]);
+        assert!(dtcs.is_empty(), "no codes is a valid, common answer");
+    }
+
+    #[test]
+    fn the_discovery_probe_is_inert() {
+        // TesterPresent does nothing to a vehicle. That is what makes it usable
+        // as a "is anyone at this address" sweep across every module.
+        let r = UdsRequest::tester_present(false);
+        assert_eq!(r.to_bytes(), vec![0x3E, 0x00]);
+        assert!(!r.service.is_mutating());
+
+        // Default-session control is equally inert: every module is already in
+        // the default session.
+        let s = UdsRequest::diagnostic_session_control(0x01);
+        assert_eq!(s.to_bytes(), vec![0x10, 0x01]);
+    }
+
+    #[test]
+    fn the_dtc_request_asks_every_module_for_everything() {
+        let r = UdsRequest::read_dtc_by_status_mask(0xFF);
+        assert_eq!(r.to_bytes(), vec![0x19, 0x02, 0xFF]);
     }
 }
 

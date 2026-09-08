@@ -784,6 +784,30 @@ impl DiagnosticAdapter for Elm327Adapter {
         Ok(messages)
     }
 
+    fn request_pdu(
+        &mut self,
+        pdu: &[u8],
+        target: &RequestTarget,
+        timeout: std::time::Duration,
+    ) -> AimResult<Vec<EcuMessage>> {
+        self.ensure_usable()?;
+        self.set_header(target)?;
+        let command: String = pdu.iter().map(|b| format!("{b:02X}")).collect();
+        let reply = self.send_with_recovery(&command, timeout)?;
+
+        // Deliberately does NOT go through `ok_lines()`.
+        //
+        // That helper turns NO DATA into an error, which is right for "read
+        // this PID" and wrong for a discovery sweep, where silence at 200 of
+        // 240 addresses is the expected result rather than 200 failures. The
+        // caller gets an empty list and decides what it means.
+        let lines = match reply.ok_lines() {
+            Ok(lines) => lines,
+            Err(_) => return Ok(Vec::new()),
+        };
+        Ok(self.assemble(lines).unwrap_or_default())
+    }
+
     fn raw_command(&mut self, command: &str) -> AimResult<AdapterResponse> {
         self.send_with_recovery(command, self.config.request_timeout)
     }
