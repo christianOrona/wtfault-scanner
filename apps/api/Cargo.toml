@@ -1,0 +1,52 @@
+[package]
+name = "aim-api"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+name = "aim_api"
+path = "src/lib.rs"
+
+[[bin]]
+name = "aim-api"
+path = "src/main.rs"
+
+[dependencies]
+aim-agent = { version = "0.1.0", path = "../../core/agent" }
+async-trait = "0.1.89"
+aim-adapter = { version = "0.1.0", path = "../../core/adapter", default-features = false }
+aim-decoders = { version = "0.1.0", path = "../../core/decoders" }
+aim-diagnostics = { version = "0.1.0", path = "../../core/diagnostics", default-features = false }
+aim-protocols = { version = "0.1.0", path = "../../core/protocols" }
+aim-safety = { version = "0.1.0", path = "../../core/safety" }
+aim-session = { version = "0.1.0", path = "../../core/session" }
+aim-simulator = { version = "0.1.0", path = "../../simulator" }
+aim-tools = { version = "0.1.0", path = "../../core/tools", default-features = false }
+aim-transport = { version = "0.1.0", path = "../../core/transport", default-features = false }
+aim-types = { version = "0.1.0", path = "../../core/types" }
+axum = { version = "0.8.7", features = ["ws"] }
+clap = { version = "4.5.53", features = ["derive"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+tokio = { version = "1.49.0", features = ["macros", "rt-multi-thread", "net", "time", "sync"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
+
+[dev-dependencies]
+tokio-tungstenite = "0.30.0"
+futures-util = "0.3.31"
+reqwest = { version = "0.12.28", default-features = false, features = ["json"] }
+tempfile = "3.24.0"
+
+[features]
+default = ["serial"]
+# Real serial / Bluetooth-COM support. Off in environments without libudev;
+# the simulator transport is always available.
+serial = [
+    "aim-transport/serial",
+    "aim-adapter/serial",
+    "aim-diagnostics/serial",
+    "aim-tools/serial",
+]

@@ -1,0 +1,71 @@
+[package]
+name = "ai-mechanic-desktop"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "MIT OR Apache-2.0"
+description = "Desktop shell for the WrenchGPT diagnostic core"
+
+# Deliberately its own workspace. The Tauri dependency tree is large and
+# platform-specific, and pulling it into the root workspace would make
+# `cargo test --workspace` at the repo root slower and less portable for no
+# benefit - the shell is a client of the API like any other.
+[workspace]
+
+[lib]
+name = "ai_mechanic_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+aim-api = { path = "../../api" }
+aim-decoders = { path = "../../../core/decoders" }
+aim-session = { path = "../../../core/session" }
+aim-simulator = { path = "../../../simulator" }
+axum = { version = "0.8", features = ["ws"] }
+tauri = { version = "2", features = [] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+directories = "5"
+include_dir = "0.7"
+mime_guess = "2"
+
+[features]
+# Real serial / Bluetooth-COM support, on by default: the whole point of the
+# desktop build is talking to the adapter in the garage.
+default = ["serial"]
+serial = ["aim-api/serial"]
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+
+# For rebuilding between trips to the driveway.
+#
+# `release` is tuned for the binary you hand to somebody: small, fully
+# link-time-optimised, and slow to produce — measured at roughly ten minutes on
+# this machine. Almost every rebuild during development exists to answer "does
+# the button work now", where none of that matters and the wait does.
+#
+# Fat LTO is the expensive part, and splitting into more codegen units lets the
+# machine use its other cores. The result behaves identically; it is only
+# larger and marginally slower at runtime, neither of which is detectable while
+# waiting for an ELM327.
+#
+#     npm run tauri build -- --profile release-fast
+#
+# Inherits from release, so anything added above applies here too unless
+# overridden.
+[profile.release-fast]
+inherits = "release"
+opt-level = 1
+lto = false
+codegen-units = 16
+strip = false
+# Keep debug assertions off: this is still meant to behave like the shipped
+# build, just built quickly.
+debug-assertions = false

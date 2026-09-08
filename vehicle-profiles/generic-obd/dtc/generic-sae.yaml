@@ -1,0 +1,112 @@
+# Generic SAE J2012 diagnostic trouble code descriptions.
+#
+# Project-maintained subset of well-established generic codes. A code that is
+# not listed here still decodes structurally (system letter, standard vs
+# manufacturer-specific, subsystem group) but gets no description and is
+# reported as unverified — the core never invents one.
+version: 2
+source: "SAE J2012 generic diagnostic trouble codes (project-maintained subset)"
+codes:
+  # --- fuel and air metering ---
+  P0087: { description: "Fuel rail/system pressure too low", verification: verified }
+  P0088: { description: "Fuel rail/system pressure too high", verification: verified }
+  P0101: { description: "Mass or volume air flow circuit range/performance", verification: verified }
+  P0102: { description: "Mass or volume air flow circuit low input", verification: verified }
+  P0103: { description: "Mass or volume air flow circuit high input", verification: verified }
+  P0106: { description: "Manifold absolute pressure/barometric pressure circuit range/performance", verification: verified }
+  P0107: { description: "Manifold absolute pressure/barometric pressure circuit low input", verification: verified }
+  P0108: { description: "Manifold absolute pressure/barometric pressure circuit high input", verification: verified }
+  P0112: { description: "Intake air temperature sensor 1 circuit low", verification: verified }
+  P0113: { description: "Intake air temperature sensor 1 circuit high", verification: verified }
+  P0116: { description: "Engine coolant temperature circuit range/performance", verification: verified }
+  P0117: { description: "Engine coolant temperature circuit low", verification: verified }
+  P0118: { description: "Engine coolant temperature circuit high", verification: verified }
+  P0121: { description: "Throttle/pedal position sensor A circuit range/performance", verification: verified }
+  P0128: { description: "Coolant thermostat: coolant temperature below thermostat regulating temperature", verification: verified }
+  P0131: { description: "Oxygen sensor circuit low voltage, bank 1 sensor 1", verification: verified }
+  P0135: { description: "Oxygen sensor heater circuit, bank 1 sensor 1", verification: verified }
+  P0171: { description: "System too lean, bank 1", verification: verified }
+  P0172: { description: "System too rich, bank 1", verification: verified }
+  P0174: { description: "System too lean, bank 2", verification: verified }
+  P0175: { description: "System too rich, bank 2", verification: verified }
+  P0180: { description: "Fuel temperature sensor A circuit", verification: verified }
+  P0190: { description: "Fuel rail pressure sensor circuit", verification: verified }
+  P0191: { description: "Fuel rail pressure sensor circuit range/performance", verification: verified }
+  P0200: { description: "Injector circuit/open", verification: verified }
+  P0201: { description: "Injector circuit/open, cylinder 1", verification: verified }
+  P0202: { description: "Injector circuit/open, cylinder 2", verification: verified }
+  P0203: { description: "Injector circuit/open, cylinder 3", verification: verified }
+  P0204: { description: "Injector circuit/open, cylinder 4", verification: verified }
+  P0205: { description: "Injector circuit/open, cylinder 5", verification: verified }
+  P0206: { description: "Injector circuit/open, cylinder 6", verification: verified }
+  P0207: { description: "Injector circuit/open, cylinder 7", verification: verified }
+  P0208: { description: "Injector circuit/open, cylinder 8", verification: verified }
+  P0217: { description: "Engine over temperature condition", verification: verified }
+
+  # --- boost / turbocharger ---
+  P0234: { description: "Turbocharger/supercharger overboost condition", verification: verified }
+  P0236: { description: "Turbocharger/supercharger boost sensor A circuit range/performance", verification: verified }
+  P0299: { description: "Turbocharger/supercharger underboost condition", verification: verified }
+  P2262: { description: "Turbocharger boost pressure not detected, mechanical", verification: verified }
+  P2263: { description: "Turbocharger/supercharger boost system performance", verification: verified }
+
+  # --- misfire ---
+  P0300: { description: "Random/multiple cylinder misfire detected", verification: verified }
+  P0301: { description: "Cylinder 1 misfire detected", verification: verified }
+  P0302: { description: "Cylinder 2 misfire detected", verification: verified }
+  P0303: { description: "Cylinder 3 misfire detected", verification: verified }
+  P0304: { description: "Cylinder 4 misfire detected", verification: verified }
+  P0305: { description: "Cylinder 5 misfire detected", verification: verified }
+  P0306: { description: "Cylinder 6 misfire detected", verification: verified }
+  P0307: { description: "Cylinder 7 misfire detected", verification: verified }
+  P0308: { description: "Cylinder 8 misfire detected", verification: verified }
+
+  # --- ignition / crank / cam ---
+  P0335: { description: "Crankshaft position sensor A circuit", verification: verified }
+  P0340: { description: "Camshaft position sensor A circuit, bank 1", verification: verified }
+  P0380: { description: "Glow plug/heater circuit A", verification: verified }
+
+  # --- EGR and emissions ---
+  P0401: { description: "Exhaust gas recirculation flow insufficient detected", verification: verified }
+  P0402: { description: "Exhaust gas recirculation flow excessive detected", verification: verified }
+  P0403: { description: "Exhaust gas recirculation control circuit", verification: verified }
+  P0404: { description: "Exhaust gas recirculation control circuit range/performance", verification: verified }
+  P0420: { description: "Catalyst system efficiency below threshold, bank 1", verification: verified }
+  P0455: { description: "Evaporative emission system leak detected, large leak", verification: verified }
+
+  # --- vehicle speed, idle, electrical ---
+  P0500: { description: "Vehicle speed sensor A", verification: verified }
+  P0562: { description: "System voltage low", verification: verified }
+  P0563: { description: "System voltage high", verification: verified }
+  P0603: { description: "Internal control module keep alive memory (KAM) error", verification: verified }
+  P0606: { description: "ECM/PCM processor fault", verification: verified }
+  P0700: { description: "Transmission control system, malfunction indicator lamp request", verification: verified }
+
+  # --- diesel aftertreatment ---
+  P2002: { description: "Diesel particulate filter efficiency below threshold, bank 1", verification: verified }
+  P2003: { description: "Diesel particulate filter efficiency below threshold, bank 2", verification: verified }
+  P2452: { description: "Diesel particulate filter pressure sensor A circuit", verification: verified }
+  P2453: { description: "Diesel particulate filter pressure sensor A circuit range/performance", verification: verified }
+  P2454: { description: "Diesel particulate filter pressure sensor A circuit low", verification: verified }
+  P2455: { description: "Diesel particulate filter pressure sensor A circuit high", verification: verified }
+  P2459: { description: "Diesel particulate filter regeneration frequency", verification: verified }
+  P242F: { description: "Diesel particulate filter restriction, ash accumulation", verification: verified }
+  P2463: { description: "Diesel particulate filter restriction, soot accumulation", verification: verified }
+  P204F: { description: "Reductant system performance, bank 1", verification: verified }
+  P20EE: { description: "SCR NOx catalyst efficiency below threshold, bank 1", verification: verified }
+
+  # --- network ---
+  U0100: { description: "Lost communication with ECM/PCM A", verification: verified }
+  U0101: { description: "Lost communication with transmission control module", verification: verified }
+  U0121: { description: "Lost communication with anti-lock brake system control module", verification: verified }
+  U0140: { description: "Lost communication with body control module", verification: verified }
+  U0155: { description: "Lost communication with instrument panel cluster control module", verification: verified }
+
+# Structural fallbacks. Applied only when a code is absent from the table
+# above; they describe the code's *shape*, never its meaning, and are always
+# reported as unverified.
+system_groups:
+  P: "Powertrain"
+  C: "Chassis"
+  B: "Body"
+  U: "Network / vehicle integration"

@@ -1,0 +1,218 @@
+//! `aim-adapter` — the adapter abstraction and the ELM327 implementation.
+//!
+//! Handoff §4 asks for one thing above all else: *"Design the adapter layer so
+//! its limitations produce capability flags rather than app-wide assumptions."*
+//! That is why [`DiagnosticAdapter`] hands back an [`AdapterCapabilities`]
+//! snapshot that the rest of the stack consults, and why nothing above this
+//! layer is allowed to assume 29-bit CAN, multiple buses, or long messages.
+//!
+//! # What lives here
+//!
+//! * [`DiagnosticAdapter`] — the seam. A future J2534 or STN adapter implements
+//!   this trait and nothing above it changes.
+//! * [`Elm327Adapter`] — the implementation for ELM327-class devices, driving
+//!   any [`aim_transport::Transport`]: a Windows Bluetooth COM port, a Linux
+//!   `/dev/rfcomm0`, or the in-process simulator.
+//! * [`AdapterObserver`] — the flight-recorder hook. Every command, every
+//!   reply, every state change and every failure is announced here so the
+//!   session store can persist it without the adapter knowing SQLite exists.
+//! * [`probe`] — "is there an ELM327 on this port?" identification.
+//!
+//! # Requests are messages, not lines
+//!
+//! [`DiagnosticAdapter::request`] returns [`EcuMessage`]s: one reassembled
+//! payload per responding ECU. The caller never sees adapter text, and a
+//! functional (broadcast) request that four modules answer produces four
+//! messages rather than a pile of interleaved lines.
+
+#![warn(missing_docs)]
+
+pub mod elm327;
+pub mod probe;
+pub mod response;
+
+pub use elm327::{Elm327Adapter, Elm327Config};
+pub use probe::{identify_transport, Identification};
+pub use response::{parse, AdapterResponse, ResponseClass};
+
+use aim_types::{
+    AdapterCapabilities, AdapterHealth, AimError, AimResult, ConnectionState, ObdProtocol,
+};
+use std::sync::Arc;
+
+/// Which ECU a request is addressed to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RequestTarget {
+    /// Broadcast to every emissions-related ECU (11-bit id `0x7DF`).
+    Functional,
+    /// A single ECU, addressed by its request identifier, e.g. `7E0`.
+    ///
+    /// The string is the adapter-level header, not a module name — the
+    /// diagnostics layer maps names to addresses, not this one.
+    Physical(String),
+}
+
+impl RequestTarget {
+    /// Physical target derived from the *response* address an ECU used.
+    ///
+    /// A module that answered on `7E8` is addressed on `7E0`. Returns `None`
+    /// when the response address has no conventional request counterpart, in
+    /// which case the caller must keep using functional addressing rather than
+    /// guessing.
+    pub fn from_response_address(address: &str) -> Option<RequestTarget> {
+        let id = aim_protocols::CanId::parse_hex(address).ok()?;
+        id.obd_response_to_request()
+            .map(|req| RequestTarget::Physical(req.to_hex()))
+    }
+
+    /// The adapter header this target sets.
+    pub fn header(&self) -> String {
+        match self {
+            RequestTarget::Functional => format!("{:03X}", aim_protocols::OBD_FUNCTIONAL_REQUEST_ID),
+            RequestTarget::Physical(h) => h.clone(),
+        }
+    }
+}
+
+/// One fully reassembled response from one ECU.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct EcuMessage {
+    /// Source address as the adapter reported it, e.g. `7E8`.
+    pub address: String,
+    /// The reassembled diagnostic payload (service byte first). ISO-TP PCI
+    /// bytes have been consumed and are not present.
+    pub payload: Vec<u8>,
+    /// The adapter lines this message was assembled from, kept verbatim for
+    /// the flight recorder.
+    pub raw_lines: Vec<String>,
+}
+
+impl EcuMessage {
+    /// Lowercase hex of the payload, the canonical raw-evidence form.
+    pub fn payload_hex(&self) -> String {
+        aim_types::hex(&self.payload)
+    }
+}
+
+/// Flight-recorder hook.
+///
+/// The adapter announces everything it does here. `aim-session` implements this
+/// to write the append-only event log; tests implement it to assert on traffic.
+/// Implementations must not block for long — they are called inline on the
+/// diagnostic thread.
+pub trait AdapterObserver: Send + Sync {
+    /// A command is about to be written to the transport.
+    fn on_request(&self, command: &str);
+
+    /// A reply was received and classified. Called for failures too — an
+    /// adapter error is a recorded observation, never a silent drop.
+    fn on_response(&self, response: &AdapterResponse);
+
+    /// A transport-level failure occurred.
+    fn on_failure(&self, command: Option<&str>, error: &AimError);
+
+    /// The connection state machine moved.
+    fn on_state_change(&self, from: &ConnectionState, to: &ConnectionState);
+
+    /// Identification finished and capabilities are known.
+    fn on_identified(&self, capabilities: &AdapterCapabilities);
+}
+
+/// An observer that discards everything. Default when no recorder is attached.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NullObserver;
+
+impl AdapterObserver for NullObserver {
+    fn on_request(&self, _command: &str) {}
+    fn on_response(&self, _response: &AdapterResponse) {}
+    fn on_failure(&self, _command: Option<&str>, _error: &AimError) {}
+    fn on_state_change(&self, _from: &ConnectionState, _to: &ConnectionState) {}
+    fn on_identified(&self, _capabilities: &AdapterCapabilities) {}
+}
+
+/// A shareable observer handle.
+pub type ObserverRef = Arc<dyn AdapterObserver>;
+
+/// The adapter seam.
+///
+/// Everything above this trait — diagnostics, tools, API — is written against
+/// it, so adding an OBDLink or J2534 backend later is an additive change.
+pub trait DiagnosticAdapter: Send {
+    /// Stable identity of the underlying link, e.g. `COM5` or `sim:dpf_regen`.
+    fn descriptor(&self) -> String;
+
+    /// Current position in the connection state machine.
+    fn state(&self) -> ConnectionState;
+
+    /// Observed capabilities. Before [`DiagnosticAdapter::connect`] this is the
+    /// all-false "nothing is assumed" snapshot.
+    fn capabilities(&self) -> AdapterCapabilities;
+
+    /// Rolling link health for the UI.
+    fn health(&self) -> AdapterHealth;
+
+    /// Attach the flight recorder. Called once the session it records into
+    /// exists, which is necessarily after the adapter has been constructed.
+    fn set_observer(&mut self, observer: ObserverRef);
+
+    /// Negotiated vehicle protocol, [`ObdProtocol::Unknown`] until known.
+    fn protocol(&self) -> ObdProtocol;
+
+    /// Open the link, initialize the adapter and identify it.
+    fn connect(&mut self) -> AimResult<()>;
+
+    /// Close the link. Idempotent.
+    fn disconnect(&mut self) -> AimResult<()>;
+
+    /// Control-module voltage as the adapter measures it, if it can.
+    fn read_battery_voltage(&mut self) -> AimResult<f64>;
+
+    /// Issue an OBD-II request and return one message per responding ECU.
+    ///
+    /// An empty vector is never returned: nothing answering is
+    /// [`aim_types::ErrorCode::NoData`], which is an error the caller must see.
+    fn request(
+        &mut self,
+        request: &aim_protocols::ObdRequest,
+        target: &RequestTarget,
+    ) -> AimResult<Vec<EcuMessage>>;
+
+    /// Send a raw adapter command. Escape hatch for diagnostics and probing;
+    /// the safety gate is what decides whether a caller may reach it.
+    fn raw_command(&mut self, command: &str) -> AimResult<AdapterResponse>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn functional_target_uses_the_broadcast_id() {
+        assert_eq!(RequestTarget::Functional.header(), "7DF");
+    }
+
+    #[test]
+    fn response_addresses_map_back_to_request_addresses() {
+        assert_eq!(
+            RequestTarget::from_response_address("7E8"),
+            Some(RequestTarget::Physical("7E0".into()))
+        );
+        assert_eq!(
+            RequestTarget::from_response_address("7EA"),
+            Some(RequestTarget::Physical("7E2".into()))
+        );
+        // Not a conventional OBD response id: no guess is made.
+        assert_eq!(RequestTarget::from_response_address("123"), None);
+        assert_eq!(RequestTarget::from_response_address("nonsense"), None);
+    }
+
+    #[test]
+    fn ecu_message_exposes_payload_hex() {
+        let m = EcuMessage {
+            address: "7E8".into(),
+            payload: vec![0x41, 0x0C, 0x1A, 0xF8],
+            raw_lines: vec!["7E8 04 41 0C 1A F8".into()],
+        };
+        assert_eq!(m.payload_hex(), "410c1af8");
+    }
+}

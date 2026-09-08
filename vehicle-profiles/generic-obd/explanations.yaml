@@ -1,0 +1,312 @@
+# Plain-language explanations for everything this app can put on screen.
+#
+# Two audiences, one file. `easy` is written for someone who has never opened a
+# bonnet: no jargon, no units the reader has to already know, and a sentence
+# about *why they should care* rather than what the sensor is called.
+# `technical` is written for someone who could do the repair: precise, and
+# allowed to assume the vocabulary.
+#
+# This lives in `vehicle-profiles/` with the rest of the vehicle knowledge for
+# the same reason the PID scaling does - it is versioned data, not code. Adding
+# an explanation is a data change, and a missing one is visible in the UI as a
+# gap rather than silently papered over with the raw identifier.
+#
+# Rules for writing `easy`:
+#   * No abbreviation survives unless it is expanded on first use.
+#   * Say what a normal reading looks like ONLY where that is genuinely
+#     universal. "Coolant sits near 90 C once warm" is safe. "Fuel pressure
+#     should be 380 kPa" is not - it is engine-specific, and inventing it is
+#     exactly the kind of guessing this project refuses to do.
+#   * If the honest answer is "this number only means something next to another
+#     number", say that.
+
+version: 1
+
+signals:
+  # ---- the mask PIDs: plumbing the user should be able to ignore -----------
+  - id: supported_pids_01_20
+    easy: "Not a measurement. It is the list of which readings the car is willing to give us, for the first block of them. A menu, not a meal."
+    technical: "Service 01 PID 00. Four-byte bitmask of supported PIDs 0x01-0x20; bit 0x20 set means PID 0x20 exists and the chain continues."
+  - id: supported_pids_21_40
+    easy: "The second page of the menu of available readings. Not a measurement."
+    technical: "Service 01 PID 20. Bitmask for PIDs 0x21-0x40."
+  - id: supported_pids_41_60
+    easy: "The third page of the menu of available readings. Not a measurement."
+    technical: "Service 01 PID 40. Bitmask for PIDs 0x41-0x60."
+  - id: supported_pids_61_80
+    easy: "The fourth page of the menu of available readings. Not a measurement."
+    technical: "Service 01 PID 60. Bitmask for PIDs 0x61-0x80."
+  - id: supported_info_types_01_20
+    easy: "The list of which identity details the car will tell us, like its serial number. Not a measurement."
+    technical: "Service 09 info type 00. Bitmask of supported info types 0x01-0x20."
+
+  # ---- status and identity -------------------------------------------------
+  - id: monitor_status
+    easy: "Whether the car has finished checking itself. A car runs its own tests while you drive, and this says which have finished and whether the warning light is on. If they have not finished, the car has not been driven much since someone reset it."
+    technical: "Service 01 PID 01. MIL state, stored DTC count, and supported/incomplete flags for each continuous and non-continuous readiness monitor. Byte B bit 3 selects the compression-ignition monitor set."
+  - id: dtc_count
+    easy: "How many fault codes the car has stored. Zero is what you want. Each code is the note the car wrote to itself when something went wrong."
+    technical: "Emissions-related stored DTC count from PID 01. Excludes pending and permanent codes, which come from services 07 and 0A."
+  - id: obd_standard
+    easy: "Which version of the worldwide car-diagnostics rulebook this car follows. Useful only for knowing what else we are allowed to ask it."
+    technical: "Service 01 PID 1C. Enumerated OBD conformance standard (EOBD, OBD-II, JOBD and so on)."
+  - id: fuel_type
+    easy: "What the car burns: petrol, diesel, and so on."
+    technical: "Service 01 PID 51. SAE fuel type enumeration."
+  - id: vin
+    easy: "The unique serial number stamped on the car at the factory. Seventeen letters and numbers, no two cars alike. It says who built it and roughly when."
+    technical: "Service 09 info type 02. 17-character VIN with an SAE J272 check digit at position 9."
+  - id: calibration_id
+    easy: "The version number of the software running the engine. Like knowing which update your phone is on."
+    technical: "Service 09 info type 04. One or more 16-byte ASCII calibration identifiers."
+  - id: calibration_verification_number
+    easy: "A fingerprint of the engine software, used to prove nobody has tampered with it."
+    technical: "Service 09 info type 06. CVN checksum over the calibration, used to detect unauthorised reflashing."
+  - id: ecu_name
+    easy: "The name the engine computer calls itself."
+    technical: "Service 09 info type 0A. 20-byte ASCII ECU name string."
+
+  # ---- the engine, as a person experiences it ------------------------------
+  - id: engine_rpm
+    easy: "How fast the engine is spinning, in turns per minute. Sitting still and warm, most engines idle somewhere around 600 to 900. Idling much higher, or wandering up and down on its own, means something is off."
+    technical: "Service 01 PID 0C. Crankshaft speed, quarter-RPM resolution. A raised but stable idle on a diesel usually means an active DPF regeneration rather than a fault."
+  - id: vehicle_speed
+    easy: "How fast the car thinks it is going. Zero when parked. This is the car's own sensor, not GPS, so it can differ slightly from your phone."
+    technical: "Service 01 PID 0D. Vehicle speed sensor, 1 km/h resolution, unsigned."
+  - id: coolant_temp
+    easy: "How hot the liquid cooling the engine is. It starts cold and climbs to around 90 C, then stays there. If it never gets there the thermostat may be stuck open; past about 110 C, stop driving."
+    technical: "Service 01 PID 05. ECT, single byte with a -40 offset. Failure to reach the thermostat setpoint is a classic stuck-open thermostat and often sets P0128."
+  - id: engine_oil_temp
+    easy: "How hot the engine oil is. It warms slower than the coolant and usually settles a little above it."
+    technical: "Service 01 PID 5C. Oil temperature, single byte with a -40 offset."
+  - id: intake_air_temp
+    easy: "How hot the air is as it enters the engine. On a cold morning it starts near the outside temperature and rises as the engine bay warms up."
+    technical: "Service 01 PID 0F. IAT, single byte with a -40 offset. A reading far above ambient at idle indicates heat soak."
+  - id: ambient_air_temp
+    easy: "The outside air temperature, as the car measures it."
+    technical: "Service 01 PID 46. Ambient air temperature, single byte with a -40 offset."
+  - id: control_module_voltage
+    easy: "The voltage the engine computer is running on, which is really your battery and charging system. With the engine running it should sit around 13.5 to 14.5 volts. Much below and the alternator is not charging; much above and the regulator is faulty."
+    technical: "Service 01 PID 42. Module supply voltage. Sub-13 V with the engine running points at the charging system; the same reading key-on-engine-off is normal battery voltage."
+
+  # ---- load, air and throttle ---------------------------------------------
+  - id: engine_load
+    easy: "How hard the engine is working right now, as a percentage of the hardest it could work. Idling in a car park is a small number; towing up a hill is a big one."
+    technical: "Service 01 PID 04. Calculated load: current airflow as a percentage of peak airflow, corrected for altitude and temperature."
+  - id: absolute_load
+    easy: "Another measure of how hard the engine is working, this one not adjusted for altitude or air temperature. Mostly useful next to the other load reading."
+    technical: "Service 01 PID 43. Absolute load, cylinder air mass normalised to standard conditions. Can exceed 100 percent on forced-induction engines."
+  - id: maf_rate
+    easy: "How much air, by weight, is being pulled into the engine each second. More air means more fuel and more power. At idle it is a trickle; flat out it is a gale."
+    technical: "Service 01 PID 10. Mass air flow in grams per second. Compare against expected values for displacement and RPM to spot a contaminated or drifting MAF sensor."
+  - id: intake_manifold_pressure
+    easy: "The air pressure inside the engine intake. On an ordinary engine at idle this sits well below outside air pressure, because the engine is sucking against a nearly closed throttle. On a turbo engine under power it goes well above."
+    technical: "Service 01 PID 0B. MAP in absolute kPa. Key-on-engine-off it should read barometric; the idle-versus-baro delta is the manifold vacuum."
+  - id: barometric_pressure
+    easy: "The air pressure around the car, which mostly tells you how high above sea level you are. Around 101 kPa at the coast, lower up a mountain."
+    technical: "Service 01 PID 33. Absolute barometric pressure, 1 kPa resolution."
+  - id: throttle_position
+    easy: "How far open the throttle is: the valve letting air into the engine. Not the same as how hard your foot is pressing, because the computer holds it slightly open even at idle."
+    technical: "Service 01 PID 11. Absolute throttle position sensor A. Includes the mechanical rest offset, so it never reads zero."
+  - id: absolute_throttle_position_b
+    easy: "A second sensor watching the same throttle valve, so the computer can check one against the other."
+    technical: "Service 01 PID 47. Absolute throttle position B, the redundant channel of a drive-by-wire pair."
+  - id: relative_throttle_position
+    easy: "How far the throttle has opened past its resting point. This one does read zero when you are off the pedal."
+    technical: "Service 01 PID 45. Relative throttle position, learned closed position subtracted."
+  - id: commanded_throttle_actuator
+    easy: "How far open the computer is asking the throttle to be. Comparing this with where the throttle actually is shows whether it is obeying."
+    technical: "Service 01 PID 4C. Commanded throttle actuator control. A persistent gap against PID 11 suggests a sticking plate or a failing actuator."
+  - id: accelerator_pedal_position_d
+    easy: "How hard your foot is on the accelerator, from the first of two sensors inside the pedal."
+    technical: "Service 01 PID 49. APP sensor D, one half of a redundant pedal pair."
+  - id: accelerator_pedal_position_e
+    easy: "The same pedal, from the second sensor. Two are fitted so that a disagreement is caught instantly."
+    technical: "Service 01 PID 4A. APP sensor E. D and E disagreeing beyond tolerance sets a pedal correlation code."
+  - id: relative_accelerator_pedal_position
+    easy: "How far you have pressed the pedal past its resting point."
+    technical: "Service 01 PID 5A. Relative accelerator pedal position, learned rest position subtracted."
+
+  # ---- fuelling ------------------------------------------------------------
+  - id: fuel_system_status
+    easy: "Whether the engine is adjusting its fuel by measuring the exhaust, or just following a fixed recipe. It follows the recipe when cold and starts measuring once warm. An engine that never starts measuring has a problem."
+    technical: "Service 01 PID 03. Open-loop versus closed-loop status per bank. Stuck open-loop after warmup usually means a failed or unheated O2 sensor."
+  - id: short_fuel_trim_b1
+    easy: "A live correction: how much extra or less fuel the computer is adding this very second to keep the mixture right. Near zero is healthy. A large positive number means it is adding fuel to make up for air getting in where it should not."
+    technical: "Service 01 PID 06. Short-term fuel trim, bank 1. Percent correction about stoichiometric; responds within seconds."
+  - id: long_fuel_trim_b1
+    easy: "The long-run version of that fuel correction: what the computer has learned it needs to add or remove all the time. One of the most useful numbers on this screen. A big positive value is the classic sign of an air leak, a tired fuel pump, or a dirty air sensor."
+    technical: "Service 01 PID 07. Long-term fuel trim, bank 1. Beyond roughly plus or minus 10 percent warrants investigation; beyond 25 percent will set a P0171 or P0172 family code."
+  - id: short_fuel_trim_b2
+    easy: "The same live fuel correction for the engine's second bank of cylinders. Only V-shaped and flat engines have two."
+    technical: "Service 01 PID 08. Short-term fuel trim, bank 2."
+  - id: long_fuel_trim_b2
+    easy: "The learned fuel correction for the second bank of cylinders. If one bank is far off and the other is fine, the problem is on that side only, which narrows the search a lot."
+    technical: "Service 01 PID 09. Long-term fuel trim, bank 2. A bank-to-bank split points at something bank-specific rather than a shared intake or fuel supply fault."
+  - id: commanded_equivalence_ratio
+    easy: "The exact air-to-fuel mixture the computer is aiming for. 1.0 means the chemically perfect mix; below 1 is richer, above is leaner."
+    technical: "Service 01 PID 44. Commanded equivalence ratio (lambda). 1.0 is stoichiometric."
+  - id: fuel_pressure
+    easy: "The pressure in the fuel line. What counts as normal varies hugely between engines, so this number only means something next to the figure for your specific engine."
+    technical: "Service 01 PID 0A. Fuel rail gauge pressure, 3 kPa resolution. Manifold-referenced on most port-injection systems."
+  - id: fuel_rail_pressure_rel
+    easy: "Fuel pressure measured against the pressure in the intake, rather than against the outside air."
+    technical: "Service 01 PID 22. Fuel rail pressure relative to manifold vacuum."
+  - id: fuel_rail_gauge_pressure
+    easy: "Fuel pressure in a direct-injection engine, which runs far higher pressures than an older one: thousands of times atmospheric, not tens."
+    technical: "Service 01 PID 23. Fuel rail gauge pressure, 10 kPa resolution, for direct injection."
+  - id: fuel_tank_level
+    easy: "How full the tank is, as a percentage. The same thing the fuel gauge on the dashboard shows."
+    technical: "Service 01 PID 2F. Fuel tank level input, percent of nominal capacity."
+  - id: engine_fuel_rate
+    easy: "How fast the engine is burning fuel, in litres per hour. Small at idle, climbing steeply with load."
+    technical: "Service 01 PID 5E. Engine fuel rate, 0.05 L/h resolution."
+
+  # ---- ignition, exhaust and emissions ------------------------------------
+  - id: timing_advance
+    easy: "How early the spark fires before the piston reaches the top. The computer moves this around constantly to get power without damaging the engine. Pulling it back a long way can mean it is hearing knocking."
+    technical: "Service 01 PID 0E. Ignition timing advance for cylinder 1, degrees before top dead centre. Sustained retard under load suggests knock retard, poor fuel, or excessive intake temperature."
+  - id: commanded_egr
+    easy: "How much used exhaust gas the computer is deliberately feeding back into the engine. That sounds wrong, but it lowers combustion temperature and cuts a harmful pollutant."
+    technical: "Service 01 PID 2C. Commanded EGR, percent of maximum valve opening."
+  - id: egr_error
+    easy: "The gap between how much exhaust the computer asked to recirculate and how much actually got through. A large gap usually means the valve or its passages are clogged with soot, which is very common on diesels."
+    technical: "Service 01 PID 2D. EGR error, percent deviation of actual from commanded. Large positive error with a commanded opening is the signature of a carboned-up valve or cooler."
+  - id: catalyst_temp_b1s1
+    easy: "How hot the catalytic converter is: the box in the exhaust that cleans up the fumes. It has to be hot to work at all, which is why a car pollutes most in the first few minutes after a cold start."
+    technical: "Service 01 PID 3C. Catalyst temperature, bank 1 sensor 1, 0.1 C resolution with a -40 offset."
+  - id: egt_bank1_sensor1
+    easy: "How hot the exhaust gas is as it leaves the engine. On a diesel this climbs a long way during the filter's self-cleaning burn."
+    technical: "Service 01 PID 78. Exhaust gas temperature, bank 1. Multi-sensor record; elevated readings accompany active DPF regeneration."
+  - id: dpf_temp_bank1_inlet
+    easy: "How hot it is at the entrance to the soot filter. Diesels trap soot in a filter and then burn it off by getting very hot on purpose, so a high reading here often just means that burn-off is happening right now."
+    technical: "Service 01 PID 7C. DPF temperature, bank 1 inlet. Sustained high inlet temperature at a raised idle indicates active regeneration rather than a fault."
+
+  # ---- torque --------------------------------------------------------------
+  - id: driver_demand_torque
+    easy: "How much pull the computer thinks you are asking for with your foot, as a percentage of what the engine can give."
+    technical: "Service 01 PID 61. Driver's demand engine torque, percent of reference, signed with a -125 offset."
+  - id: actual_engine_torque
+    easy: "How much pull the engine is actually producing. Comparing this with what you asked for shows whether it is delivering."
+    technical: "Service 01 PID 62. Actual engine torque, percent of reference, signed with a -125 offset."
+  - id: reference_engine_torque
+    easy: "The engine's maximum pulling power, used as the yardstick the other two torque numbers are percentages of."
+    technical: "Service 01 PID 63. Engine reference torque in newton metres, the 100 percent basis for PIDs 61 and 62."
+
+  # ---- history since the last reset ---------------------------------------
+  - id: run_time_since_start
+    easy: "How long the engine has been running since it was last started."
+    technical: "Service 01 PID 1F. Run time since engine start, seconds."
+  - id: distance_with_mil_on
+    easy: "How far the car has been driven with the warning light lit. A big number means somebody has been ignoring it for a long time."
+    technical: "Service 01 PID 21. Distance travelled with MIL illuminated, 1 km resolution."
+  - id: distance_since_cleared
+    easy: "How far the car has been driven since someone last wiped its fault codes. If this is small and the car is for sale, the codes were probably cleared just before you turned up."
+    technical: "Service 01 PID 31. Distance since DTCs cleared. Read alongside the PID 01 readiness flags: low distance plus incomplete monitors is the clear-before-sale signature."
+  - id: warmups_since_cleared
+    easy: "How many times the engine has warmed up from cold since the codes were last wiped. Another way of telling how recently that happened."
+    technical: "Service 01 PID 30. Warm-ups since DTCs cleared, where a warm-up is a coolant rise of 22 C reaching at least 71 C."
+
+codes:
+  # Warnings and errors the core can attach to a result, keyed by the exact
+  # `code` string. A code with no entry here shows its raw string and is
+  # visibly a gap rather than quietly unexplained.
+  - id: calibration_unavailable
+    easy: "The truck started telling us its software fingerprint and stopped part-way through the sentence. That is a hiccup between the adapter and the truck, not a fault with the truck. Nothing else on this screen is affected."
+    technical: "Service 09 info type 06 (CVN) returned a multi-frame ISO-TP response shorter than its declared length. Almost always an adapter that mishandled flow control on a long reply, common on cheap ELM327 clones. Harmless: the CVN is a tamper checksum, not a diagnostic input."
+  - id: adapter_degraded
+    easy: "The adapter is working fine, but the car is not answering it. Usually the key is not turned on, or the adapter is not pushed fully into the socket."
+    technical: "The ELM327 link is up and responsive but no ECU answered protocol initialisation. Check ignition state, connector seating, and whether the vehicle uses a protocol outside the sweep."
+  - id: adapter_init_failed
+    easy: "We opened the connection to the adapter, but the adapter itself never replied. Either it has no power, or it is listening at a different speed than we were speaking."
+    technical: "ATZ produced no terminated response. On a wired cable this is usually a line-speed mismatch or an unpowered ELM327: the USB-serial chip enumerates from bus power while the interpreter is fed from OBD pin 16."
+  - id: no_monitor_tests
+    easy: "This car does not report its self-test measurements. It is an optional feature and most cars older than about 2005 leave it out. Nothing is wrong."
+    technical: "Service 06 returned no supported MIDs. Optional in practice; absence is not a fault."
+  - id: monitors_did_not_answer
+    easy: "Some of the car's self-tests had nothing to report yet. They only run under particular driving conditions, so a longer drive usually fills them in."
+    technical: "MIDs present in the support mask returned no records. Typically a monitor whose enabling conditions have not been met this drive cycle."
+  - id: monitor_scaling_unknown
+    easy: "For a few of these tests we do not know what unit the numbers are in. We can still tell you exactly whether each one passed and how close it came to failing, because the car sends its measurement and its limits in the same unit."
+    technical: "The UASID is absent from this build's unit-and-scaling table. Pass/fail and margin remain exact; scaled physical values are suppressed in favour of raw counts."
+  - id: monitor_reply_truncated
+    easy: "Part of one reply arrived incomplete, so a little of it was discarded. What is shown is complete; nothing has been guessed at."
+    technical: "The service 06 payload had trailing bytes that did not form a whole 9-byte record. Partial records are dropped rather than reconstructed."
+  - id: pids_without_decoders
+    easy: "The car offers a few readings this app does not yet know how to translate. They are listed so you can see exactly what is missing rather than being left to wonder."
+    technical: "Supported PIDs with no definition in the shipped decoder set. Adding one is a data-file change, not a code change."
+  - id: unverified
+    easy: "This number was worked out with a formula nobody has checked against a real car yet. Treat it as a rough hint, not a measurement."
+    technical: "The decoder definition carries VerificationStatus::Unverified. Per docs/API.md it must never be presented as a measurement."
+  - id: out_of_range
+    easy: "This reading is outside what the sensor is physically able to report, so something is wrong with the sensor or the wire to it. Not necessarily with the engine."
+    technical: "The decoded value fell outside the definition's declared valid range. Suspect the sensor, its wiring, or the decoder scaling before the underlying system."
+  - id: vehicle_not_responding
+    easy: "We asked the car a question and got silence back. Check the key is on."
+    technical: "No ECU answered within the timeout. Distinct from NO DATA on a single PID: nothing on the bus replied at all."
+  - id: no_data
+    easy: "The car understood the question but had no answer for it, usually because that particular reading is not something this car measures."
+    technical: "The adapter returned NO DATA. The addressed module does not implement the requested PID or service."
+  - id: no_active_session
+    easy: "Nothing is connected to a car right now."
+    technical: "The requested operation needs a usable adapter link and there is none."
+
+concepts:
+  # Ideas the interface itself uses. Not vehicle data: how to read the screen.
+  - id: evidence
+    easy: "Proof. Every number here can show you the exact conversation with the car that produced it: what we asked, what came back, letter for letter. Nothing in this app is made up, and this is how you check."
+    technical: "A flight-recorder event sequence number. Every tool invocation, adapter command and response is appended to an immutable SQLite log; the reference jumps to the exchange that produced this value."
+  - id: module
+    easy: "A computer inside the car. Modern cars have several, each in charge of something different, and they each answer separately."
+    technical: "An ECU discovered on the bus, keyed by its response address. Modules other than the engine controller are named by address rather than guessed function."
+  - id: verified
+    easy: "Checked. The formula used to turn the car's raw numbers into this reading has been confirmed against real vehicles, so you can trust it."
+    technical: "VerificationStatus::Verified. The decoder definition has been validated and may be presented as a measurement."
+  - id: raw
+    easy: "The actual numbers the car sent, before we turned them into something readable. Shown so an expert can check our arithmetic."
+    technical: "The payload bytes in hex, exactly as received once protocol framing was stripped."
+  - id: pid
+    easy: "A question number. Every reading a car can give has a code, and this is it. Cars only answer the ones they support."
+    technical: "Parameter ID: the service 01 identifier for one live-data parameter, per SAE J1979."
+  - id: supported_not_decodable
+    easy: "Readings this car is happy to give that this app cannot yet read out. They are listed by their code number so nothing is hidden from you. If one matters, it can be added."
+    technical: "PIDs present in the vehicle's support mask with no matching definition in the shipped decoder set. Listed by hex identifier; adding support is a YAML change."
+  - id: dtc
+    easy: "A fault code. The car's own note about something that went wrong, written in a standard shorthand like P0301. The letter says which system, the numbers say what happened."
+    technical: "Diagnostic trouble code, SAE J2012. The top two bits select the system letter, the next two the first digit, and the remaining twelve bits are three hex digits."
+  - id: freeze_frame
+    easy: "A snapshot. When the car stored a fault code it also saved what was happening at that exact moment: speed, temperature, engine load. A photograph of the past, not a live reading."
+    technical: "Service 02. The parameter set captured when the associated DTC was stored. Historical data; never present it as current."
+  - id: readiness
+    easy: "Whether the car has finished testing itself. Wiping the fault codes also wipes these tests, and they only finish again after a lot of driving, so unfinished tests on a car for sale is worth asking about."
+    technical: "PID 01 monitor completion flags. Incomplete monitors with zero stored DTCs and low distance-since-cleared is the clear-before-sale pattern; a disconnected battery produces the same state."
+  - id: monitor_test
+    easy: "The car grading its own homework. For each self-test it reports the number it measured and the limit it had to stay inside, so you can see something getting close to failing long before it actually fails."
+    technical: "Service 06 on-board monitor test results. Value, lower limit and upper limit arrive in a common unit, so pass/fail and normalised margin are exact regardless of the scaling table."
+  - id: interval
+    easy: "How often we ask the car for fresh numbers. Faster looks smoother but asks more of the adapter, and if the adapter cannot keep up it will say so."
+    technical: "Live-data sampling period in milliseconds, clamped server-side by the socket's advertised minimum."
+  - id: fuel_trim
+    easy: "How much the computer is fiddling with the fuel to keep the engine running right. Near zero means it is happy. A big number means it is compensating hard for something, and that something is worth finding."
+    technical: "Short- and long-term fuel trim. Short-term is the instantaneous correction, long-term the learned offset. Read them together and per bank; a bank split localises the fault."
+  - id: live_data
+    easy: "The car's sensors, read over and over so you can watch them move. Tick the boxes for what you want to see, press Start, and the graphs fill in as the engine runs."
+    technical: "Repeated service 01 sampling over a websocket. The selection is limited by what the module's support mask advertises and by what this build can decode."
+  - id: session
+    easy: "One visit to one car. Everything read during it is saved, so you can come back later and look at exactly what happened without the car being present."
+    technical: "A recorded diagnostic session: modules, readings, safety decisions and the full adapter transcript, in an append-only SQLite log."
+  - id: inspection
+    easy: "Press the button and the assistant does what a mechanic would: works out which checks are worth running on this particular car, runs them, and writes up what it found in plain words - including what it could not check and what a repair might cost. It takes a few minutes."
+    technical: "An agent run against the typed tool registry. The model chooses which read-only tools to invoke, every call passes the same safety gate as a manual one, and the run ends in a structured report where every finding is labelled measured, catalog, or model_knowledge."
+  - id: ask
+    easy: "Ask a question about the car in your own words and the assistant will go and read whatever it needs to answer you. It can only look, never change anything."
+    technical: "Free-form agent conversation over the same tool registry as an inspection. Read-only capabilities only; the safety gate refuses anything above L0 in this build."
+  - id: adapter
+    easy: "The little box you plugged into the socket under the dashboard. This screen says whether it is working, what it can do, and how much it has been talking to the car."
+    technical: "The ELM327-class interface: negotiated protocol, observed capabilities, and traffic counters. Capability flags are what the device was observed to do, not what it claimed."
+  - id: vehicle_features
+    easy: "Things about the car that can be switched on or off in its computers, rather than repaired - like making the mirrors fold when you lock it. This screen tells you what exists on your vehicle and, honestly, how much of it this app can actually do."
+    technical: "Module configuration items catalogued by feature id, risk class and owning module. Feature descriptions come from public knowledge; the bit-level mapping does not ship and must be supplied as a verified profile before anything can be read or written."
+  - id: vehicle_profiles
+    easy: "Extra knowledge you can give the app by dropping a file in a folder. Useful when you have worked out something about your car that the app did not ship knowing - it takes effect next time you start it, no reinstall."
+    technical: "A directory of YAML merged over the embedded catalogues at startup. Supports feature mappings, PID definitions and explanations. Everything loaded is attributed to its file, a parse failure is reported and skipped rather than fatal, and load order is name-sorted for determinism."

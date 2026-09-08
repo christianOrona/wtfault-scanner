@@ -1,0 +1,181 @@
+# Configurable features on Ford vehicles.
+#
+# READ THIS BEFORE ADDING AN ENTRY.
+#
+# There are two halves to every entry and they have completely different
+# standards of evidence:
+#
+#   Description  - what the feature is, which modules own it, what it is worth,
+#                  how risky changing it would be. Writable from public
+#                  knowledge and from the owner's manual. Safe to be wrong: the
+#                  worst case is a feature that turns out not to exist on a
+#                  given truck, which reading the vehicle will reveal.
+#
+#   `mapping`    - which configuration block, byte and bits hold the setting.
+#                  Manufacturer specific, unpublished, and NOT safe to be wrong:
+#                  a wrong byte written to a door module is a module that stops
+#                  working. So a mapping is `null` here unless somebody has
+#                  verified it on a real vehicle, and `verification: verified`
+#                  is the only thing that permits a write.
+#
+# Every mapping in this file is currently absent. That is not a gap to be filled
+# in by guessing - it is the honest state of what this project has measured.
+# The way to fill one in is:
+#
+#   1. Read the vehicle's as-built configuration and save it.
+#   2. Change the setting with a tool already known to do it correctly.
+#   3. Read the configuration again and diff the two.
+#   4. The bits that moved are the mapping. Record where it came from.
+#
+# A user-supplied profile can add mappings without rebuilding the app. See the
+# `profiles` directory described in the app's Settings screen: a file dropped
+# there is merged over this one, and everything in it is attributed to that file
+# so a wrong mapping can be traced to whoever supplied it.
+#
+# What must never appear in this file: anything that defeats an emissions
+# control, anything in the braking, steering or throttle path, anything to do
+# with immobilisers or keys. The first is illegal in most places, and the other
+# two are how a diagnostic tool becomes a liability.
+
+version: 1
+profile: ford
+
+features:
+  - id: mirror_auto_fold
+    name: "Automatic folding mirrors"
+    risk: convenience
+    easy: >-
+      Makes the door mirrors fold in by themselves when you lock the truck, and
+      unfold when you unlock it. Your truck may already have the motors for this
+      even if the feature is switched off - the button on the door that folds
+      them manually is the giveaway. It is a comfort setting and changing it
+      affects nothing about how the truck drives.
+    technical: >-
+      Power-fold mirror auto-actuation on lock/unlock, held as a configuration
+      bit in the door module. Hardware presence is independent of the setting:
+      trucks are frequently built with the fold motors and the feature disabled.
+      Confirm by reading the module's configuration rather than by the presence
+      of the manual fold switch alone.
+    modules: [DDM, PDM]
+    applies_to:
+      makes: [Ford]
+      model_years: [2015, 2023]
+      wmi_prefixes: ["1FT", "1FD"]
+    requires:
+      - as_built_access
+      - ms_can
+    mapping: null
+    verification: unverified
+    source: "public feature description; no mapping measured by this project"
+    notes: >-
+      The door modules sit on the medium-speed CAN bus on these trucks, which a
+      plain ELM327 cannot reach - it is wired to the high-speed bus only. A
+      switchable HS/MS-CAN adapter is a hard requirement, not a nicety, and this
+      is why the feature shows as unavailable on most adapters.
+
+  - id: cluster_startup_animation
+    name: "Instrument cluster startup animation"
+    risk: cosmetic
+    easy: >-
+      The little animation the dashboard plays when you start the truck. Purely
+      decorative - it changes nothing about how anything works.
+    technical: >-
+      Cluster power-up graphic selection, held in the instrument cluster
+      configuration. Cosmetic; no interaction with any warning-lamp or
+      telltale-illumination behaviour, which is a separate and regulated
+      configuration area that this catalogue deliberately does not describe.
+    modules: [IPC]
+    applies_to:
+      makes: [Ford]
+      model_years: [2015, 2023]
+    requires:
+      - as_built_access
+    mapping: null
+    verification: unverified
+    source: "public feature description; no mapping measured by this project"
+
+  - id: seatbelt_reminder_chime
+    name: "Seat belt reminder chime"
+    risk: safety_critical
+    easy: >-
+      The chime that sounds when a seat belt is not fastened. This one is listed
+      so the app can explain it and then decline: it is a safety device, it is
+      required by regulation in most places, and this app will not switch it
+      off.
+    technical: >-
+      Occupant restraint reminder configuration. Catalogued explicitly and
+      classed safety_critical so that a request to disable it is answered with a
+      refusal and a reason rather than a silent absence - which reads as "not
+      supported yet" and invites the user to go looking for a tool that will.
+    modules: [RCM, IPC]
+    applies_to:
+      makes: [Ford]
+    requires:
+      - as_built_access
+    mapping: null
+    verification: unverified
+    source: "catalogued to be refused, not to be implemented"
+    notes: >-
+      Never give this a mapping. The entry exists to produce an explanation, not
+      a capability.
+
+  - id: daytime_running_lights
+    name: "Daytime running lights"
+    risk: convenience
+    easy: >-
+      Whether the headlights come on dimly whenever the truck is running. Some
+      places require these to be on, so check what the rules are where you drive
+      before changing it.
+    technical: >-
+      DRL enable configuration in the body control module. Note that DRL
+      requirements are jurisdictional; the setting is a convenience item
+      technically and a compliance item legally.
+    modules: [BCM]
+    applies_to:
+      makes: [Ford]
+      model_years: [2015, 2023]
+    requires:
+      - as_built_access
+    mapping: null
+    verification: unverified
+    source: "public feature description; no mapping measured by this project"
+
+  - id: reverse_mirror_tilt
+    name: "Mirror tilt in reverse"
+    risk: convenience
+    easy: >-
+      Tips the passenger mirror down when you select reverse so you can see the
+      kerb, then puts it back afterwards.
+    technical: >-
+      Reverse-linked mirror tilt actuation, configured in the door module and
+      dependent on memory-mirror hardware being fitted.
+    modules: [DDM, PDM]
+    applies_to:
+      makes: [Ford]
+      model_years: [2015, 2023]
+    requires:
+      - as_built_access
+      - ms_can
+    mapping: null
+    verification: unverified
+    source: "public feature description; no mapping measured by this project"
+
+  - id: global_open_close
+    name: "Roll windows down with the key fob"
+    risk: convenience
+    easy: >-
+      Lets you hold the unlock button on the key fob to open all the windows at
+      once, and the lock button to close them. Handy on a hot day.
+    technical: >-
+      Global open/close via remote keyless entry, configured in the body control
+      module. Some markets ship it disabled for regulatory reasons rather than
+      hardware ones.
+    modules: [BCM]
+    applies_to:
+      makes: [Ford]
+      model_years: [2015, 2023]
+    requires:
+      - as_built_access
+    mapping: null
+    verification: unverified
+    source: "public feature description; no mapping measured by this project"

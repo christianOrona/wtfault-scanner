@@ -1,0 +1,9 @@
+# Pinned so a build on a second machine is the same build.
+#
+# `rust-version` in each Cargo.toml states the *minimum* the code needs; this
+# states what it is actually compiled with. Without it the first person to
+# clone this gets whatever their machine happens to have, and a lint that is
+# clean here fails there for reasons unrelated to the change they made.
+[toolchain]
+channel = "1.98.1"
+components = ["clippy", "rustfmt"]

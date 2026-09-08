@@ -1,0 +1,19 @@
+[package]
+name = "aim-transport"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+aim-types = { version = "0.1.0", path = "../types" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+serialport = { version = "4.10.0", optional = true }
+tracing = "0.1.44"
+
+[features]
+default = ["serial"]
+# Real serial / Bluetooth-COM transport. Needs libudev on Linux; the rest of
+# the workspace builds and tests cleanly with `--no-default-features`.
+serial = ["dep:serialport"]

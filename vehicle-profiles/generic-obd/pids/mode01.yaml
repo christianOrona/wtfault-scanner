@@ -1,0 +1,589 @@
+# SAE J1979 service 01 (current data) PID definitions.
+#
+# Byte names follow the SAE convention: A is the first payload byte after the
+# echoed PID, B the second, and so on.
+version: 3
+source: "SAE J1979 generic OBD-II service 01"
+service: 1
+pids:
+  - pid: 0x00
+    signal_id: supported_pids_01_20
+    name: "PIDs supported [01-20]"
+    kind: supported_pids
+    bytes: 4
+    verification: verified
+
+  - pid: 0x01
+    signal_id: monitor_status
+    name: "Monitor status since DTCs cleared"
+    kind: bitfield
+    bytes: 4
+    verification: verified
+    # SAE J1979 readiness monitors.
+    #
+    # This is the most useful PID on the bus for someone buying a used car, and
+    # it is why it is decoded in full rather than just for the warning lamp.
+    # After the trouble codes are cleared, every monitor resets to "not
+    # complete" and only finishes again once the car has been driven through the
+    # right conditions - typically 50-100 miles of mixed driving.
+    #
+    # So a car presented for sale with no stored codes but incomplete monitors
+    # has very likely had its codes cleared shortly before you arrived. That is
+    # not proof of dishonesty, but it is a fact worth knowing, and no amount of
+    # looking at the dashboard reveals it.
+    #
+    # Byte B bit 3 says which engine type the vehicle is, which decides whether
+    # bytes C and D carry the spark-ignition set or the compression-ignition
+    # (diesel) set. Both are decoded; the consumer picks by that flag.
+    flags:
+      - { id: mil_on, label: "Malfunction indicator lamp on", byte: 0, bit: 7 }
+
+      # Byte B: continuous monitors. "supported" says the vehicle has it at all.
+      - { id: misfire_supported,   label: "Misfire monitoring supported", byte: 1, bit: 0 }
+      - { id: fuel_supported,      label: "Fuel system monitoring supported", byte: 1, bit: 1 }
+      - { id: component_supported, label: "Comprehensive component monitoring supported", byte: 1, bit: 2 }
+      - { id: compression_ignition, label: "Compression ignition (diesel)", byte: 1, bit: 3 }
+      # Note the polarity: the bit is SET when the monitor has NOT finished.
+      - { id: misfire_incomplete,   label: "Misfire monitoring incomplete", byte: 1, bit: 4 }
+      - { id: fuel_incomplete,      label: "Fuel system monitoring incomplete", byte: 1, bit: 5 }
+      - { id: component_incomplete, label: "Comprehensive component monitoring incomplete", byte: 1, bit: 6 }
+
+      # Byte C: non-continuous monitors supported (spark ignition naming).
+      - { id: catalyst_supported,        label: "Catalyst monitoring supported", byte: 2, bit: 0 }
+      - { id: heated_catalyst_supported, label: "Heated catalyst monitoring supported", byte: 2, bit: 1 }
+      - { id: evap_supported,            label: "Evaporative system monitoring supported", byte: 2, bit: 2 }
+      - { id: secondary_air_supported,   label: "Secondary air system monitoring supported", byte: 2, bit: 3 }
+      - { id: ac_refrigerant_supported,  label: "A/C refrigerant monitoring supported", byte: 2, bit: 4 }
+      - { id: o2_sensor_supported,       label: "Oxygen sensor monitoring supported", byte: 2, bit: 5 }
+      - { id: o2_heater_supported,       label: "Oxygen sensor heater monitoring supported", byte: 2, bit: 6 }
+      - { id: egr_supported,             label: "EGR system monitoring supported", byte: 2, bit: 7 }
+
+      # Byte D: the same monitors, set when NOT complete.
+      - { id: catalyst_incomplete,        label: "Catalyst monitoring incomplete", byte: 3, bit: 0 }
+      - { id: heated_catalyst_incomplete, label: "Heated catalyst monitoring incomplete", byte: 3, bit: 1 }
+      - { id: evap_incomplete,            label: "Evaporative system monitoring incomplete", byte: 3, bit: 2 }
+      - { id: secondary_air_incomplete,   label: "Secondary air system monitoring incomplete", byte: 3, bit: 3 }
+      - { id: ac_refrigerant_incomplete,  label: "A/C refrigerant monitoring incomplete", byte: 3, bit: 4 }
+      - { id: o2_sensor_incomplete,       label: "Oxygen sensor monitoring incomplete", byte: 3, bit: 5 }
+      - { id: o2_heater_incomplete,       label: "Oxygen sensor heater monitoring incomplete", byte: 3, bit: 6 }
+      - { id: egr_incomplete,             label: "EGR system monitoring incomplete", byte: 3, bit: 7 }
+    derived:
+      - signal_id: dtc_count
+        name: "Confirmed DTC count"
+        formula: "A % 128"
+        unit: null
+        range: { min: 0, max: 127 }
+
+  - pid: 0x03
+    signal_id: fuel_system_status
+    name: "Fuel system status"
+    kind: enum
+    bytes: 2
+    verification: verified
+    enum_byte: 0
+    values:
+      0: "Motor off"
+      1: "Open loop, engine not yet at operating temperature"
+      2: "Closed loop, using oxygen sensor feedback"
+      4: "Open loop due to engine load or fuel cut"
+      8: "Open loop due to system fault"
+      16: "Closed loop with fault in at least one oxygen sensor"
+
+  - pid: 0x04
+    signal_id: engine_load
+    name: "Calculated engine load"
+    kind: numeric
+    bytes: 1
+    unit: "%"
+    formula: "A * 100 / 255"
+    range: { min: 0, max: 100 }
+    verification: verified
+
+  - pid: 0x05
+    signal_id: coolant_temp
+    name: "Engine coolant temperature"
+    kind: numeric
+    bytes: 1
+    unit: "degC"
+    formula: "A - 40"
+    range: { min: -40, max: 215 }
+    verification: verified
+
+  - pid: 0x06
+    signal_id: short_fuel_trim_b1
+    name: "Short term fuel trim, bank 1"
+    kind: numeric
+    bytes: 1
+    unit: "%"
+    formula: "A / 1.28 - 100"
+    range: { min: -100, max: 99.2 }
+    verification: verified
+
+  - pid: 0x07
+    signal_id: long_fuel_trim_b1
+    name: "Long term fuel trim, bank 1"
+    kind: numeric
+    bytes: 1
+    unit: "%"
+    formula: "A / 1.28 - 100"
+    range: { min: -100, max: 99.2 }
+    verification: verified
+
+  - pid: 0x08
+    signal_id: short_fuel_trim_b2
+    name: "Short term fuel trim, bank 2"
+    kind: numeric
+    bytes: 1
+    unit: "%"
+    formula: "A / 1.28 - 100"
+    range: { min: -100, max: 99.2 }
+    verification: verified
+
+  - pid: 0x09
+    signal_id: long_fuel_trim_b2
+    name: "Long term fuel trim, bank 2"
+    kind: numeric
+    bytes: 1
+    unit: "%"
+    formula: "A / 1.28 - 100"
+    range: { min: -100, max: 99.2 }
+    verification: verified
+
+  - pid: 0x0A
+    signal_id: fuel_pressure
+    name: "Fuel pressure (gauge)"
+    kind: numeric
+    bytes: 1
+    unit: "kPa"
+    formula: "A * 3"
+    range: { min: 0, max: 765 }
+    verification: verified
+
+  - pid: 0x0B
+    signal_id: intake_manifold_pressure
+    name: "Intake manifold absolute pressure"
+    kind: numeric
+    bytes: 1
+    unit: "kPa"
+    formula: "A"
+    range: { min: 0, max: 255 }
+    verification: verified
+
+  - pid: 0x0C
+    signal_id: engine_rpm
+    name: "Engine RPM"
+    kind: numeric
+    bytes: 2
+    unit: "rpm"
+    formula: "(256 * A + B) / 4"
+    range: { min: 0, max: 16383.75 }
+    verification: verified
+
+  - pid: 0x0D
+    signal_id: vehicle_speed
+    name: "Vehicle speed"
+    kind: numeric
+    bytes: 1
+    unit: "km/h"
+    formula: "A"
+    range: { min: 0, max: 255 }
+    verification: verified
+
+  - pid: 0x0E
+    signal_id: timing_advance
+    name: "Timing advance"
+    kind: numeric
+    bytes: 1
+    unit: "deg"
+    formula: "A / 2 - 64"
+    range: { min: -64, max: 63.5 }
+    verification: verified
+
+  - pid: 0x0F
+    signal_id: intake_air_temp
+    name: "Intake air temperature"
+    kind: numeric
+    bytes: 1
+    unit: "degC"
+    formula: "A - 40"
+    range: { min: -40, max: 215 }
+    verification: verified
+
+  - pid: 0x10
+    signal_id: maf_rate
+    name: "Mass air flow rate"
+    kind: numeric
+    bytes: 2
+    unit: "g/s"
+    formula: "(256 * A + B) / 100"
+    range: { min: 0, max: 655.35 }
+    verification: verified
+
+  - pid: 0x11
+    signal_id: throttle_position
+    name: "Throttle position"
+    kind: numeric
+    bytes: 1
+    unit: "%"
+    formula: "A * 100 / 255"
+    range: { min: 0, max: 100 }
+    verification: verified
+
+  - pid: 0x1C
+    signal_id: obd_standard
+    name: "OBD standard this vehicle conforms to"
+    kind: enum
+    bytes: 1
+    verification: verified
+    enum_byte: 0
+    values:
+      1: "OBD-II as defined by CARB"
+      2: "OBD as defined by EPA"
+      3: "OBD and OBD-II"
+      4: "OBD-I"
+      5: "Not OBD compliant"
+      6: "EOBD"
+      7: "EOBD and OBD-II"
+      8: "EOBD and OBD"
+      9: "EOBD, OBD and OBD-II"
+      10: "JOBD"
+      11: "JOBD and OBD-II"
+      12: "JOBD and EOBD"
+      13: "JOBD, EOBD and OBD-II"
+
+  - pid: 0x1F
+    signal_id: run_time_since_start
+    name: "Run time since engine start"
+    kind: numeric
+    bytes: 2
+    unit: "s"
+    formula: "256 * A + B"
+    range: { min: 0, max: 65535 }
+    verification: verified
+
+  - pid: 0x20
+    signal_id: supported_pids_21_40
+    name: "PIDs supported [21-40]"
+    kind: supported_pids
+    bytes: 4
+    verification: verified
+
+  - pid: 0x21
+    signal_id: distance_with_mil_on
+    name: "Distance travelled with MIL on"
+    kind: numeric
+    bytes: 2
+    unit: "km"
+    formula: "256 * A + B"
+    range: { min: 0, max: 65535 }
+    verification: verified
+
+  - pid: 0x22
+    signal_id: fuel_rail_pressure_rel
+    name: "Fuel rail pressure relative to manifold vacuum"
+    kind: numeric
+    bytes: 2
+    unit: "kPa"
+    formula: "(256 * A + B) * 0.079"
+    range: { min: 0, max: 5177.265 }
+    verification: verified
+
+  - pid: 0x23
+    signal_id: fuel_rail_gauge_pressure
+    name: "Fuel rail gauge pressure (diesel or gasoline direct injection)"
+    kind: numeric
+    bytes: 2
+    unit: "kPa"
+    formula: "(256 * A + B) * 10"
+    range: { min: 0, max: 655350 }
+    verification: verified
+
+  - pid: 0x2C
+    signal_id: commanded_egr
+    name: "Commanded EGR"
+    kind: numeric
+    bytes: 1
+    unit: "%"
+    formula: "A * 100 / 255"
+    range: { min: 0, max: 100 }
+    verification: verified
+
+  - pid: 0x2D
+    signal_id: egr_error
+    name: "EGR error"
+    kind: numeric
+    bytes: 1
+    unit: "%"
+    formula: "A / 1.28 - 100"
+    range: { min: -100, max: 99.2 }
+    verification: verified
+
+  - pid: 0x2F
+    signal_id: fuel_tank_level
+    name: "Fuel tank level input"
+    kind: numeric
+    bytes: 1
+    unit: "%"
+    formula: "A * 100 / 255"
+    range: { min: 0, max: 100 }
+    verification: verified
+
+  - pid: 0x30
+    signal_id: warmups_since_cleared
+    name: "Warm-ups since codes cleared"
+    kind: numeric
+    bytes: 1
+    unit: null
+    formula: "A"
+    range: { min: 0, max: 255 }
+    verification: verified
+
+  - pid: 0x31
+    signal_id: distance_since_cleared
+    name: "Distance travelled since codes cleared"
+    kind: numeric
+    bytes: 2
+    unit: "km"
+    formula: "256 * A + B"
+    range: { min: 0, max: 65535 }
+    verification: verified
+
+  - pid: 0x33
+    signal_id: barometric_pressure
+    name: "Absolute barometric pressure"
+    kind: numeric
+    bytes: 1
+    unit: "kPa"
+    formula: "A"
+    range: { min: 0, max: 255 }
+    verification: verified
+
+  - pid: 0x3C
+    signal_id: catalyst_temp_b1s1
+    name: "Catalyst temperature, bank 1 sensor 1"
+    kind: numeric
+    bytes: 2
+    unit: "degC"
+    formula: "(256 * A + B) / 10 - 40"
+    range: { min: -40, max: 6513.5 }
+    verification: verified
+
+  - pid: 0x40
+    signal_id: supported_pids_41_60
+    name: "PIDs supported [41-60]"
+    kind: supported_pids
+    bytes: 4
+    verification: verified
+
+  - pid: 0x42
+    signal_id: control_module_voltage
+    name: "Control module power supply voltage"
+    kind: numeric
+    bytes: 2
+    unit: "V"
+    formula: "(256 * A + B) / 1000"
+    range: { min: 0, max: 65.535 }
+    verification: verified
+
+  - pid: 0x43
+    signal_id: absolute_load
+    name: "Absolute load value"
+    kind: numeric
+    bytes: 2
+    unit: "%"
+    formula: "(256 * A + B) * 100 / 255"
+    range: { min: 0, max: 25700 }
+    verification: verified
+
+  - pid: 0x44
+    signal_id: commanded_equivalence_ratio
+    name: "Commanded air-fuel equivalence ratio (lambda)"
+    kind: numeric
+    bytes: 2
+    unit: null
+    formula: "(256 * A + B) / 32768"
+    range: { min: 0, max: 2 }
+    verification: verified
+
+  - pid: 0x45
+    signal_id: relative_throttle_position
+    name: "Relative throttle position"
+    kind: numeric
+    bytes: 1
+    unit: "%"
+    formula: "A * 100 / 255"
+    range: { min: 0, max: 100 }
+    verification: verified
+
+  - pid: 0x46
+    signal_id: ambient_air_temp
+    name: "Ambient air temperature"
+    kind: numeric
+    bytes: 1
+    unit: "degC"
+    formula: "A - 40"
+    range: { min: -40, max: 215 }
+    verification: verified
+
+  - pid: 0x47
+    signal_id: absolute_throttle_position_b
+    name: "Absolute throttle position B"
+    kind: numeric
+    bytes: 1
+    unit: "%"
+    formula: "A * 100 / 255"
+    range: { min: 0, max: 100 }
+    verification: verified
+
+  - pid: 0x49
+    signal_id: accelerator_pedal_position_d
+    name: "Accelerator pedal position D"
+    kind: numeric
+    bytes: 1
+    unit: "%"
+    formula: "A * 100 / 255"
+    range: { min: 0, max: 100 }
+    verification: verified
+
+  - pid: 0x4A
+    signal_id: accelerator_pedal_position_e
+    name: "Accelerator pedal position E"
+    kind: numeric
+    bytes: 1
+    unit: "%"
+    formula: "A * 100 / 255"
+    range: { min: 0, max: 100 }
+    verification: verified
+
+  - pid: 0x4C
+    signal_id: commanded_throttle_actuator
+    name: "Commanded throttle actuator"
+    kind: numeric
+    bytes: 1
+    unit: "%"
+    formula: "A * 100 / 255"
+    range: { min: 0, max: 100 }
+    verification: verified
+
+  - pid: 0x51
+    signal_id: fuel_type
+    name: "Fuel type"
+    kind: enum
+    bytes: 1
+    verification: verified
+    enum_byte: 0
+    values:
+      0: "Not available"
+      1: "Gasoline"
+      2: "Methanol"
+      3: "Ethanol"
+      4: "Diesel"
+      5: "LPG"
+      6: "CNG"
+      7: "Propane"
+      8: "Electric"
+
+  - pid: 0x5A
+    signal_id: relative_accelerator_pedal_position
+    name: "Relative accelerator pedal position"
+    kind: numeric
+    bytes: 1
+    unit: "%"
+    formula: "A * 100 / 255"
+    range: { min: 0, max: 100 }
+    verification: verified
+
+  - pid: 0x5C
+    signal_id: engine_oil_temp
+    name: "Engine oil temperature"
+    kind: numeric
+    bytes: 1
+    unit: "degC"
+    formula: "A - 40"
+    range: { min: -40, max: 210 }
+    verification: verified
+
+  - pid: 0x5E
+    signal_id: engine_fuel_rate
+    name: "Engine fuel rate"
+    kind: numeric
+    bytes: 2
+    unit: "L/h"
+    formula: "(256 * A + B) / 20"
+    range: { min: 0, max: 3276.75 }
+    verification: verified
+
+  - pid: 0x60
+    signal_id: supported_pids_61_80
+    name: "PIDs supported [61-80]"
+    kind: supported_pids
+    bytes: 4
+    verification: verified
+
+  - pid: 0x61
+    signal_id: driver_demand_torque
+    name: "Driver's demand engine torque, percent"
+    kind: numeric
+    bytes: 1
+    unit: "%"
+    formula: "A - 125"
+    range: { min: -125, max: 130 }
+    verification: verified
+
+  - pid: 0x62
+    signal_id: actual_engine_torque
+    name: "Actual engine torque, percent"
+    kind: numeric
+    bytes: 1
+    unit: "%"
+    formula: "A - 125"
+    range: { min: -125, max: 130 }
+    verification: verified
+
+  - pid: 0x63
+    signal_id: reference_engine_torque
+    name: "Engine reference torque"
+    kind: numeric
+    bytes: 2
+    unit: "Nm"
+    formula: "256 * A + B"
+    range: { min: 0, max: 65535 }
+    verification: verified
+
+  # ------------------------------------------------------------------
+  # UNVERIFIED BELOW THIS LINE.
+  #
+  # These PID numbers are allocated by SAE J1979 for diesel aftertreatment
+  # data, but this project has NOT validated the byte layouts or scaling
+  # against the standard document or against a vehicle. They are present so
+  # the diesel data path can be exercised end to end. Values decoded from
+  # them are flagged untrustworthy and must never be used to make a claim.
+  # ------------------------------------------------------------------
+
+  - pid: 0x78
+    signal_id: egt_bank1_sensor1
+    name: "Exhaust gas temperature, bank 1 sensor 1 (UNVERIFIED)"
+    kind: numeric
+    bytes: 9
+    unit: "degC"
+    # Byte A is a sensor-support mask; the first sensor's 16-bit reading
+    # follows it. Scaling assumed to match the catalyst-temperature form.
+    formula: "(256 * B + C) / 10 - 40"
+    range: { min: -40, max: 6513.5 }
+    verification: unverified
+    notes: >
+      Byte layout and scaling not validated against SAE J1979. Do not present
+      this value to a user as a measured exhaust temperature.
+
+  - pid: 0x7C
+    signal_id: dpf_temp_bank1_inlet
+    name: "Diesel particulate filter temperature, bank 1 inlet (UNVERIFIED)"
+    kind: numeric
+    bytes: 9
+    unit: "degC"
+    formula: "(256 * B + C) / 10 - 40"
+    range: { min: -40, max: 6513.5 }
+    verification: unverified
+    notes: >
+      PID 0x7C is allocated for DPF temperature but this project has not
+      validated its byte layout or scaling. Present only as raw evidence.

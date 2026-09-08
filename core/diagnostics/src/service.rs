@@ -1,0 +1,2027 @@
+//! The diagnostic service: the deterministic core the whole app runs through.
+//!
+//! Every vehicle operation in the product is a method here, and every one of
+//! them follows the same five steps:
+//!
+//! 1. **Record the intent.** A `tool_invoked` event names the operation, its
+//!    arguments and who asked — before anything reaches the vehicle.
+//! 2. **Authorize.** The [`SafetyGate`] decides. An unknown operation is
+//!    rejected, not attempted. The decision is recorded either way.
+//! 3. **Talk to the vehicle** through the adapter, which records every command
+//!    and reply into the same event log.
+//! 4. **Decode** with the data-driven decoders, so every value carries its raw
+//!    bytes, decoder id and verification status.
+//! 5. **Persist and return** a [`ToolResult`] — the §7 envelope, identical
+//!    whether the caller is the UI, a test, or the future agent runtime.
+//!
+//! That last point is the seam the handoff asks for. When the agent runtime is
+//! built it does not get a new path to the vehicle; it calls these same
+//! methods, through the same gate, producing the same recorded evidence.
+
+use crate::recorder::SessionRecorder;
+use aim_adapter::{DiagnosticAdapter, EcuMessage, RequestTarget};
+use aim_decoders::DecoderSet;
+use aim_protocols::{
+    decode_dtc_list, decode_monitor_response, decode_supported_pids, strip_dtc_count, ObdRequest,
+    ObdResponse, Service,
+};
+use aim_safety::{OperationRequest, SafetyGate, VehicleConditions};
+use aim_session::{measurement_from, SessionStore};
+use aim_types::{
+    now, AdapterCapabilities, AdapterHealth, AimError, AimResult, ConnectionId, ConnectionState,
+    DecodedValue, DtcRecord, DtcStatus, ErrorCode, EventKind, Module, ModuleIdentity, SessionId,
+    ToolResult, Value, Vehicle, Warning,
+};
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
+use std::time::Instant;
+
+/// Capability ids, matching [`aim_safety::CapabilityRegistry::phase1`].
+pub mod capabilities {
+    /// Open and initialize the adapter link.
+    pub const CONNECT: &str = "adapter.connect";
+    /// Close the adapter link.
+    pub const DISCONNECT: &str = "adapter.disconnect";
+    /// Read adapter link health.
+    pub const HEALTH: &str = "adapter.health";
+    /// Read VIN and calibration identifiers.
+    pub const IDENTIFY_VEHICLE: &str = "obd2.identify_vehicle";
+    /// Discover responding ECUs.
+    pub const SCAN_MODULES: &str = "obd2.scan_modules";
+    /// Read a module's identity strings.
+    pub const MODULE_IDENTITY: &str = "obd2.get_module_identity";
+    /// Read stored, pending and permanent DTCs.
+    pub const READ_DTCS: &str = "obd2.read_dtcs";
+    /// Read freeze frame data.
+    pub const READ_FREEZE_FRAME: &str = "obd2.read_freeze_frame";
+    /// Read one current-data PID.
+    pub const READ_PID: &str = "obd2.read_pid";
+    /// Read several PIDs as one sample.
+    pub const READ_LIVE_DATA: &str = "obd2.read_live_data";
+    /// Enumerate supported PIDs.
+    pub const READ_SUPPORTED_PIDS: &str = "obd2.read_supported_pids";
+    /// Read service 06 on-board monitor test results.
+    pub const READ_MONITOR_TESTS: &str = "obd2.read_monitor_tests";
+    /// List configurable features applicable to this vehicle.
+    pub const LIST_FEATURES: &str = "config.list_features";
+    /// Evaluate a proposed configuration change without applying it.
+    pub const PREVIEW_CHANGE: &str = "config.preview_change";
+    /// Clear DTCs. Registered at L2 and therefore refused by this build.
+    pub const CLEAR_DTCS: &str = "obd2.clear_dtcs";
+}
+
+/// PIDs a freeze frame is worth reading, in the order a technician wants them.
+///
+/// Only those the module reports as supported are actually requested, so this
+/// is a preference list rather than an assumption about any vehicle.
+const FREEZE_FRAME_PIDS: [u8; 14] = [
+    0x03, 0x04, 0x05, 0x0B, 0x0C, 0x0D, 0x0F, 0x10, 0x11, 0x1F, 0x21, 0x2F, 0x33, 0x42,
+];
+
+/// What one operation produced, before it is wrapped in the §7 envelope.
+#[derive(Debug, Default)]
+struct Payload {
+    values: Vec<DecodedValue>,
+    data: Option<serde_json::Value>,
+    warnings: Vec<Warning>,
+    evidence: Option<i64>,
+    module: Option<String>,
+}
+
+impl Payload {
+    fn with_data(data: serde_json::Value) -> Self {
+        Payload {
+            data: Some(data),
+            ..Default::default()
+        }
+    }
+}
+
+/// A decoded DTC as the API and the future agent see it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DtcReport {
+    /// SAE J2012 code.
+    pub code: String,
+    /// Which service reported it.
+    pub status: DtcStatus,
+    /// Module that reported it.
+    pub module: String,
+    /// Description from the catalog, or `None` when the code is not in it.
+    /// The core never invents one.
+    pub description: Option<String>,
+    /// Structural decoding, always available even for an unlisted code.
+    pub structural_summary: String,
+    /// Whether the description came from a validated entry.
+    pub verification: aim_types::VerificationStatus,
+    /// Whether this is a generic SAE code rather than manufacturer-specific.
+    pub is_generic: bool,
+}
+
+/// The service.
+pub struct DiagnosticService {
+    adapter: Box<dyn DiagnosticAdapter>,
+    store: SessionStore,
+    decoders: Arc<DecoderSet>,
+    gate: SafetyGate,
+    session: aim_types::Session,
+    recorder: Arc<SessionRecorder>,
+    connection_id: Option<ConnectionId>,
+    conditions: VehicleConditions,
+    /// Per-module service 01 support, cached after the first enumeration.
+    supported_pids: BTreeMap<String, Vec<u8>>,
+    /// Per-module service 06 monitor support, cached the same way. Without
+    /// this a repeated visit to the Inspect screen re-walks the whole mask
+    /// chain and puts dozens of extra requests on the bus.
+    supported_mids: BTreeMap<String, Vec<u8>>,
+    vehicle: Option<Vehicle>,
+    /// Set when any reply this session arrived incomplete. Evidence about the
+    /// adapter, consumed by the configuration-change checks.
+    saw_truncated_response: bool,
+    reference_year: u16,
+}
+
+impl DiagnosticService {
+    /// Start a session and attach the flight recorder to `adapter`.
+    ///
+    /// The session exists before the adapter is used, so there is nowhere for
+    /// unrecorded traffic to hide.
+    pub fn start(
+        mut adapter: Box<dyn DiagnosticAdapter>,
+        store: SessionStore,
+        decoders: Arc<DecoderSet>,
+        gate: SafetyGate,
+        label: Option<String>,
+    ) -> AimResult<DiagnosticService> {
+        let session = store.create_session(label)?;
+        let recorder = Arc::new(SessionRecorder::new(store.clone(), session.id.clone()));
+        adapter.set_observer(recorder.clone());
+
+        Ok(DiagnosticService {
+            adapter,
+            store,
+            decoders,
+            gate,
+            session,
+            recorder,
+            connection_id: None,
+            conditions: VehicleConditions::unknown(),
+            supported_pids: BTreeMap::new(),
+            supported_mids: BTreeMap::new(),
+            vehicle: None,
+            saw_truncated_response: false,
+            reference_year: 2026,
+        })
+    }
+
+    /// The session this service records into.
+    pub fn session_id(&self) -> &SessionId {
+        &self.session.id
+    }
+
+    /// The session record.
+    pub fn session(&self) -> &aim_types::Session {
+        &self.session
+    }
+
+    /// The store, for read-only queries by the API.
+    pub fn store(&self) -> &SessionStore {
+        &self.store
+    }
+
+    /// The safety gate, so the API can publish the capability list.
+    pub fn gate(&self) -> &SafetyGate {
+        &self.gate
+    }
+
+    /// Adapter link state.
+    pub fn state(&self) -> ConnectionState {
+        self.adapter.state()
+    }
+
+    /// Adapter link health.
+    pub fn health(&self) -> AdapterHealth {
+        self.adapter.health()
+    }
+
+    /// Observed adapter capabilities.
+    pub fn capabilities(&self) -> AdapterCapabilities {
+        self.adapter.capabilities()
+    }
+
+    /// Adapter descriptor, e.g. `COM5` or `sim:dpf-regen`.
+    pub fn adapter_descriptor(&self) -> String {
+        self.adapter.descriptor()
+    }
+
+    /// The identified vehicle, when one has been read.
+    pub fn vehicle(&self) -> Option<&Vehicle> {
+        self.vehicle.as_ref()
+    }
+
+    /// Vehicle conditions as currently believed, used by precondition checks.
+    pub fn conditions(&self) -> &VehicleConditions {
+        &self.conditions
+    }
+
+    /// Record an operator note in the flight recorder — handoff §19's
+    /// "I just unplugged the sensor" case.
+    pub fn note(&self, text: impl Into<String>) -> AimResult<i64> {
+        self.store
+            .append_event(&self.session.id, EventKind::UserNote { text: text.into() })
+    }
+
+    // ------------------------------------------------------------ plumbing
+
+    fn record_invocation(&self, tool: &str, initiator: &str, arguments: serde_json::Value) {
+        let _ = self.store.append_event(
+            &self.session.id,
+            EventKind::ToolInvoked {
+                tool: tool.to_string(),
+                arguments,
+                initiator: initiator.to_string(),
+            },
+        );
+    }
+
+    /// Record a refusal that happened before the gate was reached.
+    ///
+    /// The tool interface can refuse a call on its own — a tool disabled for
+    /// models, whatever the underlying capability permits for a person. That
+    /// refusal must still appear in the flight recorder, or the audit trail
+    /// would show a request arriving and nothing happening to it, which is the
+    /// one shape a log must never have.
+    ///
+    /// Written as an invocation followed by a rejected decision, so it reads
+    /// identically to a gate refusal to anything consuming the log.
+    pub fn record_refusal(
+        &self,
+        tool: &str,
+        capability: &str,
+        initiator: &str,
+        reason: &str,
+        arguments: serde_json::Value,
+    ) {
+        self.record_invocation(tool, initiator, arguments);
+        let _ = self.store.append_event(
+            &self.session.id,
+            EventKind::SafetyDecision {
+                operation: capability.to_string(),
+                level: aim_types::PermissionLevel::L2,
+                allowed: false,
+                initiator: initiator.to_string(),
+                confirmed: false,
+                reason: Some(reason.to_string()),
+            },
+        );
+    }
+
+    /// Ask the gate. The decision is recorded whichever way it goes, because
+    /// handoff §10 requires an audit trail for refusals as much as approvals.
+    fn authorize(
+        &mut self,
+        capability: &str,
+        initiator: &str,
+        confirmation: Option<&str>,
+    ) -> AimResult<()> {
+        let mut request = OperationRequest::new(capability, initiator);
+        if let Some(user) = confirmation {
+            request = request.confirmed_by(user);
+        }
+        let caps = self.adapter.capabilities();
+        let decision = self.gate.authorize(&request, Some(&caps), &self.conditions);
+
+        let _ = self.store.append_event(
+            &self.session.id,
+            EventKind::SafetyDecision {
+                operation: decision.audit.operation.clone(),
+                level: decision.audit.level.unwrap_or(aim_types::PermissionLevel::L0),
+                allowed: decision.audit.allowed,
+                initiator: decision.audit.initiator.clone(),
+                confirmed: decision.audit.confirmed,
+                reason: decision.audit.reason.clone(),
+            },
+        );
+        decision.into_result().map(|_| ())
+    }
+
+    /// Wrap a completed operation in the §7 envelope and record its completion.
+    fn finish(
+        &self,
+        tool: &str,
+        capability: &str,
+        started: Instant,
+        outcome: AimResult<Payload>,
+    ) -> ToolResult {
+        let elapsed = started.elapsed().as_millis() as u64;
+        let result = match outcome {
+            Ok(p) => {
+                let mut r = ToolResult::success(tool, self.session.id.clone(), capability, elapsed)
+                    .with_values(p.values);
+                if let Some(d) = p.data {
+                    r = r.with_data(d);
+                }
+                if let Some(e) = p.evidence {
+                    r = r.with_evidence(e);
+                }
+                if let Some(m) = p.module {
+                    r = r.with_module(m);
+                }
+                for w in p.warnings {
+                    r = r.warn(w);
+                }
+                r
+            }
+            Err(e) => {
+                let mut r =
+                    ToolResult::failure(tool, self.session.id.clone(), capability, elapsed, e);
+                // Even a failure gets its evidence pointer: the adapter
+                // exchange that failed is often the whole story.
+                if let Some(id) = self.recorder.last_response_event() {
+                    r = r.with_evidence(id);
+                }
+                r
+            }
+        };
+
+        let _ = self.store.append_event(
+            &self.session.id,
+            EventKind::ToolCompleted {
+                tool: tool.to_string(),
+                success: result.success,
+                execution_time_ms: elapsed,
+                warnings: result.warnings.iter().map(|w| w.code.clone()).collect(),
+            },
+        );
+        result
+    }
+
+    /// Issue a request and return the messages, tagging each with the evidence
+    /// row for the adapter exchange that produced it.
+    fn request(
+        &mut self,
+        request: &ObdRequest,
+        target: &RequestTarget,
+    ) -> AimResult<Vec<EcuMessage>> {
+        self.adapter.request(request, target)
+    }
+
+    /// Request from one specific module.
+    ///
+    /// Prefers physical addressing. When a module's address has no conventional
+    /// request counterpart the request goes out functionally and the answer is
+    /// filtered by address — which is honest, if slower, and never guesses an
+    /// address that might belong to something else.
+    fn request_module(
+        &mut self,
+        module: &Module,
+        request: &ObdRequest,
+    ) -> AimResult<(EcuMessage, Option<i64>)> {
+        let target = RequestTarget::from_response_address(&module.address)
+            .unwrap_or(RequestTarget::Functional);
+        let messages = self.request(request, &target)?;
+        let evidence = self.recorder.last_response_event();
+        messages
+            .into_iter()
+            .find(|m| m.address == module.address)
+            .map(|m| (m, evidence))
+            .ok_or_else(|| {
+                AimError::new(
+                    ErrorCode::NoData,
+                    format!(
+                        "module {} did not answer service {:02X}",
+                        module.module_key,
+                        request.service.id()
+                    ),
+                )
+            })
+    }
+
+    /// Peel the response header off a message, surfacing negative responses.
+    ///
+    /// Returns owned bytes: the parsed [`ObdResponse`] owns its payload, so a
+    /// borrow would not outlive this function. Payloads are at most a few
+    /// hundred bytes and one copy per exchange is not worth an arena.
+    fn payload_of(message: &EcuMessage, request: &ObdRequest) -> AimResult<Vec<u8>> {
+        let response = ObdResponse::parse(&message.payload, request.pid.is_some())?;
+        response.payload_for(request).map(|p| p.to_vec())
+    }
+
+    fn module_by_key(&self, key: &str) -> AimResult<Module> {
+        self.store
+            .modules(&self.session.id)?
+            .into_iter()
+            .find(|m| m.module_key == key)
+            .ok_or_else(|| {
+                AimError::not_found(format!(
+                    "no module {key:?} in this session; run scan_modules first"
+                ))
+            })
+    }
+
+    fn require_usable(&self) -> AimResult<()> {
+        if self.adapter.state().is_usable() {
+            Ok(())
+        } else {
+            Err(AimError::new(
+                ErrorCode::NoActiveSession,
+                format!("adapter is {}", self.adapter.state().name()),
+            )
+            .with_capabilities(self.adapter.capabilities()))
+        }
+    }
+
+    // ----------------------------------------------------------- lifecycle
+
+    /// Connect the adapter, record the connection and its capabilities.
+    pub fn connect(&mut self, initiator: &str) -> ToolResult {
+        let t0 = Instant::now();
+        self.record_invocation("connect", initiator, serde_json::json!({}));
+        let outcome = self
+            .authorize(capabilities::CONNECT, initiator, None)
+            .and_then(|_| self.connect_inner());
+        self.finish("connect", capabilities::CONNECT, t0, outcome)
+    }
+
+    fn connect_inner(&mut self) -> AimResult<Payload> {
+        self.adapter.connect()?;
+        let caps = self.adapter.capabilities();
+        let state = self.adapter.state();
+
+        let connection = aim_types::Connection {
+            id: ConnectionId::new(),
+            session_id: self.session.id.clone(),
+            adapter_id: self.adapter.descriptor(),
+            transport: caps.transport,
+            connected_at: now(),
+            disconnected_at: None,
+            firmware: caps.firmware.clone(),
+            capabilities: caps.clone(),
+        };
+        self.store.record_connection(&connection)?;
+        self.connection_id = Some(connection.id.clone());
+
+        // What we now believe about the vehicle, from evidence only.
+        let health = self.adapter.health();
+        self.conditions.connection_stable = matches!(state, ConnectionState::Ready);
+        self.conditions.ignition_on = matches!(state, ConnectionState::Ready);
+        self.conditions.battery_voltage = health.battery_voltage;
+
+        let mut warnings: Vec<Warning> = caps
+            .caveats
+            .iter()
+            .map(|c| Warning::caution("adapter_caveat", c.clone()))
+            .collect();
+        if let ConnectionState::Degraded { reason } = &state {
+            warnings.push(Warning::serious("adapter_degraded", reason.clone()));
+        }
+
+        Ok(Payload {
+            data: Some(serde_json::json!({
+                "connection_id": connection.id,
+                "adapter": self.adapter.descriptor(),
+                "state": state,
+                "protocol": self.adapter.protocol(),
+                "protocol_label": self.adapter.protocol().label(),
+                "capabilities": caps,
+            })),
+            warnings,
+            ..Default::default()
+        })
+    }
+
+    /// Disconnect and close the connection record.
+    pub fn disconnect(&mut self, initiator: &str) -> ToolResult {
+        let t0 = Instant::now();
+        self.record_invocation("disconnect", initiator, serde_json::json!({}));
+        let outcome = self
+            .authorize(capabilities::DISCONNECT, initiator, None)
+            .and_then(|_| {
+                self.adapter.disconnect()?;
+                if let Some(id) = &self.connection_id {
+                    self.store.close_connection(id)?;
+                }
+                self.conditions = VehicleConditions::unknown();
+                Ok(Payload::with_data(serde_json::json!({
+                    "state": self.adapter.state(),
+                })))
+            });
+        self.finish("disconnect", capabilities::DISCONNECT, t0, outcome)
+    }
+
+    /// End the session. Called once, at shutdown.
+    pub fn end_session(&mut self) -> AimResult<()> {
+        self.store.end_session(&self.session.id)
+    }
+
+    /// Adapter health as a tool result, so the UI polls one shape of thing.
+    pub fn adapter_health(&mut self, initiator: &str) -> ToolResult {
+        let t0 = Instant::now();
+        // Recorded like every other tool. This was the one operation that
+        // reached the vehicle without appearing in the log as an invocation,
+        // which made it invisible to anything reading the flight recorder to
+        // see what the agent had done — and the recorder is meant to be the
+        // complete account of a session, not most of one.
+        self.record_invocation("adapter_health", initiator, serde_json::json!({}));
+        let outcome = self.authorize(capabilities::HEALTH, initiator, None).map(|_| {
+            let health = self.adapter.health();
+            Payload::with_data(serde_json::json!({
+                "health": health,
+                "capabilities": self.adapter.capabilities(),
+                "descriptor": self.adapter.descriptor(),
+            }))
+        });
+        self.finish("adapter_health", capabilities::HEALTH, t0, outcome)
+    }
+
+    // -------------------------------------------------------------- tools
+
+    /// Read the VIN and calibration identifiers, and record the vehicle.
+    pub fn identify_vehicle(&mut self, initiator: &str) -> ToolResult {
+        let t0 = Instant::now();
+        self.record_invocation("identify_vehicle", initiator, serde_json::json!({}));
+        let outcome = self
+            .authorize(capabilities::IDENTIFY_VEHICLE, initiator, None)
+            .and_then(|_| self.identify_vehicle_inner());
+        self.finish(
+            "identify_vehicle",
+            capabilities::IDENTIFY_VEHICLE,
+            t0,
+            outcome,
+        )
+    }
+
+    fn identify_vehicle_inner(&mut self) -> AimResult<Payload> {
+        self.require_usable()?;
+        let request = ObdRequest::vehicle_info(0x02);
+        let messages = self.request(&request, &RequestTarget::Functional)?;
+        let evidence = self.recorder.last_response_event();
+
+        let message = messages
+            .first()
+            .ok_or_else(|| AimError::no_data("no module answered the VIN request"))?
+            .clone();
+        let payload = Self::payload_of(&message, &request)?;
+        let observed_at = now();
+        let values = self
+            .decoders
+            .pids
+            .decode(0x09, 0x02, &payload, observed_at)?
+            .into_iter()
+            .map(|mut v| {
+                if let Some(e) = evidence {
+                    v.provenance = v.provenance.clone().with_evidence_ref(e);
+                }
+                v
+            })
+            .collect::<Vec<_>>();
+
+        let vin = values
+            .iter()
+            .find(|v| v.signal_id == "vin")
+            .and_then(|v| v.value.as_str())
+            .map(|s| s.to_string())
+            .ok_or_else(|| {
+                AimError::new(
+                    ErrorCode::DecoderInputInvalid,
+                    "the VIN response did not decode to a VIN",
+                )
+            })?;
+
+        let mut warnings = Vec::new();
+        // The VIN's own check digit is a self-check the standard provides. A
+        // failure does not stop identification, but it is never hidden.
+        let info = match aim_decoders::decode_vin_info(&vin, self.reference_year) {
+            Ok(info) => {
+                if !info.check_digit_valid {
+                    warnings.push(Warning::serious(
+                        "vin_check_digit_invalid",
+                        format!("VIN {vin} failed its SAE check-digit test"),
+                    ));
+                }
+                Some(info)
+            }
+            Err(e) => {
+                warnings.push(Warning::serious(
+                    "vin_structurally_invalid",
+                    format!("VIN {vin:?} is not structurally valid: {}", e.message),
+                ));
+                None
+            }
+        };
+
+        // Only fields the VIN standard actually encodes are filled in. Model,
+        // trim, engine and transmission stay unknown: this project does not
+        // have a licensed VIN-decoding database and will not guess.
+        let mut vehicle = Vehicle::from_vin(Some(vin.clone()));
+        if let Some(i) = &info {
+            vehicle.make = i.manufacturer.clone();
+            vehicle.year = i.model_year;
+        }
+        let vehicle = self.store.upsert_vehicle(&vehicle)?;
+        self.store.attach_vehicle(&self.session.id, &vehicle.id)?;
+        self.session.vehicle_id = Some(vehicle.id.clone());
+        self.vehicle = Some(vehicle.clone());
+        let _ = self.store.append_event(
+            &self.session.id,
+            EventKind::VehicleIdentified {
+                vin: Some(vin.clone()),
+                vehicle_id: vehicle.id.to_string(),
+            },
+        );
+
+        // Calibration identifiers come from the same module that gave the VIN.
+        let module_address = message.address.clone();
+        let mut calibration_ids = Vec::new();
+        let mut cvns = Vec::new();
+        for (info_type, sink) in [(0x04u8, &mut calibration_ids), (0x06u8, &mut cvns)] {
+            let req = ObdRequest::vehicle_info(info_type);
+            match self.request(&req, &RequestTarget::Functional) {
+                Ok(msgs) => match msgs.iter().find(|m| m.address == module_address) {
+                    Some(m) => match Self::payload_of(m, &req)
+                        .and_then(|p| self.decoders.pids.decode(0x09, info_type, &p, now()))
+                    {
+                        Ok(vals) => {
+                            for v in vals {
+                                if let Value::Text(s) = &v.value {
+                                    sink.push(s.trim().to_string());
+                                } else if let Value::Raw(s) = &v.value {
+                                    sink.push(s.clone());
+                                }
+                            }
+                        }
+                        Err(e) => warnings.push(Warning::info(
+                            "calibration_decode_failed",
+                            format!("service 09 info type {info_type:02X}: {}", e.message),
+                        )),
+                    },
+                    None => warnings.push(Warning::info(
+                        "calibration_not_reported",
+                        format!("module {module_address} did not answer info type {info_type:02X}"),
+                    )),
+                },
+                Err(e) => {
+                    // An incomplete multi-frame reply is the signature of an
+                    // adapter mishandling flow control on a long response. It is
+                    // harmless here — the CVN is a tamper checksum, not a
+                    // diagnostic input — but it is evidence about the adapter,
+                    // and a configuration write is exactly the operation that
+                    // must not be attempted on a link that drops frames.
+                    if e.message.contains("incomplete multi-frame")
+                        || e.code == ErrorCode::ProtocolMalformedResponse
+                    {
+                        self.saw_truncated_response = true;
+                    }
+                    warnings.push(Warning::info(
+                        "calibration_unavailable",
+                        format!("service 09 info type {info_type:02X}: {}", e.message),
+                    ))
+                }
+            }
+        }
+
+        Ok(Payload {
+            values,
+            data: Some(serde_json::json!({
+                "vin": vin,
+                "vehicle_id": vehicle.id,
+                "vin_decoded": info,
+                "reported_by": module_address,
+                "calibration_ids": calibration_ids,
+                "calibration_verification_numbers": cvns,
+            })),
+            warnings,
+            evidence,
+            module: Some(module_address),
+        })
+    }
+
+    /// Discover which modules answer, and name them from what they report.
+    pub fn scan_modules(&mut self, initiator: &str) -> ToolResult {
+        let t0 = Instant::now();
+        self.record_invocation("scan_modules", initiator, serde_json::json!({}));
+        let outcome = self
+            .authorize(capabilities::SCAN_MODULES, initiator, None)
+            .and_then(|_| self.scan_modules_inner());
+        self.finish("scan_modules", capabilities::SCAN_MODULES, t0, outcome)
+    }
+
+    fn scan_modules_inner(&mut self) -> AimResult<Payload> {
+        self.require_usable()?;
+        // Service 01 PID 00 is the one request every OBD-II module must answer,
+        // which makes it the discovery probe.
+        let request = ObdRequest::current_data(0x00);
+        let messages = self.request(&request, &RequestTarget::Functional)?;
+        let evidence = self.recorder.last_response_event();
+        let protocol = self.adapter.protocol();
+
+        let mut discovered = Vec::new();
+        for message in &messages {
+            let key = format!("ECU_{}", message.address);
+            let module = Module {
+                id: aim_types::ModuleId::new(),
+                session_id: self.session.id.clone(),
+                module_key: key.clone(),
+                // Named by address until the module tells us otherwise. Which
+                // module sits at which OBD address is vehicle-specific, and
+                // guessing would be an invention.
+                name: format!("OBD module at {}", message.address),
+                address: message.address.clone(),
+                protocol,
+                identity: ModuleIdentity::default(),
+                software_version: None,
+                discovered_at: now(),
+            };
+            let stored = self.store.upsert_module(&module)?;
+            let _ = self.store.append_event(
+                &self.session.id,
+                EventKind::ModuleDiscovered {
+                    module_key: key.clone(),
+                    address: message.address.clone(),
+                },
+            );
+            discovered.push(stored);
+        }
+
+        if discovered.is_empty() {
+            return Err(AimError::no_data("no module answered the discovery request"));
+        }
+
+        // Ask each module for its own name. A module that answers gets named
+        // by evidence; one that does not keeps its address-based label.
+        let mut named = Vec::new();
+        for module in discovered {
+            let mut module = module;
+            if let Ok(name) = self.read_ecu_name(&module) {
+                module.name = name;
+                module = self.store.upsert_module(&module)?;
+            }
+            named.push(module);
+        }
+
+        Ok(Payload {
+            data: Some(serde_json::json!({
+                "modules": named,
+                "protocol": protocol,
+                "protocol_label": protocol.label(),
+            })),
+            evidence,
+            ..Default::default()
+        })
+    }
+
+    fn read_ecu_name(&mut self, module: &Module) -> AimResult<String> {
+        let request = ObdRequest::vehicle_info(0x0A);
+        let (message, _) = self.request_module(module, &request)?;
+        let payload = Self::payload_of(&message, &request)?;
+        let values = self.decoders.pids.decode(0x09, 0x0A, &payload, now())?;
+        values
+            .into_iter()
+            .find_map(|v| v.value.as_str().map(|s| s.trim().to_string()))
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| AimError::no_data("module reported an empty ECU name"))
+    }
+
+    /// Read a module's identity: ECU name, calibration ids, CVNs.
+    pub fn get_module_identity(&mut self, module_key: &str, initiator: &str) -> ToolResult {
+        let t0 = Instant::now();
+        self.record_invocation(
+            "get_module_identity",
+            initiator,
+            serde_json::json!({ "module": module_key }),
+        );
+        let outcome = self
+            .authorize(capabilities::MODULE_IDENTITY, initiator, None)
+            .and_then(|_| self.module_identity_inner(module_key));
+        self.finish(
+            "get_module_identity",
+            capabilities::MODULE_IDENTITY,
+            t0,
+            outcome,
+        )
+    }
+
+    fn module_identity_inner(&mut self, module_key: &str) -> AimResult<Payload> {
+        self.require_usable()?;
+        let mut module = self.module_by_key(module_key)?;
+        let mut warnings = Vec::new();
+        let mut identity = ModuleIdentity::default();
+
+        for (info_type, label) in [(0x0Au8, "ecu_name"), (0x04, "calibration_id"), (0x06, "cvn")] {
+            let request = ObdRequest::vehicle_info(info_type);
+            let decoded = self
+                .request_module(&module, &request)
+                .and_then(|(m, _)| Self::payload_of(&m, &request))
+                .and_then(|p| self.decoders.pids.decode(0x09, info_type, &p, now()));
+            match decoded {
+                Ok(values) => {
+                    for v in values {
+                        match (&v.value, info_type) {
+                            (Value::Text(s), 0x0A) => identity.ecu_name = Some(s.trim().into()),
+                            (Value::Text(s), 0x04) => {
+                                identity.calibration_ids.push(s.trim().into())
+                            }
+                            (Value::Raw(s), 0x06) | (Value::Text(s), 0x06) => {
+                                identity.calibration_verification_numbers.push(s.clone())
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                Err(e) => warnings.push(Warning::info(
+                    "identity_field_unavailable",
+                    format!("{label}: {}", e.message),
+                )),
+            }
+        }
+
+        if let Some(name) = &identity.ecu_name {
+            if !name.is_empty() {
+                module.name = name.clone();
+            }
+        }
+        module.identity = identity.clone();
+        let module = self.store.upsert_module(&module)?;
+
+        Ok(Payload {
+            data: Some(serde_json::json!({ "module": module, "identity": identity })),
+            warnings,
+            evidence: self.recorder.last_response_event(),
+            module: Some(module_key.to_string()),
+            ..Default::default()
+        })
+    }
+
+    /// Enumerate the service 01 PIDs a module supports.
+    pub fn read_supported_pids(&mut self, module_key: &str, initiator: &str) -> ToolResult {
+        let t0 = Instant::now();
+        self.record_invocation(
+            "read_supported_pids",
+            initiator,
+            serde_json::json!({ "module": module_key }),
+        );
+        let outcome = self
+            .authorize(capabilities::READ_SUPPORTED_PIDS, initiator, None)
+            .and_then(|_| self.supported_pids_inner(module_key));
+        self.finish(
+            "read_supported_pids",
+            capabilities::READ_SUPPORTED_PIDS,
+            t0,
+            outcome,
+        )
+    }
+
+    fn supported_pids_inner(&mut self, module_key: &str) -> AimResult<Payload> {
+        self.require_usable()?;
+        let module = self.module_by_key(module_key)?;
+        let pids = self.enumerate_supported(&module)?;
+
+        // Report which of the supported PIDs this build can actually decode.
+        // A PID the vehicle offers and the decoders do not know is a gap worth
+        // showing rather than hiding.
+        let described: Vec<serde_json::Value> = pids
+            .iter()
+            .map(|pid| match self.decoders.pids.get(0x01, *pid) {
+                Some(c) => serde_json::json!({
+                    "pid": pid,
+                    "hex": format!("{pid:02X}"),
+                    "signal_id": c.def.signal_id,
+                    "name": c.def.name,
+                    "unit": c.def.unit,
+                    "verification": c.def.verification,
+                    "decoder_available": true,
+                }),
+                None => serde_json::json!({
+                    "pid": pid,
+                    "hex": format!("{pid:02X}"),
+                    "decoder_available": false,
+                }),
+            })
+            .collect();
+        let undecodable = described
+            .iter()
+            .filter(|d| d["decoder_available"] == false)
+            .count();
+
+        let mut warnings = Vec::new();
+        if undecodable > 0 {
+            warnings.push(Warning::info(
+                "pids_without_decoders",
+                format!("{undecodable} supported PIDs have no decoder definition in this build"),
+            ));
+        }
+
+        Ok(Payload {
+            data: Some(serde_json::json!({
+                "module": module_key,
+                "count": pids.len(),
+                "pids": described,
+            })),
+            warnings,
+            evidence: self.recorder.last_response_event(),
+            module: Some(module_key.to_string()),
+            ..Default::default()
+        })
+    }
+
+    /// Read service 06 on-board monitor test results.
+    ///
+    /// This is the reading a code reader cannot give you. A DTC says a monitor
+    /// has already failed; service 06 gives the monitor's *measured value next
+    /// to the limit it is judged by*, so a catalyst at 0.58 against a 0.60 limit
+    /// shows up as passing-and-nearly-gone months before it sets P0420.
+    ///
+    /// Every result carries `passed` and `margin`, which are exact regardless of
+    /// scaling: the value and both limits arrive in the same unit whatever that
+    /// unit is. The scaled numbers are supporting evidence and marked as
+    /// unverified, because this build's UAS table has not been checked against a
+    /// real vehicle.
+    pub fn read_monitor_tests(&mut self, module_key: &str, initiator: &str) -> ToolResult {
+        let t0 = Instant::now();
+        self.record_invocation(
+            "read_monitor_tests",
+            initiator,
+            serde_json::json!({ "module": module_key }),
+        );
+        let outcome = self
+            .authorize(capabilities::READ_MONITOR_TESTS, initiator, None)
+            .and_then(|_| self.monitor_tests_inner(module_key));
+        self.finish(
+            "read_monitor_tests",
+            capabilities::READ_MONITOR_TESTS,
+            t0,
+            outcome,
+        )
+    }
+
+    fn monitor_tests_inner(&mut self, module_key: &str) -> AimResult<Payload> {
+        self.require_usable()?;
+        let module = self.module_by_key(module_key)?;
+
+        let mids = self.enumerate_supported_mids(&module)?;
+        let mut warnings = Vec::new();
+        if mids.is_empty() {
+            // Plenty of vehicles answer service 06 with nothing useful, and a
+            // few do not implement it at all. That is a fact about the vehicle,
+            // not a failure of the scan.
+            warnings.push(Warning::info(
+                "no_monitor_tests",
+                "this module reports no service 06 monitors; many vehicles \
+                 built before roughly 2005 do not implement it",
+            ));
+            return Ok(Payload {
+                data: Some(serde_json::json!({
+                    "module": module_key,
+                    "supported": false,
+                    "monitors": [],
+                })),
+                warnings,
+                evidence: self.recorder.last_response_event(),
+                module: Some(module_key.to_string()),
+                ..Default::default()
+            });
+        }
+
+        let mut readings = Vec::new();
+        let mut unanswered = Vec::new();
+        let mut truncated = 0usize;
+        let mut bus_errors = 0usize;
+        let mut abandoned: Option<u8> = None;
+
+        for mid in &mids {
+            // Stop after repeated bus errors rather than grinding through the
+            // rest of the list.
+            //
+            // Measured on a real truck: a `CAN ERROR` reply leaves the link
+            // unhappy for a moment, and continuing to hammer it made the *next*
+            // unrelated reads fail too — so a monitor sweep could knock out the
+            // live data the user was actually looking at. Backing off keeps the
+            // damage to the sweep that caused it.
+            if bus_errors >= 2 {
+                abandoned = Some(*mid);
+                break;
+            }
+            let request = ObdRequest::monitor_results(*mid);
+            let message = match self.request_module(&module, &request) {
+                Ok((m, _)) => m,
+                // A MID listed in the mask that then refuses to answer is worth
+                // naming rather than dropping: it is usually a monitor that has
+                // not run yet this drive cycle.
+                Err(e) => {
+                    if matches!(
+                        e.code,
+                        ErrorCode::AdapterError | ErrorCode::VehicleNotResponding
+                    ) {
+                        bus_errors += 1;
+                    }
+                    unanswered.push(format!("{mid:02X}"));
+                    continue;
+                }
+            };
+            let payload = match Self::payload_of(&message, &request) {
+                Ok(p) => p,
+                Err(_) => {
+                    unanswered.push(format!("{mid:02X}"));
+                    continue;
+                }
+            };
+            let (tests, leftover) = decode_monitor_response(*mid, &payload);
+            truncated += leftover;
+            readings.extend(self.decoders.monitors.interpret_all(&tests));
+        }
+
+        if !unanswered.is_empty() {
+            warnings.push(Warning::info(
+                "monitors_did_not_answer",
+                format!(
+                    "{} of {} supported monitors returned no result (usually a \
+                     monitor that has not run yet this drive cycle): {}",
+                    unanswered.len(),
+                    mids.len(),
+                    unanswered.join(", ")
+                ),
+            ));
+        }
+        if truncated > 0 {
+            warnings.push(Warning::caution(
+                "monitor_reply_truncated",
+                format!("{truncated} trailing bytes did not form a whole test record"),
+            ));
+        }
+        if let Some(stopped_at) = abandoned {
+            warnings.push(Warning::caution(
+                "monitor_sweep_abandoned",
+                format!(
+                    "the bus reported errors, so the sweep stopped at monitor {stopped_at:02X} \
+                     rather than continuing. Results above are complete; the rest were not asked \
+                     for. Re-check with the engine running and the adapter seated."
+                ),
+            ));
+        }
+        if readings.iter().any(|r| r.unknown_scaling) {
+            warnings.push(Warning::info(
+                "monitor_scaling_unknown",
+                "some results use a scaling this build does not have; their \
+                 pass or fail verdict is still exact, but the numbers are shown \
+                 as raw counts",
+            ));
+        }
+
+        let failing = readings.iter().filter(|r| !r.passed).count();
+        // Under a tenth of the limit band left is the interesting case: still
+        // passing, so no code, but not for much longer.
+        const MARGINAL: f64 = 0.10;
+        let marginal = readings
+            .iter()
+            .filter(|r| r.passed && r.margin.is_some_and(|m| m < MARGINAL))
+            .count();
+
+        Ok(Payload {
+            data: Some(serde_json::json!({
+                "module": module_key,
+                "supported": true,
+                "monitors": readings,
+                "failing": failing,
+                "marginal": marginal,
+                "marginal_threshold": MARGINAL,
+                "scaling_verification": "unverified",
+            })),
+            warnings,
+            evidence: self.recorder.last_response_event(),
+            module: Some(module_key.to_string()),
+            ..Default::default()
+        })
+    }
+
+    /// Ask which monitor ids a module supports, walking the mask chain.
+    ///
+    /// Service 06 mirrors service 01 here: MID 0x00 returns a four-byte mask
+    /// covering 0x01–0x20, and bit 0x20 means "ask again at 0x20". Only the
+    /// masks the module actually acknowledges are followed.
+    fn enumerate_supported_mids(&mut self, module: &Module) -> AimResult<Vec<u8>> {
+        // Cached for the session, exactly as the service 01 mask chain is.
+        //
+        // Measured on a real truck: without this, one visit to the Inspect
+        // screen re-walked the whole chain every time the card mounted, and a
+        // session that opened the screen four times put ninety service 06
+        // requests on the bus. Which monitors a module has does not change
+        // while the key is on.
+        if let Some(cached) = self.supported_mids.get(&module.module_key) {
+            return Ok(cached.clone());
+        }
+        let mut found: BTreeSet<u8> = BTreeSet::new();
+        let mut base: u8 = 0x00;
+        loop {
+            let request = ObdRequest::monitor_results(base);
+            let message = match self.request_module(module, &request) {
+                Ok((m, _)) => m,
+                // Unlike service 01, a module refusing MID 0x00 is not an
+                // error: service 06 is optional in practice and the caller is
+                // told it is unsupported.
+                Err(_) => break,
+            };
+            let payload = match Self::payload_of(&message, &request) {
+                Ok(p) => p,
+                Err(_) => break,
+            };
+            let mids = match decode_supported_pids(base, &payload) {
+                Ok(m) => m,
+                Err(_) => break,
+            };
+            found.extend(mids.iter().copied());
+
+            let next = base.wrapping_add(0x20);
+            if next > base && mids.contains(&next) {
+                base = next;
+            } else {
+                break;
+            }
+        }
+        // 0x00 and the continuation markers are questions, not monitors.
+        let list: Vec<u8> = found
+            .into_iter()
+            .filter(|m| *m != 0x00 && m % 0x20 != 0)
+            .collect();
+        self.supported_mids
+            .insert(module.module_key.clone(), list.clone());
+        Ok(list)
+    }
+
+    /// List the configurable features that could apply to this vehicle.
+    ///
+    /// "Could apply" is doing real work here. A VIN prefix and a model-year
+    /// range narrow the list; they do not establish that a particular truck was
+    /// built with the hardware. Only reading the vehicle's own configuration
+    /// does that, and this build cannot, so every entry says how far it can go.
+    pub fn list_features(&mut self, initiator: &str) -> ToolResult {
+        let t0 = Instant::now();
+        self.record_invocation("list_features", initiator, serde_json::json!({}));
+        let outcome = self
+            .authorize(capabilities::LIST_FEATURES, initiator, None)
+            .map(|_| self.features_inner());
+        self.finish("list_features", capabilities::LIST_FEATURES, t0, outcome)
+    }
+
+    fn features_inner(&mut self) -> Payload {
+        let (make, year, vin) = match &self.vehicle {
+            Some(v) => (
+                v.make.clone(),
+                v.year,
+                v.vin.clone(),
+            ),
+            None => (None, None, None),
+        };
+        let features: Vec<serde_json::Value> = self
+            .decoders
+            .features
+            .for_vehicle(make.as_deref(), year, vin.as_deref())
+            .into_iter()
+            .map(|f| {
+                serde_json::json!({
+                    "id": f.id,
+                    "name": f.name,
+                    "easy": f.easy,
+                    "technical": f.technical,
+                    "risk": f.risk,
+                    "risk_label": f.risk.label(),
+                    "modules": f.modules,
+                    "requires": f.requires,
+                    "support": f.support(),
+                    "verification": f.verification,
+                    "source": f.source,
+                    "notes": f.notes,
+                    "writable_in_principle": f.writable_in_principle(),
+                })
+            })
+            .collect();
+
+        let mut warnings = Vec::new();
+        if vin.is_none() {
+            warnings.push(Warning::info(
+                "vehicle_not_identified",
+                "No VIN has been read this session, so this list is not narrowed \
+                 to your vehicle. Identify the vehicle for a shorter, more \
+                 relevant list.",
+            ));
+        }
+        Payload {
+            data: Some(serde_json::json!({
+                "features": features,
+                "catalog_size": self.decoders.features.len(),
+                "narrowed_to_vehicle": vin.is_some(),
+            })),
+            warnings,
+            ..Default::default()
+        }
+    }
+
+    /// Evaluate a proposed configuration change without performing it.
+    ///
+    /// Read-only by construction: it inspects catalogue data and what has
+    /// already been observed about this session, and sends nothing. The result
+    /// is the full list of checks so a person can see every reason a change
+    /// would or would not go ahead, rather than a bare "unavailable".
+    pub fn preview_configuration_change(
+        &mut self,
+        feature_id: &str,
+        desired: crate::config::DesiredValue,
+        initiator: &str,
+    ) -> ToolResult {
+        let t0 = Instant::now();
+        self.record_invocation(
+            "preview_configuration_change",
+            initiator,
+            serde_json::json!({ "feature_id": feature_id, "desired": desired }),
+        );
+        let outcome = self
+            .authorize(capabilities::PREVIEW_CHANGE, initiator, None)
+            .and_then(|_| self.preview_inner(feature_id, desired));
+        self.finish(
+            "preview_configuration_change",
+            capabilities::PREVIEW_CHANGE,
+            t0,
+            outcome,
+        )
+    }
+
+    fn preview_inner(
+        &mut self,
+        feature_id: &str,
+        desired: crate::config::DesiredValue,
+    ) -> AimResult<Payload> {
+        let modules: Vec<String> = self
+            .store
+            .modules(&self.session.id)?
+            .into_iter()
+            .map(|m| m.module_key)
+            .collect();
+        let caps = self.adapter.capabilities();
+        let request = crate::config::ChangeRequest {
+            feature_id: feature_id.to_string(),
+            desired,
+        };
+        let ctx = crate::config::ChangeContext {
+            vehicle: self.vehicle.as_ref(),
+            adapter: Some(&caps),
+            modules_present: &modules,
+            saw_truncated_response: self.saw_truncated_response,
+            battery_voltage: self.conditions.battery_voltage,
+            max_level: aim_safety::MAX_ENABLED_LEVEL,
+        };
+        let plan = crate::config::plan_change(
+            &request,
+            self.decoders.features.get(feature_id),
+            &ctx,
+        );
+
+        let mut warnings = Vec::new();
+        if !plan.can_apply {
+            let permanent = plan.checks.iter().any(|c| !c.passed && c.blocking_by_design);
+            warnings.push(if permanent {
+                Warning::info(
+                    "change_refused_by_design",
+                    "This change will not be made by this build. The preview \
+                     shows every check so the reason is visible.",
+                )
+            } else {
+                Warning::info(
+                    "change_not_possible_yet",
+                    "This change cannot be made in the current situation. Each \
+                     failed check says what would have to be true.",
+                )
+            });
+        }
+
+        Ok(Payload {
+            data: Some(serde_json::to_value(&plan).unwrap_or(serde_json::Value::Null)),
+            warnings,
+            ..Default::default()
+        })
+    }
+
+    /// Walk the supported-PID mask chain, caching the result for the session.
+    fn enumerate_supported(&mut self, module: &Module) -> AimResult<Vec<u8>> {
+        if let Some(cached) = self.supported_pids.get(&module.module_key) {
+            return Ok(cached.clone());
+        }
+        let mut found: BTreeSet<u8> = BTreeSet::new();
+        let mut base: u8 = 0x00;
+        loop {
+            let request = ObdRequest::current_data(base);
+            let (message, _) = match self.request_module(module, &request) {
+                Ok(v) => v,
+                // A module that does not answer this mask simply supports
+                // nothing above it. That is an answer, not a failure — unless
+                // it is the very first mask, which every module must answer.
+                Err(e) if base == 0x00 => return Err(e),
+                Err(_) => break,
+            };
+            let payload = Self::payload_of(&message, &request)?;
+            let pids = decode_supported_pids(base, &payload)?;
+            found.insert(base);
+            found.extend(pids.iter().copied());
+
+            let next = base.wrapping_add(0x20);
+            if next > base && pids.contains(&next) {
+                base = next;
+            } else {
+                break;
+            }
+        }
+        let list: Vec<u8> = found.into_iter().collect();
+        self.supported_pids
+            .insert(module.module_key.clone(), list.clone());
+        Ok(list)
+    }
+
+    /// Read stored, pending and permanent DTCs.
+    ///
+    /// `module_key` of `None` reads every discovered module.
+    pub fn read_dtcs(&mut self, module_key: Option<&str>, initiator: &str) -> ToolResult {
+        let t0 = Instant::now();
+        self.record_invocation(
+            "read_dtcs",
+            initiator,
+            serde_json::json!({ "module": module_key }),
+        );
+        let outcome = self
+            .authorize(capabilities::READ_DTCS, initiator, None)
+            .and_then(|_| self.read_dtcs_inner(module_key));
+        self.finish("read_dtcs", capabilities::READ_DTCS, t0, outcome)
+    }
+
+    fn read_dtcs_inner(&mut self, module_key: Option<&str>) -> AimResult<Payload> {
+        self.require_usable()?;
+        let modules = match module_key {
+            Some(k) => vec![self.module_by_key(k)?],
+            None => {
+                let all = self.store.modules(&self.session.id)?;
+                if all.is_empty() {
+                    return Err(AimError::not_found(
+                        "no modules discovered yet; run scan_modules first",
+                    ));
+                }
+                all
+            }
+        };
+
+        let mut reports: Vec<DtcReport> = Vec::new();
+        let mut warnings = Vec::new();
+        let mut evidence = None;
+
+        for module in &modules {
+            for status in [DtcStatus::Confirmed, DtcStatus::Pending, DtcStatus::Permanent] {
+                let service = match status {
+                    DtcStatus::Confirmed => Service::StoredDtcs,
+                    DtcStatus::Pending => Service::PendingDtcs,
+                    DtcStatus::Permanent => Service::PermanentDtcs,
+                };
+                let request = ObdRequest::bare(service);
+                let (message, ev) = match self.request_module(module, &request) {
+                    Ok(v) => v,
+                    Err(e) if e.code == ErrorCode::NoData => {
+                        // A module that ignores one DTC service is common and
+                        // is reported, not treated as "no codes".
+                        warnings.push(Warning::info(
+                            "dtc_service_unanswered",
+                            format!(
+                                "{} did not answer service {:02X} ({})",
+                                module.module_key,
+                                service.id(),
+                                status.as_str()
+                            ),
+                        ));
+                        continue;
+                    }
+                    Err(e) => return Err(e),
+                };
+                evidence = ev.or(evidence);
+
+                let payload = Self::payload_of(&message, &request)?;
+                let (code_bytes, claimed) = strip_dtc_count(&payload);
+                let codes = decode_dtc_list(code_bytes)?;
+                if let Some(claimed) = claimed {
+                    if claimed as usize != codes.len() {
+                        warnings.push(Warning::caution(
+                            "dtc_count_mismatch",
+                            format!(
+                                "{} claimed {claimed} {} codes but reported {}",
+                                module.module_key,
+                                status.as_str(),
+                                codes.len()
+                            ),
+                        ));
+                    }
+                }
+
+                for code in codes {
+                    let info = self.decoders.dtcs.describe(&code)?;
+                    if info.description.is_none() {
+                        warnings.push(Warning::caution(
+                            "dtc_not_in_catalog",
+                            format!("{code} has no description in the generic SAE catalog"),
+                        ));
+                    }
+                    self.store.record_dtc(&DtcRecord {
+                        session_id: self.session.id.clone(),
+                        module_id: module.id.clone(),
+                        code: code.clone(),
+                        status,
+                        description: info.description.clone(),
+                        occurrence: 1,
+                        freeze_frame_ref: None,
+                        read_at: now(),
+                    })?;
+                    let _ = self.store.append_event(
+                        &self.session.id,
+                        EventKind::DtcRead {
+                            module_key: module.module_key.clone(),
+                            code: code.clone(),
+                            status,
+                        },
+                    );
+                    reports.push(DtcReport {
+                        code,
+                        status,
+                        module: module.module_key.clone(),
+                        description: info.description,
+                        structural_summary: info.structural_summary,
+                        verification: info.verification,
+                        is_generic: info.is_generic,
+                    });
+                }
+            }
+        }
+
+        let confirmed = reports
+            .iter()
+            .filter(|r| r.status == DtcStatus::Confirmed)
+            .count();
+        Ok(Payload {
+            data: Some(serde_json::json!({
+                "dtcs": reports,
+                "confirmed_count": confirmed,
+                "modules_read": modules.iter().map(|m| &m.module_key).collect::<Vec<_>>(),
+            })),
+            warnings,
+            evidence,
+            module: module_key.map(|k| k.to_string()),
+            ..Default::default()
+        })
+    }
+
+    /// Read freeze frame `frame` from a module.
+    pub fn read_freeze_frame(
+        &mut self,
+        module_key: &str,
+        frame: u8,
+        initiator: &str,
+    ) -> ToolResult {
+        let t0 = Instant::now();
+        self.record_invocation(
+            "read_freeze_frame",
+            initiator,
+            serde_json::json!({ "module": module_key, "frame": frame }),
+        );
+        let outcome = self
+            .authorize(capabilities::READ_FREEZE_FRAME, initiator, None)
+            .and_then(|_| self.freeze_frame_inner(module_key, frame));
+        self.finish(
+            "read_freeze_frame",
+            capabilities::READ_FREEZE_FRAME,
+            t0,
+            outcome,
+        )
+    }
+
+    fn freeze_frame_inner(&mut self, module_key: &str, frame: u8) -> AimResult<Payload> {
+        self.require_usable()?;
+        let module = self.module_by_key(module_key)?;
+
+        // PID 02 of a freeze frame is the code that caused it. Without it,
+        // there is no frame to read.
+        let dtc_request = ObdRequest::freeze_frame(0x02, frame);
+        let (message, evidence) = self.request_module(&module, &dtc_request)?;
+        let payload = Self::payload_of(&message, &dtc_request)?;
+        // Payload is <frame> <dtc hi> <dtc lo>.
+        if payload.len() < 3 {
+            return Err(AimError::new(
+                ErrorCode::DecoderInputInvalid,
+                format!(
+                    "freeze frame {frame} DTC response was {} bytes, expected 3",
+                    payload.len()
+                ),
+            ));
+        }
+        let cause = aim_protocols::decode_dtc(payload[1], payload[2]);
+        let info = self.decoders.dtcs.describe(&cause)?;
+
+        let supported = self.enumerate_supported(&module).unwrap_or_default();
+        let mut values = Vec::new();
+        let mut warnings = Vec::new();
+        for pid in FREEZE_FRAME_PIDS {
+            if !supported.contains(&pid) {
+                continue;
+            }
+            let request = ObdRequest::freeze_frame(pid, frame);
+            let (message, ev) = match self.request_module(&module, &request) {
+                Ok(v) => v,
+                Err(e) if e.code == ErrorCode::NoData => continue,
+                Err(e) => return Err(e),
+            };
+            let payload = match Self::payload_of(&message, &request) {
+                Ok(p) => p,
+                Err(e) => {
+                    warnings.push(Warning::info(
+                        "freeze_frame_pid_unreadable",
+                        format!("PID {pid:02X}: {}", e.message),
+                    ));
+                    continue;
+                }
+            };
+            // Skip the echoed frame number to reach the data.
+            let data = &payload[1..];
+            match self.decoders.pids.decode(0x01, pid, data, now()) {
+                Ok(decoded) => {
+                    for mut v in decoded {
+                        if let Some(e) = ev {
+                            v.provenance = v.provenance.clone().with_evidence_ref(e);
+                        }
+                        values.push(v);
+                    }
+                }
+                Err(e) => warnings.push(Warning::info(
+                    "freeze_frame_pid_undecodable",
+                    format!("PID {pid:02X}: {}", e.message),
+                )),
+            }
+        }
+
+        // A freeze frame is a snapshot from the past. It is deliberately not
+        // written to `measurements`, which is a time series of live readings —
+        // mixing the two would put a stale sample on a live graph.
+        Ok(Payload {
+            values,
+            data: Some(serde_json::json!({
+                "module": module_key,
+                "frame": frame,
+                "dtc": cause,
+                "dtc_description": info.description,
+                "dtc_verification": info.verification,
+            })),
+            warnings,
+            evidence,
+            module: Some(module_key.to_string()),
+        })
+    }
+
+    /// Read one signal by its id (`engine_rpm`) or PID (`0x0C`, `12`).
+    pub fn read_pid(&mut self, module_key: &str, signal: &str, initiator: &str) -> ToolResult {
+        let t0 = Instant::now();
+        self.record_invocation(
+            "read_pid",
+            initiator,
+            serde_json::json!({ "module": module_key, "signal": signal }),
+        );
+        let outcome = self
+            .authorize(capabilities::READ_PID, initiator, None)
+            .and_then(|_| {
+                let module = self.module_by_key(module_key)?;
+                let pid = self.resolve_signal(signal)?;
+                let (values, evidence) = self.sample(&module, pid)?;
+                Ok(Payload {
+                    values,
+                    data: Some(serde_json::json!({
+                        "module": module_key,
+                        "pid": pid,
+                        "hex": format!("{pid:02X}"),
+                    })),
+                    evidence,
+                    module: Some(module_key.to_string()),
+                    ..Default::default()
+                })
+            });
+        self.finish("read_pid", capabilities::READ_PID, t0, outcome)
+    }
+
+    /// Read several signals as one sample.
+    ///
+    /// Each is a separate request: ELM327-class adapters support multi-PID
+    /// requests inconsistently, and a clone that silently truncates one would
+    /// produce readings attributed to the wrong signal.
+    pub fn read_live_data(
+        &mut self,
+        module_key: &str,
+        signals: &[String],
+        initiator: &str,
+    ) -> ToolResult {
+        let t0 = Instant::now();
+        self.record_invocation(
+            "read_live_data",
+            initiator,
+            serde_json::json!({ "module": module_key, "signals": signals }),
+        );
+        let outcome = self
+            .authorize(capabilities::READ_LIVE_DATA, initiator, None)
+            .and_then(|_| self.live_data_inner(module_key, signals));
+        self.finish("read_live_data", capabilities::READ_LIVE_DATA, t0, outcome)
+    }
+
+    fn live_data_inner(&mut self, module_key: &str, signals: &[String]) -> AimResult<Payload> {
+        self.require_usable()?;
+        if signals.is_empty() {
+            return Err(AimError::bad_request("read_live_data needs at least one signal"));
+        }
+        let module = self.module_by_key(module_key)?;
+        let mut values = Vec::new();
+        let mut warnings = Vec::new();
+        let mut evidence = None;
+
+        // A wedged bus must not be hammered for the rest of the sample.
+        //
+        // The same mistake as the service 06 sweep, in a worse place: this runs
+        // on a timer. One bus error used to become a warning and the loop
+        // carried straight on to the next signal, so an unhappy link got a
+        // fresh burst of requests every interval and never recovered, while the
+        // graph kept drawing whichever signals still answered. Stopping the
+        // sample gives the bus a gap and makes the problem visible.
+        let mut bus_errors = 0usize;
+        let mut skipped = Vec::new();
+
+        for signal in signals {
+            if bus_errors >= 2 {
+                skipped.push(signal.clone());
+                continue;
+            }
+            let pid = match self.resolve_signal(signal) {
+                Ok(p) => p,
+                Err(e) => {
+                    warnings.push(Warning::caution(
+                        "unknown_signal",
+                        format!("{signal:?}: {}", e.message),
+                    ));
+                    continue;
+                }
+            };
+            match self.sample(&module, pid) {
+                Ok((mut decoded, ev)) => {
+                    evidence = ev.or(evidence);
+                    values.append(&mut decoded);
+                }
+                Err(e) => {
+                    if matches!(
+                        e.code,
+                        ErrorCode::AdapterError | ErrorCode::VehicleNotResponding
+                    ) {
+                        bus_errors += 1;
+                    }
+                    warnings.push(Warning::caution(
+                        "signal_unavailable",
+                        format!("{signal}: {}", e.message),
+                    ));
+                }
+            }
+        }
+
+        if !skipped.is_empty() {
+            warnings.push(Warning::caution(
+                "sample_cut_short",
+                format!(
+                    "the bus returned errors, so {} signal{} were not asked for this time \
+                     ({}). The values shown are real; the missing ones were skipped rather \
+                     than retried into an unhappy bus.",
+                    skipped.len(),
+                    if skipped.len() == 1 { "" } else { "s" },
+                    skipped.join(", ")
+                ),
+            ));
+        }
+
+        // A sample where nothing at all could be read is a failure, not an
+        // empty success: a live-data graph must never silently flatline.
+        if values.is_empty() {
+            return Err(AimError::no_data(format!(
+                "none of the {} requested signals could be read",
+                signals.len()
+            )));
+        }
+
+        Ok(Payload {
+            values,
+            data: Some(serde_json::json!({
+                "module": module_key,
+                "requested": signals,
+            })),
+            warnings,
+            evidence,
+            module: Some(module_key.to_string()),
+        })
+    }
+
+    /// Emissions readiness from every module that keeps it.
+    ///
+    /// Reading this from one module is what the app used to do, and it was
+    /// quietly wrong. Measured on a real 2019 truck: the engine controller and
+    /// the transmission controller both answer PID 01, and they disagree —
+    /// 195 warm-ups against 218, 11601 km since the codes were cleared against
+    /// 11605. Neither is faulty. Each module keeps its own counters and clears
+    /// them on its own schedule, so a card that reads "the" readiness state and
+    /// shows one number is picking a winner without saying so.
+    ///
+    /// This reads all of them and reports the disagreement as a fact, because
+    /// that is what it is.
+    pub fn read_readiness(&mut self, initiator: &str) -> ToolResult {
+        let t0 = Instant::now();
+        self.record_invocation("read_readiness", initiator, serde_json::json!({}));
+        let outcome = self
+            .authorize(capabilities::READ_LIVE_DATA, initiator, None)
+            .and_then(|_| self.readiness_inner());
+        self.finish("read_readiness", capabilities::READ_LIVE_DATA, t0, outcome)
+    }
+
+    fn readiness_inner(&mut self) -> AimResult<Payload> {
+        self.require_usable()?;
+        const SIGNALS: [&str; 4] = [
+            "monitor_status",
+            "distance_since_cleared",
+            "warmups_since_cleared",
+            "distance_with_mil_on",
+        ];
+
+        let modules = self.store.modules(&self.session.id)?;
+        if modules.is_empty() {
+            return Err(AimError::not_found(
+                "no modules have been discovered yet; run a scan first",
+            ));
+        }
+
+        let mut per_module = Vec::new();
+        let mut warnings = Vec::new();
+        let mut values = Vec::new();
+        let mut evidence = None;
+
+        for module in &modules {
+            let mut read = Vec::new();
+            for signal in SIGNALS {
+                let Ok(pid) = self.resolve_signal(signal) else { continue };
+                if let Ok((decoded, ev)) = self.sample(module, pid) {
+                    evidence = ev.or(evidence);
+                    read.extend(decoded);
+                }
+            }
+            // A module that answers none of them simply does not keep readiness
+            // state. That is normal for a body or transmission controller and
+            // is not worth a warning.
+            if read.is_empty() {
+                continue;
+            }
+            per_module.push(serde_json::json!({
+                "module": module.module_key,
+                "address": module.address,
+                "name": module.name,
+                "values": read,
+            }));
+            values.extend(read);
+        }
+
+        if per_module.is_empty() {
+            return Err(AimError::no_data(
+                "no module reported emissions readiness",
+            ));
+        }
+
+        // Do any two modules disagree about how far the vehicle has gone since
+        // its codes were cleared? That is the number a buyer leans on, so a
+        // split in it has to be visible rather than averaged away.
+        let distances: Vec<(String, f64)> = per_module
+            .iter()
+            .filter_map(|m| {
+                let key = m["module"].as_str()?.to_string();
+                let v = m["values"]
+                    .as_array()?
+                    .iter()
+                    .find(|v| v["signal_id"] == "distance_since_cleared")?
+                    .get("value")?
+                    .get("value")?
+                    .as_f64()?;
+                Some((key, v))
+            })
+            .collect();
+        let disagreement = match (
+            distances.iter().map(|(_, v)| *v).fold(f64::MAX, f64::min),
+            distances.iter().map(|(_, v)| *v).fold(f64::MIN, f64::max),
+        ) {
+            (lo, hi) if distances.len() > 1 && (hi - lo) > 1.0 => Some(hi - lo),
+            _ => None,
+        };
+        if let Some(spread) = disagreement {
+            warnings.push(Warning::info(
+                "modules_disagree_on_readiness",
+                format!(
+                    "the modules differ by {spread:.0} km on distance since the codes were \
+                     cleared. This is normal — each module keeps its own counters — but it \
+                     means there is no single answer, so both are shown."
+                ),
+            ));
+        }
+
+        Ok(Payload {
+            data: Some(serde_json::json!({
+                "modules": per_module,
+                "module_count": per_module.len(),
+                "disagreement_km": disagreement,
+            })),
+            values,
+            warnings,
+            evidence,
+            module: None,
+        })
+    }
+
+    /// Request one service 01 PID, decode it, and record every value.
+    fn sample(&mut self, module: &Module, pid: u8) -> AimResult<(Vec<DecodedValue>, Option<i64>)> {
+        let request = ObdRequest::current_data(pid);
+        let (message, evidence) = self.request_module(module, &request)?;
+        let payload = Self::payload_of(&message, &request)?;
+        let observed_at = now();
+        let mut values = self.decoders.pids.decode(0x01, pid, &payload, observed_at)?;
+
+        for value in &mut values {
+            if let Some(e) = evidence {
+                value.provenance = value.provenance.clone().with_evidence_ref(e);
+            }
+            self.store
+                .record_measurement(&measurement_from(&self.session.id, &module.id, value))?;
+            let _ = self.store.append_event(
+                &self.session.id,
+                EventKind::MeasurementRecorded {
+                    module_key: module.module_key.clone(),
+                    signal_id: value.signal_id.clone(),
+                    value: value.value.as_f64(),
+                    unit: value.unit.clone(),
+                    raw_hex: value.provenance.raw_hex.clone(),
+                },
+            );
+        }
+
+        // Readings that tell us about vehicle state feed the precondition
+        // checks, so an L1 test's "engine off" requirement is evaluated
+        // against observation rather than an assumption.
+        self.observe_conditions(&values);
+        Ok((values, evidence))
+    }
+
+    fn observe_conditions(&mut self, values: &[DecodedValue]) {
+        for v in values {
+            match v.signal_id.as_str() {
+                "engine_rpm" => {
+                    if let Some(rpm) = v.value.as_f64() {
+                        self.conditions.engine_running = rpm > 250.0;
+                        self.conditions.ignition_on = true;
+                    }
+                }
+                "vehicle_speed" => self.conditions.vehicle_speed_kph = v.value.as_f64(),
+                "control_module_voltage" => self.conditions.battery_voltage = v.value.as_f64(),
+                _ => {}
+            }
+        }
+    }
+
+    /// Resolve a signal id or PID spelling to a service 01 PID number.
+    ///
+    /// A signal id (`engine_rpm`) is always preferred and is what the UI and
+    /// the agent should send. A bare number is a convenience for exploration,
+    /// and its spelling decides the base in one fixed order, so the same string
+    /// always means the same PID:
+    ///
+    /// | Spelling | Base | Example |
+    /// |----------|------|---------|
+    /// | `0x`-prefixed | hex | `0x0C` → PID 0x0C |
+    /// | all decimal digits | decimal | `12` → PID 0x0C |
+    /// | contains a hex letter | hex | `0C`, `1F` → PID 0x0C, 0x1F |
+    ///
+    /// Decimal is tried before bare hex deliberately. Reading the wrong sensor
+    /// and reporting it confidently is the worst failure this layer can have,
+    /// so the rule is fixed and documented rather than inferred per call.
+    fn resolve_signal(&self, signal: &str) -> AimResult<u8> {
+        if let Some((service, pid)) = self.decoders.pids.address_of(signal) {
+            if service != 0x01 {
+                return Err(AimError::bad_request(format!(
+                    "{signal:?} is a service {service:02X} signal, not live data"
+                )));
+            }
+            return Ok(pid);
+        }
+        let t = signal.trim();
+        let parsed = match t.strip_prefix("0x").or_else(|| t.strip_prefix("0X")) {
+            Some(hex) => u8::from_str_radix(hex, 16).ok(),
+            None => t
+                .parse::<u8>()
+                .ok()
+                .or_else(|| u8::from_str_radix(t, 16).ok()),
+        };
+        parsed.ok_or_else(|| {
+            AimError::new(
+                ErrorCode::DecoderNotFound,
+                format!("{signal:?} is neither a known signal id nor a PID number"),
+            )
+        })
+    }
+
+    /// Clear diagnostic trouble codes.
+    ///
+    /// Implemented end to end and permanently refused: the capability is
+    /// registered at L2, which is above this build's ceiling. Handoff §10 asks
+    /// for exactly this — the operation exists, is visible, is auditable, and
+    /// cannot run. The refusal happens before any byte reaches the vehicle.
+    pub fn clear_dtcs(
+        &mut self,
+        module_key: Option<&str>,
+        initiator: &str,
+        confirmation: Option<&str>,
+    ) -> ToolResult {
+        let t0 = Instant::now();
+        self.record_invocation(
+            "clear_dtcs",
+            initiator,
+            serde_json::json!({ "module": module_key, "confirmed": confirmation.is_some() }),
+        );
+        let outcome = self
+            .authorize(capabilities::CLEAR_DTCS, initiator, confirmation)
+            .and_then(|_| self.clear_dtcs_inner(module_key));
+        self.finish("clear_dtcs", capabilities::CLEAR_DTCS, t0, outcome)
+    }
+
+    fn clear_dtcs_inner(&mut self, module_key: Option<&str>) -> AimResult<Payload> {
+        self.require_usable()?;
+        let request = ObdRequest::bare(Service::ClearDtcs);
+        let target = match module_key {
+            Some(k) => {
+                let module = self.module_by_key(k)?;
+                RequestTarget::from_response_address(&module.address)
+                    .unwrap_or(RequestTarget::Functional)
+            }
+            None => RequestTarget::Functional,
+        };
+        let messages = self.request(&request, &target)?;
+        Ok(Payload {
+            data: Some(serde_json::json!({
+                "cleared_by": messages.iter().map(|m| &m.address).collect::<Vec<_>>(),
+            })),
+            evidence: self.recorder.last_response_event(),
+            module: module_key.map(|k| k.to_string()),
+            ..Default::default()
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aim_safety::CapabilityRegistry;
+
+    /// Every capability id this service uses must exist in the registry.
+    /// A typo here would mean an operation is refused as "unknown" at runtime
+    /// rather than at compile time, so it is checked once, here.
+    #[test]
+    fn every_capability_the_service_uses_is_registered() {
+        let registry = CapabilityRegistry::phase1();
+        for id in [
+            capabilities::CONNECT,
+            capabilities::DISCONNECT,
+            capabilities::HEALTH,
+            capabilities::IDENTIFY_VEHICLE,
+            capabilities::SCAN_MODULES,
+            capabilities::MODULE_IDENTITY,
+            capabilities::READ_DTCS,
+            capabilities::READ_FREEZE_FRAME,
+            capabilities::READ_PID,
+            capabilities::READ_LIVE_DATA,
+            capabilities::READ_SUPPORTED_PIDS,
+            capabilities::CLEAR_DTCS,
+        ] {
+            assert!(
+                registry.get(id).is_some(),
+                "capability {id} is used by the service but not registered"
+            );
+        }
+    }
+
+    #[test]
+    fn clearing_codes_is_enabled_for_a_person_but_never_for_the_agent() {
+        // The asymmetry is the design. A person can clear codes; the model
+        // cannot, because the readiness monitors it destroys are the evidence a
+        // used-car buyer most needs and rebuilding them costs 50 to 100 miles.
+        let registry = CapabilityRegistry::phase1();
+        let cap = registry.get(capabilities::CLEAR_DTCS).unwrap();
+        assert!(
+            cap.level <= aim_safety::MAX_ENABLED_LEVEL,
+            "a person must be able to clear codes"
+        );
+        assert!(
+            cap.level.requires_confirmation(),
+            "and never without saying so explicitly"
+        );
+        assert!(cap.mutating, "it changes the vehicle and must be audited as such");
+    }
+}

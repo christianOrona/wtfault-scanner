@@ -1,0 +1,26 @@
+[package]
+name = "aim-diagnostics"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+aim-adapter = { version = "0.1.0", path = "../adapter", default-features = false }
+aim-decoders = { version = "0.1.0", path = "../decoders" }
+aim-protocols = { version = "0.1.0", path = "../protocols" }
+aim-safety = { version = "0.1.0", path = "../safety" }
+aim-session = { version = "0.1.0", path = "../session" }
+aim-transport = { version = "0.1.0", path = "../transport", default-features = false }
+aim-types = { version = "0.1.0", path = "../types" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+tracing = "0.1.44"
+
+[dev-dependencies]
+aim-simulator = { version = "0.1.0", path = "../../simulator" }
+
+[features]
+default = ["serial"]
+# Propagates to the adapter so a build without libudev still works.
+serial = ["aim-adapter/serial"]

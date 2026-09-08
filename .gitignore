@@ -1,0 +1,33 @@
+# Rust
+/target
+target/
+**/*.rs.bk
+*.pdb
+
+# Node / Tauri UI (built by a separate agent)
+node_modules/
+dist/
+.vite/
+apps/desktop/src-tauri/target/
+
+# Local session databases — these contain VINs and vehicle history
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite-journal
+*.db
+
+# Captured adapter transcripts from real vehicles are evidence, not source.
+# Commit one deliberately when it is meant as a golden test fixture.
+/captures/
+
+# Editors and OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+
+# Local Node version manager hint is committed; per-user editor state is not.
+.claude/

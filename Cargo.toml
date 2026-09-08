@@ -1,0 +1,40 @@
+[workspace]
+resolver = "2"
+members = [
+    "core/types",
+    "core/transport",
+    "core/protocols",
+    "core/decoders",
+    "core/adapter",
+    "core/safety",
+    "core/session",
+    "core/diagnostics",
+    "core/tools",
+    "core/agent",
+    "simulator",
+    "apps/api",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "MIT OR Apache-2.0"
+authors = ["AI Mechanic project"]
+repository = "https://github.com/ai-mechanic/ai-mechanic"
+
+[workspace.dependencies]
+aim-types = { path = "core/types" }
+aim-transport = { path = "core/transport" }
+aim-protocols = { path = "core/protocols" }
+aim-decoders = { path = "core/decoders" }
+aim-adapter = { path = "core/adapter" }
+aim-safety = { path = "core/safety" }
+aim-session = { path = "core/session" }
+aim-diagnostics = { path = "core/diagnostics" }
+aim-tools = { path = "core/tools" }
+aim-agent = { path = "core/agent" }
+aim-simulator = { path = "simulator" }
+
+[profile.release]
+lto = "thin"

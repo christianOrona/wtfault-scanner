@@ -1,0 +1,277 @@
+# SAE J1979 service 06 — on-board monitor test results.
+#
+# What makes this worth having: service 06 reports each self-test's *measured
+# value against the limit it is judged by*. A catalyst reading 0.58 against a
+# 0.60 limit has passed and is about to stop passing, and no trouble code will
+# say so until it does. This is the difference between a scanner that tells you
+# a part has failed and one that tells you it is failing.
+#
+# Two separate tables:
+#
+#   monitors — what each on-board monitor id (MID) tests. Only the SAE-defined
+#              range is listed. Manufacturers use 0xA0 and above for their own
+#              monitors, and this project does not guess at those: an unlisted
+#              MID is reported by its number, exactly as an unnamed module is
+#              reported by its address.
+#
+#   units    — the unit-and-scaling id (UASID) table that turns the raw 16-bit
+#              counts into physical values.
+#
+# IMPORTANT: every entry in `units` is marked unverified, because this project
+# has not validated the scaling against a real vehicle. That is deliberate and
+# it costs nothing, because the useful part of service 06 does not depend on it:
+# the value, the lower limit and the upper limit all arrive in the same unit,
+# so "did it pass" and "how close to failing" are exact whatever that unit is.
+# The scaled number is shown as supporting evidence, clearly marked.
+
+version: 1
+
+monitors:
+  # Oxygen sensor monitors. Bank 1 sensors 1-4, then bank 2.
+  - mid: 0x01
+    name: "Oxygen sensor, bank 1 sensor 1"
+    system: "Exhaust"
+  - mid: 0x02
+    name: "Oxygen sensor, bank 1 sensor 2"
+    system: "Exhaust"
+  - mid: 0x03
+    name: "Oxygen sensor, bank 1 sensor 3"
+    system: "Exhaust"
+  - mid: 0x04
+    name: "Oxygen sensor, bank 1 sensor 4"
+    system: "Exhaust"
+  - mid: 0x05
+    name: "Oxygen sensor, bank 2 sensor 1"
+    system: "Exhaust"
+  - mid: 0x06
+    name: "Oxygen sensor, bank 2 sensor 2"
+    system: "Exhaust"
+  - mid: 0x07
+    name: "Oxygen sensor, bank 2 sensor 3"
+    system: "Exhaust"
+  - mid: 0x08
+    name: "Oxygen sensor, bank 2 sensor 4"
+    system: "Exhaust"
+
+  - mid: 0x21
+    name: "Catalytic converter, bank 1"
+    system: "Emissions"
+  - mid: 0x22
+    name: "Catalytic converter, bank 2"
+    system: "Emissions"
+
+  - mid: 0x31
+    name: "Exhaust gas recirculation, bank 1"
+    system: "Emissions"
+  - mid: 0x32
+    name: "Exhaust gas recirculation, bank 2"
+    system: "Emissions"
+
+  - mid: 0x39
+    name: "Variable valve timing, bank 1"
+    system: "Engine"
+  - mid: 0x3A
+    name: "Variable valve timing, bank 2"
+    system: "Engine"
+
+  # Evaporative emissions leak checks, by the leak size each one looks for.
+  - mid: 0x3B
+    name: "Fuel vapour system"
+    system: "Emissions"
+  - mid: 0x3D
+    name: "Fuel vapour leak check (filler cap off / 1.0 mm)"
+    system: "Emissions"
+  - mid: 0x3E
+    name: "Fuel vapour leak check (0.09 inch)"
+    system: "Emissions"
+  - mid: 0x3F
+    name: "Fuel vapour leak check (0.04 inch)"
+    system: "Emissions"
+  - mid: 0x40
+    name: "Fuel vapour leak check (0.02 inch)"
+    system: "Emissions"
+  - mid: 0x41
+    name: "Fuel vapour purge flow"
+    system: "Emissions"
+
+  # Compression-ignition (diesel) monitors.
+  - mid: 0x71
+    name: "NOx adsorber, bank 1"
+    system: "Emissions (diesel)"
+  - mid: 0x72
+    name: "NOx adsorber, bank 2"
+    system: "Emissions (diesel)"
+  - mid: 0x81
+    name: "NOx aftertreatment, bank 1"
+    system: "Emissions (diesel)"
+  - mid: 0x82
+    name: "NOx aftertreatment, bank 2"
+    system: "Emissions (diesel)"
+  - mid: 0x85
+    name: "Boost pressure control"
+    system: "Engine (diesel)"
+  - mid: 0x86
+    name: "Particulate filter, bank 1"
+    system: "Emissions (diesel)"
+  - mid: 0x87
+    name: "Particulate filter, bank 2"
+    system: "Emissions (diesel)"
+
+  - mid: 0xA1
+    name: "Misfire, general data"
+    system: "Engine"
+  - mid: 0xA2
+    name: "Misfire, cylinder 1"
+    system: "Engine"
+  - mid: 0xA3
+    name: "Misfire, cylinder 2"
+    system: "Engine"
+  - mid: 0xA4
+    name: "Misfire, cylinder 3"
+    system: "Engine"
+  - mid: 0xA5
+    name: "Misfire, cylinder 4"
+    system: "Engine"
+  - mid: 0xA6
+    name: "Misfire, cylinder 5"
+    system: "Engine"
+  - mid: 0xA7
+    name: "Misfire, cylinder 6"
+    system: "Engine"
+  - mid: 0xA8
+    name: "Misfire, cylinder 7"
+    system: "Engine"
+  - mid: 0xA9
+    name: "Misfire, cylinder 8"
+    system: "Engine"
+
+# Unit and scaling ids. `scale` multiplies the raw count; `offset` is added
+# afterwards; `signed` reads the raw value as two's complement.
+#
+# All unverified: not validated against a real vehicle by this project.
+units:
+  - uasid: 0x01
+    unit: null
+    scale: 1.0
+  - uasid: 0x02
+    unit: null
+    scale: 0.1
+  - uasid: 0x03
+    unit: null
+    scale: 0.01
+  - uasid: 0x04
+    unit: null
+    scale: 0.001
+  - uasid: 0x05
+    unit: null
+    scale: 0.0000305
+  - uasid: 0x06
+    unit: null
+    scale: 0.000305
+  - uasid: 0x07
+    unit: "rpm"
+    scale: 0.25
+  - uasid: 0x08
+    unit: "km/h"
+    scale: 0.01
+  - uasid: 0x09
+    unit: "km/h"
+    scale: 1.0
+  - uasid: 0x0A
+    unit: "V"
+    scale: 0.000122
+  - uasid: 0x0B
+    unit: "V"
+    scale: 0.001
+  - uasid: 0x0C
+    unit: "V"
+    scale: 0.01
+  - uasid: 0x0D
+    unit: "mA"
+    scale: 0.00390625
+  - uasid: 0x0E
+    unit: "A"
+    scale: 0.001
+  - uasid: 0x0F
+    unit: "A"
+    scale: 0.01
+  - uasid: 0x10
+    unit: "ms"
+    scale: 1.0
+  - uasid: 0x11
+    unit: "s"
+    scale: 0.1
+  - uasid: 0x12
+    unit: "s"
+    scale: 1.0
+  - uasid: 0x13
+    unit: "mOhm"
+    scale: 1.0
+  - uasid: 0x14
+    unit: "Ohm"
+    scale: 1.0
+  - uasid: 0x15
+    unit: "kOhm"
+    scale: 1.0
+  - uasid: 0x16
+    unit: "degC"
+    scale: 0.1
+    offset: -40.0
+    signed: true
+  - uasid: 0x17
+    unit: "kPa"
+    scale: 0.01
+  - uasid: 0x18
+    unit: "kPa"
+    scale: 0.0117
+  - uasid: 0x19
+    unit: "kPa"
+    scale: 0.079
+  - uasid: 0x1A
+    unit: "kPa"
+    scale: 1.0
+  - uasid: 0x1B
+    unit: "kPa"
+    scale: 10.0
+  - uasid: 0x1C
+    unit: "degrees"
+    scale: 0.01
+  - uasid: 0x1D
+    unit: "degrees"
+    scale: 0.5
+  - uasid: 0x1E
+    unit: "ratio"
+    scale: 0.0000305
+  - uasid: 0x1F
+    unit: "ratio"
+    scale: 0.05
+  - uasid: 0x20
+    unit: "ratio"
+    scale: 0.0039062
+  - uasid: 0x21
+    unit: "mHz"
+    scale: 1.0
+  - uasid: 0x22
+    unit: "Hz"
+    scale: 1.0
+  - uasid: 0x23
+    unit: "kHz"
+    scale: 1.0
+  - uasid: 0x24
+    unit: "count"
+    scale: 1.0
+  - uasid: 0x25
+    unit: "km"
+    scale: 1.0
+  - uasid: 0x27
+    unit: "g/s"
+    scale: 0.01
+  - uasid: 0x28
+    unit: "g"
+    scale: 1.0
+  - uasid: 0x29
+    unit: "percent"
+    scale: 0.0000305
+  - uasid: 0x2A
+    unit: "percent"
+    scale: 0.001

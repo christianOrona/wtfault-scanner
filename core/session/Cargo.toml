@@ -1,0 +1,20 @@
+[package]
+name = "aim-session"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+aim-types = { version = "0.1.0", path = "../types" }
+rusqlite = { version = "0.37.0", features = ["bundled"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+# Only the `sync` feature: the store publishes events on a broadcast channel so
+# the websocket layer can subscribe. No runtime is required to send.
+tokio = { version = "1.49.0", default-features = false, features = ["sync"] }
+tracing = "0.1.44"
+
+[dev-dependencies]
+tempfile = "3.24.0"
+tokio = { version = "1.49.0", features = ["macros", "rt", "sync"] }

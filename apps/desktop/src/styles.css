@@ -1,0 +1,483 @@
+/* WrenchGPT.
+   
+   The palette is taken from the app icon: an electric cyan-blue as the primary,
+   a warm amber as the second accent, and a near-black with a blue cast rather
+   than a neutral grey. Those two accents already carry meaning in a diagnostic
+   tool - blue is "this is information", amber is "look at this" - so the theme
+   reuses them rather than inventing a third language.
+
+   Still a developer-tool aesthetic underneath, per handoff section 1: dense
+   where it needs to be, and never at the cost of the honesty markers. The glow
+   is on the chrome, not on the data. */
+
+:root {
+  --bg: #080b11;
+  --bg-raised: #0f141c;
+  --bg-inset: #060910;
+  --line: #1e2735;
+  --line-soft: #161d28;
+  --text: #e8eef6;
+  --text-dim: #97a6ba;
+  --text-faint: #66748a;
+
+  /* From the icon: the cyan arc and the wrench glow. */
+  --accent: #29b6f6;
+  --accent-bright: #5ed4ff;
+  --accent-dim: #10405e;
+  --accent-glow: rgba(41, 182, 246, 0.28);
+
+  /* From the icon: the amber arc and the engine light. */
+  --warm: #ff8c1a;
+  --warm-dim: #5c3406;
+
+  --ok: #35d07f;
+  --info: #29b6f6;
+  --caution: #ffab2e;
+  --serious: #ff5c5c;
+  --unverified: #a371f7;
+
+  --mono: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root { height: 100%; margin: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.5 var(--sans);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+button {
+  font: inherit;
+  color: var(--text);
+  background: var(--bg-raised);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+button:hover:not(:disabled) { border-color: var(--accent-dim); background: #1c222c; }
+button:disabled { opacity: 0.45; cursor: not-allowed; }
+button.primary { background: var(--accent-dim); border-color: var(--accent); }
+button.primary:hover:not(:disabled) { background: #27608f; }
+button.danger { border-color: #5c2b2b; }
+button.danger:hover:not(:disabled) { background: #3a1d1d; border-color: var(--serious); }
+
+select, input[type="text"], input[type="number"] {
+  font: inherit;
+  color: var(--text);
+  background: var(--bg-inset);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+
+code, .mono { font-family: var(--mono); font-size: 0.92em; }
+
+a { color: var(--accent); }
+
+/* ---------- layout ---------- */
+
+.app { display: flex; flex-direction: column; height: 100%; }
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 14px;
+  height: 48px;
+  flex: 0 0 auto;
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--line);
+}
+.topbar .brand { font-weight: 600; letter-spacing: 0.02em; }
+.topbar .spacer { flex: 1; }
+
+.body { flex: 1; display: flex; min-height: 0; }
+
+.sidebar {
+  width: 260px;
+  flex: 0 0 auto;
+  border-right: 1px solid var(--line);
+  background: var(--bg-raised);
+  overflow-y: auto;
+  padding: 10px;
+}
+
+.main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+
+.tabs {
+  display: flex;
+  gap: 2px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-raised);
+  flex: 0 0 auto;
+  overflow-x: auto;
+}
+.tabs button {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  padding: 10px 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.tabs button:hover { background: none; color: var(--text); }
+.tabs button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); }
+
+.pane { flex: 1; overflow-y: auto; padding: 16px; min-height: 0; }
+
+.section { margin-bottom: 22px; }
+.section > h2 {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+  margin: 0 0 10px;
+  font-weight: 600;
+}
+
+.card {
+  background: var(--bg-raised);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+.card + .card { margin-top: 10px; }
+
+.muted { color: var(--text-dim); }
+.faint { color: var(--text-faint); }
+.empty { color: var(--text-faint); padding: 24px; text-align: center; }
+
+.row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; }
+
+/* ---------- status ---------- */
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-faint); flex: 0 0 auto; }
+.dot.ready { background: var(--ok); }
+.dot.degraded { background: var(--caution); }
+.dot.failed { background: var(--serious); }
+.dot.busy { background: var(--info); animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: 0.35; } }
+
+.tag {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: var(--mono);
+  border: 1px solid var(--line);
+  color: var(--text-dim);
+}
+.tag.confirmed { color: var(--serious); border-color: #5c2b2b; background: #2a1616; }
+.tag.pending { color: var(--caution); border-color: #5c4a1e; background: #2a2413; }
+.tag.permanent { color: var(--unverified); border-color: #43306b; background: #1e1730; }
+.tag.unverified { color: var(--unverified); border-color: #43306b; }
+.tag.level { color: var(--info); }
+
+/* ---------- warnings and errors ---------- */
+
+.banner {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  border: 1px solid var(--line);
+  border-left-width: 3px;
+  border-radius: 6px;
+  padding: 9px 12px;
+  background: var(--bg-inset);
+  margin-bottom: 8px;
+}
+.banner .b-code {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-faint);
+  flex: 0 0 auto;
+  padding-top: 2px;
+}
+.banner.info { border-left-color: var(--info); }
+.banner.caution { border-left-color: var(--caution); }
+.banner.serious { border-left-color: var(--serious); }
+.banner.error { border-left-color: var(--serious); background: #1c1213; }
+
+.caveats { margin: 0; padding-left: 18px; }
+.caveats li { color: var(--text-dim); margin-bottom: 4px; }
+
+/* ---------- lists ---------- */
+
+.list { display: flex; flex-direction: column; gap: 2px; }
+.list-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
+}
+.list-item:hover { background: var(--bg-inset); border-color: var(--line-soft); }
+.list-item[aria-selected="true"] { background: var(--bg-inset); border-color: var(--accent-dim); }
+.list-item .li-title { font-weight: 500; }
+.list-item .li-sub { font-size: 12px; color: var(--text-faint); font-family: var(--mono); }
+
+/* ---------- tables ---------- */
+
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+th { color: var(--text-faint); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; }
+tbody tr:hover { background: var(--bg-inset); }
+td.num { text-align: right; font-family: var(--mono); }
+
+/* ---------- values ---------- */
+
+.value-big { font-family: var(--mono); font-size: 22px; font-weight: 600; }
+.value-unit { font-size: 13px; color: var(--text-dim); margin-left: 4px; font-weight: 400; }
+.value-suspect { color: var(--serious); }
+
+.provenance {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-faint);
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+.provenance .ev {
+  color: var(--accent);
+  cursor: pointer;
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  text-decoration: underline dotted;
+}
+
+/* ---------- flight recorder ---------- */
+
+.events { font-family: var(--mono); font-size: 12px; }
+.events .ev-row {
+  display: grid;
+  grid-template-columns: 56px 92px 160px 1fr;
+  gap: 10px;
+  padding: 3px 8px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.events .ev-row:hover { background: var(--bg-inset); }
+.events .ev-row.highlight { background: #1b2a3a; }
+.events .seq { color: var(--text-faint); text-align: right; }
+.events .time { color: var(--text-faint); }
+.events .kind { color: var(--accent); }
+.events .detail { color: var(--text-dim); white-space: pre-wrap; word-break: break-word; }
+.events .detail .cls-no_data,
+.events .detail .cls-timeout,
+.events .detail .cls-bus_error,
+.events .detail .cls-adapter_error,
+.events .detail .cls-not_understood { color: var(--caution); }
+
+/* ---------- chart ---------- */
+
+.chart { width: 100%; height: 120px; display: block; }
+.chart .line { fill: none; stroke: var(--accent); stroke-width: 1.5; }
+.chart .grid { stroke: var(--line-soft); stroke-width: 1; }
+.chart-label { font-family: var(--mono); font-size: 10px; fill: var(--text-faint); }
+
+/* ---------- overlay ---------- */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(6, 9, 13, 0.82);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  z-index: 40;
+}
+.dialog {
+  background: var(--bg-raised);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 20px 22px;
+  width: min(640px, 100%);
+  max-height: 90vh;
+  overflow-y: auto;
+}
+.dialog h1 { font-size: 17px; margin: 0 0 4px; }
+.dialog > p.muted { margin-top: 0; }
+
+.field { display: flex; flex-direction: column; gap: 5px; margin-bottom: 12px; }
+.field > label { font-size: 12px; color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.06em; }
+
+.seg { display: flex; gap: 0; }
+.seg button { border-radius: 0; }
+.seg button:first-child { border-radius: 6px 0 0 6px; }
+.seg button:last-child { border-radius: 0 6px 6px 0; border-left: none; }
+.seg button[aria-pressed="true"] { background: var(--accent-dim); border-color: var(--accent); }
+
+/* The signal picker lives in a fixed-width column beside the charts. Long PID
+   names and units overflowed it because nothing constrained the flex children:
+   a flex item defaults to min-width:auto, which refuses to shrink below its
+   content. */
+.checks {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 320px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-width: 0;
+}
+.check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  min-width: 0;
+}
+.check > span { min-width: 0; overflow: hidden; }
+.check > span > span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.check input { flex: 0 0 auto; }
+.check:hover { background: var(--bg-inset); }
+.check input { accent-color: var(--accent); }
+.check.disabled { cursor: not-allowed; color: var(--text-faint); }
+
+.spin {
+  width: 12px; height: 12px;
+  border: 2px solid var(--line);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  display: inline-block;
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* A tab kept mounted while inactive (the agent panes, which hold a running
+   inspection or a conversation). `hidden` must win over the flex display, and
+   the visible one has to fill the pane exactly as an unmounted tab would. */
+.tab-panel { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.tab-panel[hidden] { display: none; }
+
+/* ---------- brand ---------- */
+
+.topbar .brand-mark {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  flex: 0 0 auto;
+  /* The icon's two arcs, reduced to a badge that survives at 22px. */
+  background:
+    radial-gradient(circle at 30% 28%, var(--accent-bright), transparent 55%),
+    radial-gradient(circle at 74% 30%, var(--warm), transparent 52%),
+    linear-gradient(160deg, #16202c, #0a0f16);
+  box-shadow: 0 0 0 1px var(--line), 0 0 14px -4px var(--accent-glow);
+}
+.topbar .brand {
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  font-size: 15px;
+}
+/* Matching the wordmark on the icon: "Wrench" light, "GPT" in the accent. */
+.topbar .brand .brand-gpt {
+  color: var(--accent);
+  text-shadow: 0 0 18px var(--accent-glow);
+}
+
+/* ---------- easy / advanced ---------- */
+
+.mode-toggle button {
+  padding: 3px 12px;
+  font-size: 12px;
+}
+.mode-toggle button[aria-pressed="true"] {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--text);
+  box-shadow: inset 0 0 12px -6px var(--accent);
+}
+
+/* The plain-language line under a value, a section heading, or a warning.
+   Deliberately not `.faint`: this is the sentence a beginner is here to read,
+   so it must not look like small print. */
+.explain {
+  color: var(--text-dim);
+  font-size: 12.5px;
+  line-height: 1.55;
+  margin-top: 6px;
+  max-width: 68ch;
+}
+
+.pane-intro {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  background: linear-gradient(90deg, rgba(41, 182, 246, 0.08), transparent 70%);
+  border: 1px solid var(--line-soft);
+  border-left: 2px solid var(--accent);
+  border-radius: 6px;
+  padding: 10px 14px;
+  margin-bottom: 14px;
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1.55;
+  max-width: 78ch;
+}
+.pane-intro-mark {
+  width: 6px;
+  height: 6px;
+  margin-top: 7px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  background: var(--accent);
+  box-shadow: 0 0 10px var(--accent);
+}
+
+/* A term whose meaning is one hover away. Dotted, not solid: it is a hint, not
+   a link, and clicking it does nothing. */
+.term {
+  text-decoration: underline dotted var(--text-faint);
+  text-underline-offset: 3px;
+  cursor: help;
+}
+.term:hover, .term:focus-visible { text-decoration-color: var(--accent); }
+
+button.mini {
+  padding: 2px 9px;
+  font-size: 11px;
+  border-radius: 5px;
+}
+
+/* ---------- live values ---------- */
+
+.value-card { transition: border-color 160ms ease; }
+.value-card:hover { border-color: var(--accent-dim); }
+
+/* Tabular figures, so a tweening number does not shuffle its own width and
+   make the whole card twitch. */
+.value-big { font-variant-numeric: tabular-nums; }
+
+.chart .area { stroke: none; }
+.chart .head { filter: drop-shadow(0 0 4px currentColor); }

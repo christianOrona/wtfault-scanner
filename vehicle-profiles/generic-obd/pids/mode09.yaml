@@ -1,0 +1,39 @@
+# SAE J1979 service 09 (vehicle information) info-type definitions.
+version: 1
+source: "SAE J1979 generic OBD-II service 09"
+service: 9
+pids:
+  - pid: 0x00
+    signal_id: supported_info_types_01_20
+    name: "Service 09 info types supported [01-20]"
+    kind: supported_pids
+    bytes: 4
+    verification: verified
+
+  - pid: 0x02
+    signal_id: vin
+    name: "Vehicle Identification Number"
+    kind: vin
+    bytes: 17
+    verification: verified
+
+  - pid: 0x04
+    signal_id: calibration_id
+    name: "Calibration identification"
+    kind: ascii
+    record_width: 16
+    verification: verified
+
+  - pid: 0x06
+    signal_id: calibration_verification_number
+    name: "Calibration verification number"
+    kind: hex_records
+    record_width: 4
+    verification: verified
+
+  - pid: 0x0A
+    signal_id: ecu_name
+    name: "ECU name"
+    kind: ascii
+    record_width: 20
+    verification: verified

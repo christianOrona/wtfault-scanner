@@ -1,0 +1,25 @@
+[package]
+name = "aim-agent"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+aim-types = { version = "0.1.0", path = "../types" }
+async-trait = "0.1.89"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+thiserror = "2.0.20"
+tracing = "0.1.44"
+
+# rustls rather than the default native-tls: no OpenSSL to find, and the same
+# behaviour on the Windows garage laptop as anywhere else.
+reqwest = { version = "0.12.28", default-features = false, features = [
+    "json",
+    "rustls-tls",
+] }
+
+[dev-dependencies]
+tokio = { version = "1.49.0", features = ["macros", "rt-multi-thread"] }
+tempfile = "3.24.0"

@@ -1,0 +1,16 @@
+# Normalise line endings in the repository, whatever the working tree uses.
+#
+# Without this the first commit from a Windows machine stores CRLF, and the
+# first diff from anywhere else rewrites every file. Settled now, while there
+# is exactly one commit to settle it against.
+* text=auto eol=lf
+
+# Binary, never touched.
+*.png binary
+*.ico binary
+*.icns binary
+*.sqlite binary
+
+# Generated lockfiles: keep them, but do not offer them up in review diffs.
+Cargo.lock linguist-generated=true
+package-lock.json linguist-generated=true

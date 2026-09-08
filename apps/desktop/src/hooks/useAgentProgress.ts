@@ -1,0 +1,149 @@
+// What the agent is doing, while it is doing it.
+//
+// An inspection takes minutes, and until now the UI showed a spinner and a
+// clock. The honest question that provokes — "is this stuck?" — was asked twice
+// during development by the person who wrote the thing, which is a good sign it
+// was unanswerable.
+//
+// Nothing new is needed on the server: every tool call is already written to the
+// flight recorder as it happens. This reads that log while the run is in flight
+// and turns it into a running commentary.
+
+import { useEffect, useRef, useState } from "react";
+import { api } from "../api/client";
+import type { SessionEvent } from "../api/types";
+
+export interface ProgressLine {
+  /** Event row id, unique and ordered. */
+  seq: number;
+  /** Wall-clock time it happened. */
+  at: string;
+  /** What the agent did, in plain words. */
+  text: string;
+  /** True once the corresponding read came back. */
+  done: boolean;
+  /** False when the vehicle refused or the arguments were wrong. */
+  ok: boolean;
+}
+
+/** Tool names rendered for someone who does not know the API. */
+const PLAIN: Record<string, string> = {
+  identify_vehicle: "Reading the VIN",
+  scan_modules: "Looking for control modules",
+  read_dtcs: "Reading trouble codes",
+  read_freeze_frame: "Reading the freeze frame",
+  read_live_data: "Reading live sensor data",
+  read_supported_pids: "Checking what this module can report",
+  get_module_identity: "Asking a module to identify itself",
+  adapter_health: "Checking the adapter",
+};
+
+const describe = (tool: string, args: unknown): string => {
+  const base = PLAIN[tool] ?? tool;
+  const module = (args as { module?: string } | null)?.module;
+  return module ? `${base} from ${module}` : base;
+};
+
+/**
+ * Follow a running agent task by polling the session's event log.
+ *
+ * Polling rather than the websocket: the flight-recorder stream exists and works,
+ * but it replays the entire session backlog first, and this only ever wants the
+ * tail. A three-second poll costs one small request and cannot fall behind in a
+ * way that needs recovering from.
+ */
+export function useAgentProgress(sessionId: string | null, active: boolean) {
+  const [lines, setLines] = useState<ProgressLine[]>([]);
+  const seen = useRef(0);
+
+  useEffect(() => {
+    if (!active || !sessionId) {
+      seen.current = 0;
+      setLines([]);
+      return;
+    }
+
+    let cancelled = false;
+    let timer: number | undefined;
+
+    const tick = async () => {
+      try {
+        const page = await api.events(sessionId, seen.current, 500);
+        if (cancelled) return;
+        for (const e of page.events) seen.current = Math.max(seen.current, e.seq);
+        const fresh = toLines(page.events);
+        if (fresh.length) {
+          setLines((prev) => merge(prev, fresh));
+        }
+      } catch {
+        // A failed poll is not worth reporting: the inspection itself is the
+        // thing being watched, and it reports its own failures.
+      }
+      if (!cancelled) timer = window.setTimeout(tick, 3000);
+    };
+
+    void tick();
+    return () => {
+      cancelled = true;
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [sessionId, active]);
+
+  return lines;
+}
+
+function toLines(events: SessionEvent[]): ProgressLine[] {
+  const out: ProgressLine[] = [];
+  for (const e of events) {
+    const k = e.kind as Record<string, unknown> & { kind: string };
+
+    // Only the agent's own work. A reading the user clicked for is not progress
+    // on the inspection, and mixing them would misrepresent what it did.
+    if (k.kind === "tool_invoked" && String(k.initiator ?? "").startsWith("agent")) {
+      out.push({
+        seq: e.seq,
+        at: e.timestamp,
+        text: describe(String(k.tool), k.arguments),
+        done: false,
+        ok: true,
+      });
+    }
+    if (k.kind === "tool_completed") {
+      out.push({
+        seq: e.seq,
+        at: e.timestamp,
+        text: `__done__${String(k.tool)}`,
+        done: true,
+        ok: k.success === true,
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * Fold completions into the call they belong to, so one read is one line rather
+ * than two.
+ */
+function merge(prev: ProgressLine[], fresh: ProgressLine[]): ProgressLine[] {
+  const out = [...prev];
+  for (const line of fresh) {
+    if (line.done && line.text.startsWith("__done__")) {
+      const tool = line.text.slice("__done__".length);
+      // Close the most recent open line for this tool.
+      for (let i = out.length - 1; i >= 0; i--) {
+        if (!out[i].done && PLAIN[tool] && out[i].text.startsWith(PLAIN[tool])) {
+          out[i] = { ...out[i], done: true, ok: line.ok };
+          break;
+        }
+        if (!out[i].done && out[i].text.startsWith(tool)) {
+          out[i] = { ...out[i], done: true, ok: line.ok };
+          break;
+        }
+      }
+      continue;
+    }
+    if (!out.some((l) => l.seq === line.seq)) out.push(line);
+  }
+  return out;
+}
