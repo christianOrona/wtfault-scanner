@@ -1381,6 +1381,124 @@ impl DiagnosticService {
         })
     }
 
+    /// Read a set of configuration records off one module.
+    ///
+    /// The first half of the procedure that turns an unmapped feature into a
+    /// mapped one: capture, change the setting with a tool that already knows
+    /// how, capture again, and compare.
+    ///
+    /// The identifiers are supplied rather than discovered. Sweeping all 65536
+    /// of them is tens of minutes of bus traffic for a result that is mostly
+    /// negative responses, and there is no standard that says where a given
+    /// manufacturer keeps configuration - so the caller says which to read, and
+    /// a module that does not have one answers so without drama.
+    ///
+    /// Read-only. L0, and the assistant may use it.
+    pub fn capture_configuration(
+        &mut self,
+        module: u16,
+        dids: &[u16],
+        label: Option<String>,
+        initiator: &str,
+    ) -> ToolResult {
+        let t0 = Instant::now();
+        self.record_invocation(
+            "capture_configuration",
+            initiator,
+            serde_json::json!({ "module": format!("{module:03X}"), "identifiers": dids.len() }),
+        );
+        let outcome = self
+            .authorize(capabilities::READ_FEATURE, initiator, None)
+            .and_then(|_| self.capture_inner(module, dids, label));
+        self.finish("capture_configuration", capabilities::READ_FEATURE, t0, outcome)
+    }
+
+    fn capture_inner(
+        &mut self,
+        module: u16,
+        dids: &[u16],
+        label: Option<String>,
+    ) -> AimResult<Payload> {
+        // A cap, because this is a loop over caller-supplied input that puts
+        // traffic on a vehicle bus.
+        const MAX_IDENTIFIERS: usize = 64;
+        if dids.is_empty() {
+            return Err(AimError::new(
+                ErrorCode::BadRequest,
+                "capturing configuration needs at least one data identifier to read",
+            ));
+        }
+        if dids.len() > MAX_IDENTIFIERS {
+            return Err(AimError::new(
+                ErrorCode::BadRequest,
+                format!("at most {MAX_IDENTIFIERS} identifiers can be read in one capture"),
+            ));
+        }
+
+        let addr = RequestTarget::Physical(format!("{module:03X}"));
+        let request_budget = Duration::from_millis(2000);
+        let mut records = std::collections::BTreeMap::new();
+        let mut missing = Vec::new();
+
+        for &did in dids {
+            let request = aim_protocols::UdsRequest::read_data_by_identifier(did).to_bytes();
+            match self.read_did(&request, &addr, request_budget, did) {
+                Ok(record) => {
+                    records.insert(did, record);
+                }
+                // A module that does not hold this identifier is a fact about
+                // the module, not a failure of the capture.
+                Err(_) => missing.push(format!("{did:04X}")),
+            }
+        }
+
+        if records.is_empty() {
+            return Err(AimError::new(
+                ErrorCode::NoData,
+                format!(
+                    "the module at {module:03X} returned none of the {} identifiers asked for. \
+                     Either it holds no configuration, or it keeps it somewhere else.",
+                    dids.len()
+                ),
+            ));
+        }
+
+        let capture = crate::capture::ConfigCapture {
+            module,
+            records: records.clone(),
+            taken_at: aim_types::now().0.to_string(),
+            label,
+        };
+
+        let mut warnings = Vec::new();
+        if !missing.is_empty() {
+            warnings.push(Warning::info(
+                "identifiers_not_held",
+                format!(
+                    "{} of the identifiers asked for are not held by this module: {}",
+                    missing.len(),
+                    missing.join(", ")
+                ),
+            ));
+        }
+
+        Ok(Payload {
+            data: Some(serde_json::json!({
+                "capture": capture,
+                "records_read": records.len(),
+                "hex": records
+                    .iter()
+                    .map(|(d, r)| (format!("{d:04X}"), aim_types::hex(r)))
+                    .collect::<std::collections::BTreeMap<_, _>>(),
+                "next_step":
+                    "Change the setting once with a tool already known to do it correctly, then \
+                     capture the same identifiers again and compare the two.",
+            })),
+            warnings,
+            ..Default::default()
+        })
+    }
+
     /// Change a vehicle setting, having been told to by a person.
     ///
     /// This is the only write path in the app that touches configuration, and
@@ -2068,6 +2186,32 @@ impl DiagnosticService {
             }
             total_faults += dtcs.len();
             let fault_count = dtcs.len();
+
+            // A module that answered the full scan is a module that is present,
+            // and it belongs in the session's module list like any other.
+            // Without this it was discovered, reported, and then invisible to
+            // everything that asks "is this module on this vehicle" - including
+            // the check that guards a configuration write, which is exactly the
+            // case the full scan exists to reach.
+            let key = format!("ECU_{response_addr}");
+            let record = Module {
+                id: aim_types::ModuleId::new(),
+                session_id: self.session.id.clone(),
+                module_key: key.clone(),
+                // Described, never named. See below.
+                name: format!("Module at {response_addr}"),
+                address: response_addr.clone(),
+                protocol: self.adapter.protocol(),
+                identity: ModuleIdentity::default(),
+                software_version: None,
+                discovered_at: now(),
+            };
+            if self.store.upsert_module(&record).is_ok() {
+                let _ = self.store.append_event(
+                    &self.session.id,
+                    EventKind::ModuleDiscovered { module_key: key, address: response_addr.clone() },
+                );
+            }
 
             // Described, never named. A module at 0x760 is "the module at 760"
             // until something it says identifies it — guessing that it is the

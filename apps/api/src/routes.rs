@@ -38,6 +38,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/profiles", get(profiles))
         .route("/api/v1/features", get(features))
         .route("/api/v1/features/{id}", get(read_feature))
+        .route("/api/v1/config/capture", post(capture_configuration))
+        .route("/api/v1/config/diff", post(diff_captures))
         .route("/api/v1/features/{id}/preview", post(preview_feature_change))
         .route("/api/v1/features/{id}/apply", post(apply_feature_change))
         .route("/api/v1/tools", get(tools))
@@ -753,4 +755,69 @@ async fn update_apply() -> ApiResult<Json<Value>> {
         }))),
         Err(e) => Err(ApiError::bad_request(e)),
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct CaptureBody {
+    /// Module diagnostic request address, e.g. 1830 for 0x726.
+    module: u16,
+    /// Data identifiers to read.
+    identifiers: Vec<u16>,
+    #[serde(default)]
+    label: Option<String>,
+}
+
+/// Read a set of configuration records off one module.
+///
+/// The first half of turning an unmapped feature into a mapped one. Read-only.
+async fn capture_configuration(
+    State(state): State<AppState>,
+    Json(body): Json<CaptureBody>,
+) -> ApiResult<Json<ToolResult>> {
+    Ok(Json(
+        state
+            .with_service(move |s| {
+                s.capture_configuration(body.module, &body.identifiers, body.label, "user:api")
+            })
+            .await?,
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+struct DiffBody {
+    before: aim_diagnostics::capture::ConfigCapture,
+    after: aim_diagnostics::capture::ConfigCapture,
+    /// Whether the later capture is the one with the setting enabled. Stated by
+    /// whoever flipped the switch, because the bytes do not say.
+    #[serde(default)]
+    after_is_on: bool,
+}
+
+/// Compare two captures and, when exactly one byte moved, propose the mapping.
+///
+/// Pure computation: this touches no vehicle, which is why it is not a tool
+/// call and needs no session.
+async fn diff_captures(Json(body): Json<DiffBody>) -> Json<Value> {
+    let d = aim_diagnostics::capture::diff(&body.before, &body.after);
+    let proposal =
+        d.is_unambiguous().then(|| d.changes[0].as_mapping(body.before.module, body.after_is_on));
+    Json(json!({
+        "diff": d,
+        "comparable": d.is_comparable(),
+        "unambiguous": d.is_unambiguous(),
+        "proposed_mapping": proposal,
+        "note": if proposal.is_some() {
+            "One byte moved. This mapping describes only the bits that changed. Verify it by \
+             reading the feature back, and record where it came from before relying on it."
+        } else if !d.is_comparable() {
+            "These captures are not comparable - they hold different identifiers or different \
+             record lengths, which usually means they came from different modules or vehicles."
+        } else if d.changes.is_empty() {
+            "Nothing moved between these captures. Either the setting was not changed, or it \
+             does not live in the identifiers that were read."
+        } else {
+            "More than one byte moved, so which one holds this setting is not established. \
+             Repeat the capture changing only the one setting."
+        },
+    }))
 }
