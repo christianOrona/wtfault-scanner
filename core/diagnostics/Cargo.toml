@@ -19,6 +19,7 @@ tracing = "0.1.44"
 
 [dev-dependencies]
 aim-simulator = { version = "0.1.0", path = "../../simulator" }
+tempfile = "3.24.0"
 
 [features]
 default = ["serial"]

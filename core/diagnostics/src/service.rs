@@ -67,6 +67,8 @@ pub mod capabilities {
     pub const SCAN_ALL_MODULES: &str = "obd2.scan_all_modules";
     /// List configurable features applicable to this vehicle.
     pub const LIST_FEATURES: &str = "config.list_features";
+    /// Read one feature's current setting from the vehicle. L0.
+    pub const READ_FEATURE: &str = "config.read_feature";
     /// Evaluate a proposed configuration change without applying it.
     pub const PREVIEW_CHANGE: &str = "config.preview_change";
     /// Change one configurable feature. L2, and never reachable by the agent.
@@ -1254,6 +1256,122 @@ impl DiagnosticService {
 
         Ok(Payload {
             data: Some(serde_json::to_value(&plan).unwrap_or(serde_json::Value::Null)),
+            warnings,
+            ..Default::default()
+        })
+    }
+
+    /// Read one feature's current setting from the vehicle.
+    ///
+    /// This is the operation everything else about configuration stands on. A
+    /// change needs a before-state to show and an after-state to verify
+    /// against, and a mapping nobody has measured yet cannot be investigated
+    /// without being able to read the record it supposedly lives in.
+    ///
+    /// It is L0 and read-only, and the assistant may use it.
+    ///
+    /// A feature with no executable mapping is **not an error**. It answers
+    /// with what is known, what is not, and what would establish the rest —
+    /// because "this app does not support that" and "nobody has measured where
+    /// that bit lives on your vehicle" are different sentences, and only one of
+    /// them is a dead end.
+    pub fn read_feature(&mut self, feature_id: &str, initiator: &str) -> ToolResult {
+        let t0 = Instant::now();
+        self.record_invocation(
+            "read_feature",
+            initiator,
+            serde_json::json!({ "feature_id": feature_id }),
+        );
+        let outcome = self
+            .authorize(capabilities::READ_FEATURE, initiator, None)
+            .and_then(|_| self.read_feature_inner(feature_id));
+        self.finish("read_feature", capabilities::READ_FEATURE, t0, outcome)
+    }
+
+    fn read_feature_inner(&mut self, feature_id: &str) -> AimResult<Payload> {
+        let Some(feature) = self.decoders.features.get(feature_id) else {
+            return Err(AimError::new(
+                ErrorCode::NotFound,
+                format!(
+                    "no feature {feature_id} in the catalogue. A feature has to be described in \
+                     a data file before it can be read."
+                ),
+            ));
+        };
+        let name = feature.name.clone();
+        let modules = feature.modules.clone();
+        let source = feature.source.clone();
+        let verification = feature.verification;
+        let target = feature.mapping.as_ref().and_then(|m| m.as_data_identifier());
+
+        // No executable mapping. Report it as an open question with the steps
+        // that would close it, rather than as a refusal.
+        let Some(target) = target else {
+            return Ok(Payload {
+                data: Some(serde_json::json!({
+                    "feature_id": feature_id,
+                    "name": name,
+                    "known": true,
+                    "readable": false,
+                    "state": serde_json::Value::Null,
+                    "owning_modules": modules,
+                    "what_is_known": "This vehicle family is described as having this feature.",
+                    "what_is_missing":
+                        "Which data identifier and which bits hold the setting on this vehicle. \
+                         Nobody has measured it, and this app will not guess at one.",
+                    "how_to_establish": [
+                        "Read and save the owning module's configuration.",
+                        "Change the setting once with a tool already known to do it correctly.",
+                        "Read the configuration again.",
+                        "The bits that moved are the mapping. Record where it came from.",
+                    ],
+                })),
+                warnings: vec![Warning::info(
+                    "mapping_not_measured",
+                    "The setting cannot be read yet because nobody has recorded where it lives \
+                     on this vehicle. That is a gap rather than a refusal, and a profile file \
+                     closes it without a new version of the app.",
+                )],
+                ..Default::default()
+            });
+        };
+
+        let addr = RequestTarget::Physical(format!("{:03X}", target.module));
+        let request = aim_protocols::UdsRequest::read_data_by_identifier(target.did).to_bytes();
+        let record = self.read_did(&request, &addr, Duration::from_millis(2000), target.did)?;
+        let state = target.current(&record);
+
+        let mut warnings = Vec::new();
+        if state.is_none() {
+            warnings.push(Warning::caution(
+                "value_matches_neither_state",
+                "The module answered, but the bits this mapping describes hold a value that is \
+                 neither the documented on nor the documented off. The mapping may be wrong for \
+                 this vehicle; nothing was changed.",
+            ));
+        }
+        if verification != aim_types::VerificationStatus::Verified {
+            warnings.push(Warning::caution(
+                "mapping_unverified",
+                "This mapping has not been verified against a known-good tool on this model. It \
+                 can be read and shown; it cannot be written.",
+            ));
+        }
+
+        Ok(Payload {
+            data: Some(serde_json::json!({
+                "feature_id": feature_id,
+                "name": name,
+                "known": true,
+                "readable": true,
+                "state": state,
+                "module": format!("{:03X}", target.module),
+                "did": format!("{:04X}", target.did),
+                "record": aim_types::hex(&record),
+                "owning_modules": modules,
+                "mapping_source": source,
+                "verification": verification,
+            })),
             warnings,
             ..Default::default()
         })

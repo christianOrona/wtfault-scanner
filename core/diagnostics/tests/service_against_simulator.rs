@@ -732,3 +732,114 @@ fn a_silent_bus_reports_no_modules_rather_than_an_empty_success() {
     assert!(!result.success);
     assert_eq!(result.error.unwrap().code, ErrorCode::NoData);
 }
+
+// ---------------------------------------------------------------- features
+
+/// Build a service whose catalogue has been extended by a profile file, the way
+/// a user's own profile directory extends it at startup.
+///
+/// The mapping below points at a record the simulated body module actually
+/// serves. Note what is *not* shared: the simulator holds bytes and the profile
+/// holds their meaning. If both knew the meaning, this test could pass against
+/// a mapping that is wrong for every real vehicle, which is the exact failure
+/// this project exists to avoid.
+fn service_with_profile(yaml: &str) -> (DiagnosticService, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("test-profile.yaml"), yaml).unwrap();
+
+    let decoders = DecoderSet::with_profiles(dir.path()).unwrap();
+    assert!(
+        decoders.profiles.failures().next().is_none(),
+        "profile did not load: {:?}",
+        decoders.profiles.failures().collect::<Vec<_>>()
+    );
+
+    let transport = SimulatedTransport::new(ScenarioId::Healthy);
+    let adapter: Box<dyn DiagnosticAdapter> =
+        Box::new(Elm327Adapter::new(Box::new(transport), Elm327Config::fast()));
+    let mut service = DiagnosticService::start(
+        adapter,
+        SessionStore::open_in_memory().unwrap(),
+        Arc::new(decoders),
+        SafetyGate::phase1(),
+        None,
+    )
+    .unwrap();
+    assert!(service.connect(USER).success);
+    (service, dir)
+}
+
+const MIRROR_PROFILE: &str = r#"
+version: 1
+profile: test
+features:
+  - id: test_body_setting
+    name: "A body module setting"
+    risk: convenience
+    easy: "A comfort setting held in the body module."
+    technical: "Bit 2 of byte 3 of data identifier DE01 on the module at 7A0."
+    modules: [BODY]
+    verification: verified
+    source: "measured on the simulated vehicle"
+    mapping:
+      kind: data_identifier_bits
+      module: 0x7A0
+      did: 0xDE01
+      byte: 3
+      mask: 0x04
+      on: 0x04
+      off: 0x00
+"#;
+
+#[test]
+fn a_feature_with_a_measured_mapping_reads_its_current_state() {
+    let (mut service, _dir) = service_with_profile(MIRROR_PROFILE);
+
+    let r = service.read_feature("test_body_setting", USER);
+    assert!(r.success, "read_feature failed: {:?}", r.error);
+    let data = r.data.as_ref().unwrap();
+
+    assert_eq!(data["readable"], true);
+    // The simulated record has byte 3 = 0b1011_0011. Bit 2 is clear, so this
+    // feature reads as off - and the record is returned verbatim so the state
+    // is checkable against the bytes rather than taken on trust.
+    assert_eq!(data["state"], false);
+    assert_eq!(data["did"], "DE01");
+    assert_eq!(data["record"], "001122b34455");
+    assert_eq!(data["module"], "7A0");
+}
+
+/// The case that is the whole product argument: the app knows the feature
+/// exists and does not know where it lives, and says so in a way a person can
+/// act on rather than as a refusal.
+#[test]
+fn a_feature_with_no_measured_mapping_is_an_open_question_not_a_dead_end() {
+    let described_only = MIRROR_PROFILE
+        .split("    mapping:")
+        .next()
+        .unwrap()
+        .replace("verification: verified", "verification: unverified");
+    let (mut service, _dir) = service_with_profile(&described_only);
+
+    let r = service.read_feature("test_body_setting", USER);
+    assert!(r.success, "an unmeasured mapping is not an error: {:?}", r.error);
+    let data = r.data.as_ref().unwrap();
+
+    assert_eq!(data["known"], true, "the feature itself is known");
+    assert_eq!(data["readable"], false, "but it cannot be read yet");
+    assert!(data["state"].is_null(), "and no state may be guessed at");
+
+    let steps = data["how_to_establish"].as_array().expect("steps to close the gap");
+    assert_eq!(steps.len(), 4, "the four-step measurement procedure");
+
+    let codes: Vec<&str> = r.warnings.iter().map(|w| w.code.as_str()).collect();
+    assert!(codes.contains(&"mapping_not_measured"), "{codes:?}");
+}
+
+#[test]
+fn an_unknown_feature_id_is_an_error_rather_than_an_invented_answer() {
+    let (mut service, _dir) = service_with_profile(MIRROR_PROFILE);
+    let r = service.read_feature("no_such_feature", USER);
+    assert!(!r.success);
+    assert_eq!(r.error.as_ref().unwrap().code, ErrorCode::NotFound);
+}

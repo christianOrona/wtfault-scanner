@@ -95,6 +95,7 @@ dependencies = [
  "aim-types",
  "serde",
  "serde_json",
+ "tempfile",
  "tracing",
 ]
 
