@@ -22,19 +22,26 @@
 //! them to approve anything, and it is also what makes the whole chain testable
 //! without a vehicle.
 //!
-//! # Why nothing writes yet
+//! # What stops a write, and what does not
 //!
-//! Two independent reasons, both honest:
+//! Writes are implemented and enabled. `config.write_feature` is L2, which
+//! [`aim_safety::MAX_ENABLED_LEVEL`] permits, behind a typed confirmation that
+//! must name a human — the agent is registered with read-only tools and cannot
+//! reach it.
 //!
-//! 1. **No verified mapping ships.** Every feature in the catalogue has
-//!    `mapping: null`, because this project has not measured one. A change
-//!    cannot be planned without knowing where the bits are.
-//! 2. **`config.write_feature` is registered at L2**, above
-//!    [`aim_safety::MAX_ENABLED_LEVEL`], so the gate refuses it before anything
-//!    reaches the vehicle.
+//! What remains between a person and a change is deliberately two different
+//! kinds of obstacle, and the interface must never blur them:
 //!
-//! Removing either one is a deliberate, reviewable change. Neither is a runtime
-//! setting and neither is something an agent can ask for.
+//! 1. **Evidence.** A feature needs a mapping that has been verified against a
+//!    real vehicle. Every mapping in the shipped catalogue is `null`, because
+//!    this project has measured none. That is a gap, it is fillable, and a
+//!    profile file fills it without rebuilding the app.
+//! 2. **Policy.** Anything above [`aim_safety::MAX_ENABLED_RISK`] is refused
+//!    permanently — the braking, steering and throttle path, immobilisers and
+//!    keys, firmware. No amount of evidence changes that answer.
+//!
+//! "Nobody has measured this yet" and "this tool will never do that" are
+//! different sentences, and a person is owed the right one.
 
 use aim_decoders::{FeatureDef, FeatureSupport};
 use aim_types::{AdapterCapabilities, RiskClass, Vehicle};
@@ -202,8 +209,11 @@ pub fn plan_change(
             "risk_permitted",
             "Is this the kind of change this product will ever make?",
             format!(
-                "This is a {} change. This build does not write those, and a \
-                 verified mapping would not change that.",
+                "This is a {} change, and this tool does not make those. That is a \
+                 deliberate decision about what it is for and not a missing feature: \
+                 the braking, steering and throttle path, immobilisers and keys, and \
+                 anything that rewrites firmware are permanently out of scope. A \
+                 verified mapping would not change it.",
                 f.risk.label()
             ),
         ));
@@ -377,7 +387,7 @@ impl RiskVeto for RiskClass {
         // programming; safety-critical is vetoed here as well, because a
         // convenience-classed product has no business in the braking, steering
         // or restraint path even with a verified mapping in hand.
-        f.writable_in_principle() && *self != RiskClass::SafetyCritical
+        f.writable_in_principle() && *self <= aim_safety::MAX_ENABLED_RISK
     }
 }
 
@@ -554,9 +564,9 @@ mod tests {
     }
 
     #[test]
-    fn this_build_refuses_writes_regardless_of_everything_else() {
-        // The shipped configuration. Every other check can pass and the answer
-        // is still no, and the reason given is the build rather than the truck.
+    fn a_verified_convenience_change_is_now_allowed_end_to_end() {
+        // The shipped configuration. Everything passes, and the answer is yes -
+        // this is the case the whole seam was built for.
         let f = feature(
             RiskClass::Convenience,
             verified_mapping(),
@@ -568,15 +578,77 @@ mod tests {
         let mut caps = AdapterCapabilities::unknown(aim_types::TransportKind::Usb);
         caps.supports_transmit = true;
         caps.multiple_can_buses = true;
-        
+
+        ctx.adapter = Some(&caps);
+
+        let plan = plan_change(&request(), Some(&f), &ctx);
+        assert!(
+            plan.can_apply,
+            "everything passes, so this must be applicable: {:?}",
+            plan.checks.iter().filter(|c| !c.passed).collect::<Vec<_>>()
+        );
+        assert!(check(&plan, "build_permits_writes").passed);
+        assert!(check(&plan, "risk_permitted").passed);
+    }
+
+    /// The risk ceiling refuses on consequence, and says so in those words.
+    #[test]
+    fn a_safety_critical_change_is_refused_as_policy_not_as_a_gap() {
+        let f = feature(
+            RiskClass::SafetyCritical,
+            verified_mapping(),
+            VerificationStatus::Verified,
+        );
+        let modules = vec!["DDM_740".to_string()];
+        let mut ctx = perfect_context(&modules);
+        ctx.max_level = aim_safety::MAX_ENABLED_LEVEL;
+        let mut caps = AdapterCapabilities::unknown(aim_types::TransportKind::Usb);
+        caps.supports_transmit = true;
+        caps.multiple_can_buses = true;
         ctx.adapter = Some(&caps);
 
         let plan = plan_change(&request(), Some(&f), &ctx);
         assert!(!plan.can_apply);
-        let c = check(&plan, "build_permits_writes");
+        let c = check(&plan, "risk_permitted");
         assert!(!c.passed);
         assert!(c.blocking_by_design);
-        // Everything else passed, so the preview is still informative.
+        let detail = c.detail.clone().unwrap_or_default();
+        assert!(
+            detail.contains("deliberate decision") && detail.contains("not a missing feature"),
+            "a policy refusal must not read as an unfinished feature: {detail}"
+        );
+    }
+
+    #[test]
+    fn an_unmapped_feature_still_cannot_be_written() {
+        let f = feature(RiskClass::Convenience, None, VerificationStatus::Unverified);
+        let modules = vec!["DDM_740".to_string()];
+        let mut ctx = perfect_context(&modules);
+        ctx.max_level = aim_safety::MAX_ENABLED_LEVEL;
+        let mut caps = AdapterCapabilities::unknown(aim_types::TransportKind::Usb);
+        caps.supports_transmit = true;
+        ctx.adapter = Some(&caps);
+
+        let plan = plan_change(&request(), Some(&f), &ctx);
+        assert!(!plan.can_apply, "no mapping means no write, ever");
+    }
+
+    #[test]
+    fn the_preview_reports_every_failure_at_once() {
+        let f = feature(
+            RiskClass::SafetyCritical,
+            verified_mapping(),
+            VerificationStatus::Verified,
+        );
+        let modules = vec!["DDM_740".to_string()];
+        let mut ctx = perfect_context(&modules);
+        ctx.max_level = aim_safety::MAX_ENABLED_LEVEL;
+        let mut caps = AdapterCapabilities::unknown(aim_types::TransportKind::Usb);
+        caps.supports_transmit = true;
+        caps.multiple_can_buses = true;
+        ctx.adapter = Some(&caps);
+
+        let plan = plan_change(&request(), Some(&f), &ctx);
         assert_eq!(
             plan.checks.iter().filter(|c| !c.passed).count(),
             1,

@@ -31,3 +31,10 @@ Thumbs.db
 
 # Local Node version manager hint is committed; per-user editor state is not.
 .claude/
+
+# The engineering worklog stays on the machine it was written on.
+# It quotes conversations and product decisions verbatim, which is fine for
+# working notes and not fine in a repository anyone else can read.
+WORKPROGRESS.md
+WORKPROGRESS.local.md
+*.worklog.md

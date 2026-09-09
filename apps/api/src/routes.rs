@@ -38,6 +38,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/profiles", get(profiles))
         .route("/api/v1/features", get(features))
         .route("/api/v1/features/{id}/preview", post(preview_feature_change))
+        .route("/api/v1/features/{id}/apply", post(apply_feature_change))
         .route("/api/v1/tools", get(tools))
         .route("/api/v1/tools/{name}", post(run_tool))
         // ---- adapter ----
@@ -58,6 +59,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/readiness", get(readiness))
         .route("/api/v1/modules/scan-all", post(scan_all_modules))
         .route("/api/v1/export", post(export_file))
+        // ---- updates ----
+        .route("/api/v1/update/check", get(update_check))
+        .route("/api/v1/update/apply", post(update_apply))
         .route("/api/v1/modules/{key}/freeze-frame", get(freeze_frame))
         .route(
             "/api/v1/modules/{key}/tests/{test_id}/run",
@@ -171,6 +175,44 @@ async fn preview_feature_change(
     Ok(Json(
         state
             .with_service(move |s| s.preview_configuration_change(&id, body.desired, "user:api"))
+            .await?,
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+struct ApplyBody {
+    /// What the feature should be set to.
+    desired: aim_diagnostics::DesiredValue,
+    /// Who authorised this, typed by a person.
+    confirmation: String,
+}
+
+/// Change a vehicle setting.
+///
+/// Its own route rather than the generic tool dispatch, for the same reason
+/// clearing codes has one: the agent reaches the vehicle exclusively through
+/// that dispatch, and it must not be able to change how a vehicle is
+/// configured. A model can propose a change and explain it; a person applies
+/// it.
+///
+/// The same shape rule as the preview holds — the feature id comes from the
+/// path and the value from the body, and neither has anywhere to put a module
+/// address or a byte offset.
+async fn apply_feature_change(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<ApplyBody>,
+) -> ApiResult<Json<ToolResult>> {
+    if body.confirmation.trim().is_empty() {
+        return Err(ApiError::bad_request(
+            "changing a vehicle setting needs an explicit confirmation naming who authorised it",
+        ));
+    }
+    Ok(Json(
+        state
+            .with_service(move |s| {
+                s.apply_configuration_change(&id, body.desired, "user:api", &body.confirmation)
+            })
             .await?,
     ))
 }
@@ -736,4 +778,25 @@ async fn compare_sessions(
         .map(|s| s.signal_id.as_str())
         .collect();
     Ok(Json(json!({ "comparison": cmp, "notable_signals": notable })))
+}
+
+/// Is there a newer release? Harmless, so it needs no confirmation.
+async fn update_check() -> Json<Value> {
+    Json(serde_json::to_value(crate::update::check().await).unwrap_or(Value::Null))
+}
+
+/// Download the newest installer and run it.
+///
+/// Behind an explicit POST, and behind a button in the interface, because this
+/// downloads an executable and starts it. The check happens on its own; this
+/// does not.
+async fn update_apply() -> ApiResult<Json<Value>> {
+    match crate::update::download_and_launch().await {
+        Ok(path) => Ok(Json(serde_json::json!({
+            "started": true,
+            "installer": path,
+            "note": "The installer is running. This app will close when it replaces itself.",
+        }))),
+        Err(e) => Err(ApiError::bad_request(e)),
+    }
 }

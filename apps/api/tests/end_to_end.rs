@@ -609,7 +609,9 @@ async fn the_tool_registry_is_published_for_the_future_agent() {
     assert_eq!(read_pid["permission_level"], "L0");
 
     let capabilities = h.get("/capabilities").await;
-    assert_eq!(capabilities["max_enabled_level"], "L1");
+    // L2 is configuration writes, which this build performs behind a typed
+    // confirmation. L3 (programming) stays off.
+    assert_eq!(capabilities["max_enabled_level"], "L2");
     let disabled: Vec<&str> = capabilities["capabilities"]
         .as_array()
         .unwrap()

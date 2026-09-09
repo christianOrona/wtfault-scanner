@@ -18,6 +18,7 @@ pub mod agent_routes;
 pub mod error;
 pub mod routes;
 pub mod state;
+pub mod update;
 pub mod ws;
 
 pub use error::{ApiError, ApiResult};

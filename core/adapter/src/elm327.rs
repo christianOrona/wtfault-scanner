@@ -105,6 +105,8 @@ pub struct Elm327Adapter {
     headers_enabled: bool,
     spaces_enabled: bool,
     current_header: Option<String>,
+    /// Which vehicle bus the adapter is currently switched to.
+    current_bus: crate::VehicleBus,
     requests: u64,
     responses: u64,
     timeouts: u64,
@@ -133,6 +135,7 @@ impl Elm327Adapter {
             headers_enabled: false,
             spaces_enabled: true,
             current_header: None,
+            current_bus: crate::VehicleBus::HighSpeed,
             requests: 0,
             responses: 0,
             timeouts: 0,
@@ -403,12 +406,42 @@ impl Elm327Adapter {
              vehicle",
         );
 
-        // Facts that are false for every ELM327-class device.
-        self.caps.multiple_can_buses = false;
+        // No ELM327-class device is a J2534 pass-through, whatever else it can
+        // do. This one really is true for all of them.
         self.caps.j2534 = false;
-        self.caps.add_caveat(
-            "single CAN bus only: ELM327-class adapters cannot switch between HS-CAN and MS-CAN",
-        );
+
+        // Whether a second CAN bus is reachable is measured, not assumed. It
+        // used to be hardcoded false here - which also silently overwrote the
+        // `true` the STN branch above had just established by asking the device.
+        //
+        // Two things have to hold, and only one of them is software:
+        //
+        //   * The adapter must be able to speak the second bus's bit rate.
+        //     Ford's MS-CAN is 125 kbit/s, reachable on any ELM327 that
+        //     implements the programmable protocol B commands (`ATPB`), and
+        //     natively on STN hardware.
+        //   * The cable must physically reach pins 3 and 11. Nothing on the
+        //     wire can report this, because a cable that is not connected to
+        //     those pins is indistinguishable from a bus with nothing on it.
+        //
+        // The second is a hardware fact and is reported as one, rather than as
+        // something the app has not got round to.
+        if !self.caps.multiple_can_buses {
+            let probe = self.send_raw("ATPB 01 05", self.config.at_timeout)?;
+            self.caps.multiple_can_buses = probe.class.is_success();
+        }
+        if self.caps.multiple_can_buses {
+            self.caps.add_caveat(
+                "this adapter can be switched to a second CAN bus (125 kbit/s). Whether anything \
+                 answers there also depends on the cable being wired to pins 3 and 11, which no \
+                 adapter can report",
+            );
+        } else {
+            self.caps.add_caveat(
+                "single CAN bus: this adapter did not accept the commands needed to change bus \
+                 speed, so only the high-speed bus is reachable with it",
+            );
+        }
 
         if let Ok(v) = self.read_voltage_inner() {
             self.battery_voltage = Some(v);
@@ -875,6 +908,53 @@ impl DiagnosticAdapter for Elm327Adapter {
 
     fn raw_command(&mut self, command: &str) -> AimResult<AdapterResponse> {
         self.send_with_recovery(command, self.config.request_timeout)
+    }
+
+    fn select_bus(&mut self, bus: crate::VehicleBus) -> AimResult<()> {
+        if self.current_bus == bus {
+            return Ok(());
+        }
+        if !self.caps.multiple_can_buses {
+            return Err(AimError::new(
+                ErrorCode::OperationNotAllowed,
+                "this adapter did not accept the commands needed to change bus speed, so only \
+                 the high-speed bus is reachable with it",
+            ));
+        }
+
+        // Programmable protocol B, which is where a non-default bit rate lives
+        // on ELM327-class hardware. The divisor is 500 / rate: 0x01 for the
+        // 500 kbit/s bus, 0x04 for 125 kbit/s.
+        //
+        // `ATPB` takes two bytes: the first configures the protocol options
+        // (0xC0 selects 11-bit ids with a variable data-length code), the
+        // second is the divisor.
+        let divisor = 500 / bus.kbits().max(1);
+        let ok = self.configure(
+            &format!("ATPB C0 {divisor:02X}"),
+            "set the bus bit rate for a protocol change",
+        )?;
+        if !ok {
+            return Err(AimError::new(
+                ErrorCode::AdapterRejectedCommand,
+                format!("the adapter refused to configure the {}", bus.label()),
+            ));
+        }
+        if !self.configure("ATSPB", "switch to the reconfigured protocol")? {
+            return Err(AimError::new(
+                ErrorCode::AdapterRejectedCommand,
+                "the adapter refused to switch to the reconfigured protocol",
+            ));
+        }
+
+        // The header cache describes the old bus and is now meaningless.
+        self.current_header = None;
+        self.current_bus = bus;
+        Ok(())
+    }
+
+    fn current_bus(&self) -> crate::VehicleBus {
+        self.current_bus
     }
 }
 

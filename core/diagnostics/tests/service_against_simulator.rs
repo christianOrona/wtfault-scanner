@@ -482,7 +482,11 @@ fn every_safety_decision_is_recorded_with_its_initiator() {
 
     assert!(!refusal.0);
     assert_eq!(refusal.1, "agent:planner");
-    assert_eq!(refusal.2.as_deref(), Some("confirmation_required"));
+    // Refused for being an agent, not for lacking a confirmation. The gate
+    // checks that first on purpose: a model must not be able to get further by
+    // supplying a confirmation token, so "who asked" is settled before "did
+    // they tick the box".
+    assert_eq!(refusal.2.as_deref(), Some("agent_may_not_mutate"));
 }
 
 #[test]

@@ -57,6 +57,111 @@ pub enum Mapping {
         /// Value of the masked bits meaning "off".
         off: u8,
     },
+    /// Bits inside a record addressed by a UDS data identifier.
+    ///
+    /// This is the form the app can actually read and write, because every part
+    /// of it is the public ISO 14229 standard: ask module `module` for data
+    /// identifier `did`, change the masked bits of byte `byte`, write the whole
+    /// record back. Nothing here is manufacturer-specific *code* — the
+    /// manufacturer-specific part is the numbers, and those live in a data file
+    /// that names its own source.
+    ///
+    /// [`Mapping::AsBuiltBits`] describes the same idea in a vendor's own
+    /// vocabulary and cannot be executed until somebody establishes which data
+    /// identifier a given block corresponds to. That translation is exactly the
+    /// kind of unverified guess this project refuses to make in code.
+    DataIdentifierBits {
+        /// Diagnostic request address of the module that owns the setting,
+        /// e.g. `0x726`.
+        module: u16,
+        /// The data identifier holding the record.
+        did: u16,
+        /// Zero-based byte within the record.
+        byte: u8,
+        /// Bit mask within that byte.
+        mask: u8,
+        /// Value of the masked bits meaning "on", already shifted to sit under
+        /// the mask.
+        on: u8,
+        /// Value of the masked bits meaning "off".
+        off: u8,
+    },
+}
+
+impl Mapping {
+    /// The executable form of this mapping, if it has one.
+    ///
+    /// Returns `None` for a mapping this build can describe but not perform, so
+    /// callers must handle that case rather than discovering it mid-write.
+    pub fn as_data_identifier(&self) -> Option<DataIdentifierTarget> {
+        match *self {
+            Mapping::DataIdentifierBits { module, did, byte, mask, on, off } => {
+                Some(DataIdentifierTarget { module, did, byte, mask, on, off })
+            }
+            Mapping::AsBuiltBits { .. } => None,
+        }
+    }
+}
+
+/// A mapping resolved to something a UDS request can be built from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DataIdentifierTarget {
+    /// Module diagnostic request address.
+    pub module: u16,
+    /// Data identifier holding the record.
+    pub did: u16,
+    /// Zero-based byte within the record.
+    pub byte: u8,
+    /// Bit mask within that byte.
+    pub mask: u8,
+    /// Masked value meaning "on".
+    pub on: u8,
+    /// Masked value meaning "off".
+    pub off: u8,
+}
+
+impl DataIdentifierTarget {
+    /// Apply this mapping to a record read from the vehicle.
+    ///
+    /// Returns the modified record, or an error naming why it could not be
+    /// applied. Deliberately fallible rather than clamping or padding: a record
+    /// shorter than the mapping expects means the mapping is wrong for this
+    /// vehicle, and writing a padded guess to a module is how modules die.
+    pub fn apply(&self, record: &[u8], on: bool) -> Result<Vec<u8>, String> {
+        let idx = self.byte as usize;
+        if idx >= record.len() {
+            return Err(format!(
+                "the mapping expects at least {} bytes at data identifier {:04X}, but the module \
+                 returned {}. The mapping does not match this vehicle and nothing was written.",
+                idx + 1,
+                self.did,
+                record.len()
+            ));
+        }
+        let wanted = if on { self.on } else { self.off };
+        if wanted & !self.mask != 0 {
+            return Err(format!(
+                "the mapping's value {wanted:#04X} has bits outside its own mask {:#04X}, which \
+                 would change settings this feature does not describe",
+                self.mask
+            ));
+        }
+        let mut out = record.to_vec();
+        out[idx] = (out[idx] & !self.mask) | wanted;
+        Ok(out)
+    }
+
+    /// Read the current state of this feature out of a record.
+    pub fn current(&self, record: &[u8]) -> Option<bool> {
+        let masked = record.get(self.byte as usize)? & self.mask;
+        if masked == self.on {
+            Some(true)
+        } else if masked == self.off {
+            Some(false)
+        } else {
+            None
+        }
+    }
 }
 
 /// One thing about a vehicle that can be turned on, off, or set.
@@ -398,5 +503,67 @@ features:
     #[test]
     fn an_unknown_feature_id_is_simply_absent() {
         assert!(catalog().get("delete_the_dpf").is_none());
+    }
+}
+
+#[cfg(test)]
+mod mapping_tests {
+    use super::*;
+
+    fn target() -> DataIdentifierTarget {
+        // Bit 2 of byte 3: on = 0b100, off = 0b000.
+        DataIdentifierTarget { module: 0x726, did: 0xDE01, byte: 3, mask: 0b0000_0100, on: 0b0000_0100, off: 0 }
+    }
+
+    #[test]
+    fn only_the_masked_bits_move() {
+        let record = [0xAA, 0xBB, 0xCC, 0b1011_0011, 0xDD];
+        let on = target().apply(&record, true).unwrap();
+        assert_eq!(on[3], 0b1011_0111, "the masked bit should be set");
+        assert_eq!(&on[..3], &record[..3], "earlier bytes must be untouched");
+        assert_eq!(&on[4..], &record[4..], "later bytes must be untouched");
+
+        let off = target().apply(&record, false).unwrap();
+        assert_eq!(off[3], 0b1011_0011, "already off, so nothing changes");
+    }
+
+    /// A record shorter than the mapping means the mapping is for a different
+    /// vehicle. Padding it and writing anyway is how a module stops working.
+    #[test]
+    fn a_short_record_is_an_error_rather_than_a_padded_guess() {
+        let err = target().apply(&[0x00, 0x01], true).unwrap_err();
+        assert!(err.contains("does not match this vehicle"), "{err}");
+        assert!(err.contains("nothing was written"), "{err}");
+    }
+
+    /// A mapping whose value spills outside its own mask would silently change
+    /// settings the feature does not describe.
+    #[test]
+    fn a_value_outside_its_mask_is_refused() {
+        let bad = DataIdentifierTarget { module: 0x726, did: 0xDE01, byte: 0, mask: 0x0F, on: 0x1F, off: 0 };
+        let err = bad.apply(&[0x00], true).unwrap_err();
+        assert!(err.contains("outside its own mask"), "{err}");
+    }
+
+    #[test]
+    fn current_reads_back_what_apply_wrote_and_admits_when_it_cannot_tell() {
+        let t = target();
+        let record = [0, 0, 0, 0, 0];
+        let on = t.apply(&record, true).unwrap();
+        assert_eq!(t.current(&on), Some(true));
+        assert_eq!(t.current(&record), Some(false));
+
+        // A masked value matching neither on nor off is not guessed at.
+        let odd = DataIdentifierTarget { module: 1, did: 2, byte: 0, mask: 0b11, on: 0b01, off: 0b00 };
+        assert_eq!(odd.current(&[0b10]), None);
+        assert_eq!(odd.current(&[]), None);
+    }
+
+    #[test]
+    fn an_as_built_mapping_is_not_executable() {
+        let m = Mapping::AsBuiltBits {
+            block: "726-01".into(), byte: 0, mask: 1, on: 1, off: 0,
+        };
+        assert!(m.as_data_identifier().is_none());
     }
 }

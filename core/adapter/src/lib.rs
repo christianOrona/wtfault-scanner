@@ -36,7 +36,8 @@ pub use probe::{identify_transport, Identification};
 pub use response::{parse, AdapterResponse, ResponseClass};
 
 use aim_types::{
-    AdapterCapabilities, AdapterHealth, AimError, AimResult, ConnectionState, ObdProtocol,
+    AdapterCapabilities, AdapterHealth, AimError, AimResult, ConnectionState, ErrorCode,
+    ObdProtocol,
 };
 use std::sync::Arc;
 
@@ -201,6 +202,28 @@ pub trait DiagnosticAdapter: Send {
     /// Send a raw adapter command. Escape hatch for diagnostics and probing;
     /// the safety gate is what decides whether a caller may reach it.
     fn raw_command(&mut self, command: &str) -> AimResult<AdapterResponse>;
+
+    /// Move to a different vehicle bus.
+    ///
+    /// Vehicles run more than one CAN bus and the diagnostic connector exposes
+    /// at least two of them: the high-speed bus everything standard lives on,
+    /// and a slower one carrying body and comfort modules. Reaching the second
+    /// is how a tool sees door, seat and lighting modules at all.
+    ///
+    /// The default implementation refuses, so an adapter that cannot do this
+    /// says so rather than silently continuing to talk to the first bus and
+    /// reporting that the modules are missing.
+    fn select_bus(&mut self, _bus: VehicleBus) -> AimResult<()> {
+        Err(AimError::new(
+            ErrorCode::OperationNotAllowed,
+            "this adapter cannot change which vehicle bus it is connected to",
+        ))
+    }
+
+    /// Which bus the adapter is currently on.
+    fn current_bus(&self) -> VehicleBus {
+        VehicleBus::HighSpeed
+    }
 }
 
 #[cfg(test)]
@@ -235,5 +258,40 @@ mod tests {
             raw_lines: vec!["7E8 04 41 0C 1A F8".into()],
         };
         assert_eq!(m.payload_hex(), "410c1af8");
+    }
+}
+
+/// Which vehicle bus an adapter is talking to.
+///
+/// Named by what they carry rather than by a manufacturer's abbreviation, so
+/// the concept survives contact with vehicles that call them something else.
+/// Ford says HS-CAN and MS-CAN; the standard says neither.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VehicleBus {
+    /// The 500 kbit/s bus carrying powertrain and everything the emissions
+    /// standard requires. Every OBD-II tool reaches this one.
+    HighSpeed,
+    /// The slower bus - 125 kbit/s on the vehicles that have one - carrying
+    /// body, comfort and convenience modules. Reaching it needs an adapter
+    /// wired to pins 3 and 11 as well as the usual 6 and 14.
+    MediumSpeed,
+}
+
+impl VehicleBus {
+    /// Bit rate in kbit/s.
+    pub fn kbits(&self) -> u32 {
+        match self {
+            VehicleBus::HighSpeed => 500,
+            VehicleBus::MediumSpeed => 125,
+        }
+    }
+
+    /// Human label.
+    pub fn label(&self) -> &'static str {
+        match self {
+            VehicleBus::HighSpeed => "high-speed bus (500 kbit/s)",
+            VehicleBus::MediumSpeed => "medium-speed body bus (125 kbit/s)",
+        }
     }
 }

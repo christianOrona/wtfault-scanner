@@ -35,7 +35,7 @@ use aim_types::{
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// Capability ids, matching [`aim_safety::CapabilityRegistry::phase1`].
 pub mod capabilities {
@@ -69,7 +69,9 @@ pub mod capabilities {
     pub const LIST_FEATURES: &str = "config.list_features";
     /// Evaluate a proposed configuration change without applying it.
     pub const PREVIEW_CHANGE: &str = "config.preview_change";
-    /// Clear DTCs. Registered at L2 and therefore refused by this build.
+    /// Change one configurable feature. L2, and never reachable by the agent.
+    pub const WRITE_FEATURE: &str = "config.write_feature";
+    /// Clear DTCs. L1, requiring an explicit confirmation.
     pub const CLEAR_DTCS: &str = "obd2.clear_dtcs";
 }
 
@@ -1318,6 +1320,214 @@ impl DiagnosticService {
             warnings,
             ..Default::default()
         })
+    }
+
+    /// Change a vehicle setting, having been told to by a person.
+    ///
+    /// This is the only write path in the app that touches configuration, and
+    /// every constraint on it is deliberate:
+    ///
+    /// * The caller names a **feature id and a value**. It cannot name a module,
+    ///   a data identifier, a byte or a bit — those come from the catalogue, so
+    ///   an arbitrary write is not expressible rather than merely refused.
+    /// * The same plan the preview showed is recomputed here and must still
+    ///   pass. A preview that passed ten minutes ago is not authority to write
+    ///   now, because the engine may have been started since.
+    /// * The record is **read, modified and written whole**, then **read back
+    ///   and verified**. A write this app reports as successful is one it has
+    ///   seen take effect, not one that merely returned a positive response.
+    /// * `confirmation` is mandatory and must name a human. The agent is
+    ///   registered with read-only tools and cannot reach this function at all.
+    pub fn apply_configuration_change(
+        &mut self,
+        feature_id: &str,
+        desired: crate::config::DesiredValue,
+        initiator: &str,
+        confirmation: &str,
+    ) -> ToolResult {
+        let t0 = Instant::now();
+        self.record_invocation(
+            "apply_configuration_change",
+            initiator,
+            serde_json::json!({ "feature_id": feature_id, "desired": desired }),
+        );
+        let outcome = self
+            .authorize(capabilities::WRITE_FEATURE, initiator, Some(confirmation))
+            .and_then(|_| self.apply_change_inner(feature_id, desired));
+        self.finish(
+            "apply_configuration_change",
+            capabilities::WRITE_FEATURE,
+            t0,
+            outcome,
+        )
+    }
+
+    fn apply_change_inner(
+        &mut self,
+        feature_id: &str,
+        desired: crate::config::DesiredValue,
+    ) -> AimResult<Payload> {
+        // 1. The plan, recomputed now rather than trusted from the preview.
+        let plan_payload = self.preview_inner(feature_id, desired)?;
+        let plan: crate::config::ChangePlan = plan_payload
+            .data
+            .clone()
+            .and_then(|v| serde_json::from_value(v).ok())
+            .ok_or_else(|| {
+                AimError::new(ErrorCode::Internal, "could not re-evaluate the change plan")
+            })?;
+        if !plan.can_apply {
+            let failed: Vec<&str> = plan
+                .checks
+                .iter()
+                .filter(|c| !c.passed)
+                .map(|c| c.id.as_str())
+                .collect();
+            return Err(AimError::new(
+                ErrorCode::PreconditionFailed,
+                format!(
+                    "this change cannot be applied right now; failed checks: {}",
+                    failed.join(", ")
+                ),
+            )
+            .with_details(serde_json::to_value(&plan).unwrap_or(serde_json::Value::Null)));
+        }
+
+        // 2. The mapping, which must be executable and verified.
+        // Copied out rather than borrowed: everything below needs `self`
+        // mutably to talk to the adapter, and the catalogue entry is only
+        // needed for these two facts.
+        let (target, verification) = {
+            let feature = self.decoders.features.get(feature_id).ok_or_else(|| {
+                AimError::new(ErrorCode::NotFound, format!("no feature {feature_id}"))
+            })?;
+            let target = feature
+                .mapping
+                .as_ref()
+                .and_then(|m| m.as_data_identifier())
+                .ok_or_else(|| {
+                    AimError::new(
+                        ErrorCode::PreconditionFailed,
+                        "this feature has no mapping that can be executed. Nobody has recorded \
+                         which data identifier and bits hold this setting on this vehicle, and \
+                         this app will not guess at one.",
+                    )
+                })?;
+            (target, feature.verification)
+        };
+        let want_on = matches!(desired, crate::config::DesiredValue::On);
+        let addr = RequestTarget::Physical(format!("{:03X}", target.module));
+        let budget = Duration::from_millis(2000);
+
+        // 3. An extended session. Most modules refuse writes in the default
+        //    session, and a refusal here costs nothing.
+        let session = aim_protocols::UdsRequest::diagnostic_session_control(0x03).to_bytes();
+        let _ = self.adapter.request_pdu(&session, &addr, budget);
+
+        // 4. Read the record as it stands.
+        let read = aim_protocols::UdsRequest::read_data_by_identifier(target.did).to_bytes();
+        let before = self.read_did(&read, &addr, budget, target.did)?;
+        let before_state = target.current(&before);
+
+        let after_bytes = target
+            .apply(&before, want_on)
+            .map_err(|e| AimError::new(ErrorCode::PreconditionFailed, e))?;
+
+        // Already correct. Reporting this as a no-op is more honest than
+        // writing identical bytes and calling it a change.
+        if after_bytes == before {
+            return Ok(Payload {
+                data: Some(serde_json::json!({
+                    "feature_id": feature_id,
+                    "changed": false,
+                    "reason": "already_set",
+                    "before": aim_types::hex(&before),
+                    "state": before_state,
+                })),
+                warnings: vec![Warning::info(
+                    "already_set",
+                    "This setting is already what you asked for. Nothing was written.",
+                )],
+                ..Default::default()
+            });
+        }
+
+        // 5. Write the whole record back.
+        let write =
+            aim_protocols::UdsRequest::write_data_by_identifier(target.did, &after_bytes).to_bytes();
+        let write_reply = self.adapter.request_pdu(&write, &addr, budget)?;
+        let wrote_ok = write_reply.iter().any(|m| {
+            m.payload.first() == Some(&aim_protocols::UdsService::WriteDataByIdentifier.response_id())
+        });
+        if !wrote_ok {
+            return Err(AimError::new(
+                ErrorCode::VehicleNotResponding,
+                "the module did not accept the write. Nothing about the earlier read suggests \
+                 the setting changed, but verify it before assuming so.",
+            ));
+        }
+
+        // 6. Read it back. A write is not believed until it is seen.
+        let verify = self.read_did(&read, &addr, budget, target.did)?;
+        let now_state = target.current(&verify);
+        let verified = verify == after_bytes;
+
+        let mut warnings = Vec::new();
+        if !verified {
+            warnings.push(Warning::caution(
+                "write_not_verified",
+                "The module accepted the write but reading the setting back did not return \
+                 what was written. Treat this change as not having happened, and check the \
+                 vehicle before trying again.",
+            ));
+        }
+        if verification != aim_types::VerificationStatus::Verified {
+            warnings.push(Warning::caution(
+                "mapping_unverified",
+                "This mapping has not been verified against a known-good tool on this model.",
+            ));
+        }
+
+        Ok(Payload {
+            data: Some(serde_json::json!({
+                "feature_id": feature_id,
+                "changed": verified,
+                "verified": verified,
+                "module": format!("{:03X}", target.module),
+                "did": format!("{:04X}", target.did),
+                "before": aim_types::hex(&before),
+                "after": aim_types::hex(&verify),
+                "state_before": before_state,
+                "state_after": now_state,
+            })),
+            warnings,
+            ..Default::default()
+        })
+    }
+
+    /// Send a ReadDataByIdentifier and return the record without its header.
+    fn read_did(
+        &mut self,
+        request: &[u8],
+        addr: &RequestTarget,
+        budget: Duration,
+        did: u16,
+    ) -> AimResult<Vec<u8>> {
+        let replies = self.adapter.request_pdu(request, addr, budget)?;
+        let expected = aim_protocols::UdsService::ReadDataByIdentifier.response_id();
+        for m in replies {
+            // Positive response: 0x62, then the echoed DID, then the record.
+            if m.payload.first() == Some(&expected) && m.payload.len() >= 3 {
+                let echoed = u16::from_be_bytes([m.payload[1], m.payload[2]]);
+                if echoed == did {
+                    return Ok(m.payload[3..].to_vec());
+                }
+            }
+        }
+        Err(AimError::new(
+            ErrorCode::NoData,
+            format!("the module did not return data identifier {did:04X}"),
+        ))
     }
 
     /// Walk the supported-PID mask chain, caching the result for the session.

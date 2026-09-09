@@ -10,7 +10,7 @@ An OBD-II scanner with a language model attached — and a hard rule that it
 never makes anything up.
 
 [![CI](https://github.com/christianOrona/wtfault-scanner/actions/workflows/check.yml/badge.svg)](https://github.com/christianOrona/wtfault-scanner/actions/workflows/check.yml)
-[![status: work in progress](https://img.shields.io/badge/status-work%20in%20progress-orange)](WORKPROGRESS.md)
+[![status: work in progress](https://img.shields.io/badge/status-work%20in%20progress-orange)](#status)
 [![release](https://img.shields.io/github/v/release/christianOrona/wtfault-scanner?include_prereleases&sort=semver)](https://github.com/christianOrona/wtfault-scanner/releases)
 [![licence](https://img.shields.io/badge/licence-MIT%20OR%20Apache--2.0-blue)](#licence)
 [![platform](https://img.shields.io/badge/platform-Windows-lightgrey)](#getting-started)
@@ -325,7 +325,6 @@ line between them.
 - **Configuration writes are compiled off** — a design decision rather than a
   gap, but worth stating in the same list so nobody discovers it by surprise.
 
-`WORKPROGRESS.md` has the full history, including the bugs.
 
 ---
 
@@ -336,10 +335,6 @@ line between them.
 | `docs/ARCHITECTURE.md` | crate map and design decisions |
 | `docs/API.md` | the `/api/v1` contract |
 | `docs/HANDOFF.md` | the specification this is built against |
-| `WORKPROGRESS.md` | what is done, what broke, and why |
-
-`WORKPROGRESS.md` is worth reading if you want the real history — it records
-the bugs as well as the features, including the ones that were embarrassing.
 
 ---
 

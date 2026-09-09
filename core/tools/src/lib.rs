@@ -79,6 +79,23 @@ impl ToolSchema {
             returns: returns.to_string(),
         }
     }
+
+    /// Mark a tool as one the agent may never run, whatever the build permits.
+    ///
+    /// This exists because the alternative was a trap. `clear_dtcs` used to be
+    /// kept away from the agent by declaring it a level the build did not
+    /// execute — which worked exactly until the build started executing that
+    /// level, at which point raising an unrelated ceiling silently handed the
+    /// agent a destructive operation. Nothing about "a model must not do this"
+    /// should be a side effect of "this build does that".
+    ///
+    /// The tool stays listed and stays described, so the model can tell a
+    /// person where the button is instead of inferring a refusal from a
+    /// failure.
+    fn never_for_the_agent(mut self) -> Self {
+        self.enabled = false;
+        self
+    }
 }
 
 /// An object schema with no properties.
@@ -332,13 +349,14 @@ impl ToolRegistry {
             // in front of a dialog that explains the cost, not something an
             // agent talks itself into partway through an inspection.
             //
-            // Kept in the registry at L2 so a model that asks gets a specific
-            // "this is disabled for you" answer rather than an "unknown tool"
-            // that invites a workaround.
+            // Kept in the registry so a model that asks gets a specific "this
+            // is disabled for you" answer rather than an "unknown tool" that
+            // invites a workaround — and marked forbidden explicitly rather
+            // than by declaring a level the build happens not to execute.
             ToolSchema::new(
                 "clear_dtcs",
                 capabilities::CLEAR_DTCS,
-                PermissionLevel::L2,
+                PermissionLevel::L1,
                 "Clear stored trouble codes, freeze frames and readiness monitors. NOT available \
                  to you. If the user wants codes cleared, tell them the Codes screen has a Clear \
                  button, and tell them what it costs: the readiness monitors reset, which fails \
@@ -347,7 +365,8 @@ impl ToolRegistry {
                  does not repair anything; if the fault is still present the code returns.",
                 "Nothing. This tool is refused before any request reaches the vehicle.",
                 module_arg(false),
-            ),
+            )
+            .never_for_the_agent(),
         ] {
             tools.insert(t.name.clone(), t);
         }
@@ -652,10 +671,24 @@ mod tests {
         let r = ToolRegistry::phase1();
         let clear = r.get("clear_dtcs").unwrap();
         assert!(!clear.enabled);
-        assert_eq!(clear.permission_level, PermissionLevel::L2);
         assert!(!r.enabled().iter().any(|t| t.name == "clear_dtcs"));
         // But it is still discoverable, so a refusal can be specific.
         assert!(r.all().iter().any(|t| t.name == "clear_dtcs"));
+
+        // Its level is its real one. It used to be declared L2 - a level the
+        // build did not execute - purely to keep it away from the agent, which
+        // meant that raising the build's write ceiling would have silently
+        // handed a model the ability to erase somebody's readiness monitors.
+        // Being closed to the agent is now stated directly instead.
+        assert_eq!(
+            clear.permission_level,
+            PermissionLevel::L1,
+            "the level should describe the operation, not encode who may call it"
+        );
+        assert!(
+            clear.permission_level <= MAX_ENABLED_LEVEL,
+            "a person can clear codes, so the level alone must not disable it"
+        );
     }
 
     #[test]

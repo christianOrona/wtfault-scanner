@@ -265,6 +265,49 @@ impl UdsRequest {
         }
     }
 
+    /// WriteDataByIdentifier for one DID.
+    ///
+    /// The counterpart to [`UdsRequest::read_data_by_identifier`], and the only
+    /// way this app changes a vehicle setting. The value is written whole: UDS
+    /// has no partial write, so a caller that wants to change one bit must read
+    /// the record, modify it, and write the complete record back. That is
+    /// deliberate rather than inconvenient — a read-modify-write makes the
+    /// before value available to show a person and to verify against
+    /// afterwards, which a blind write does not.
+    pub fn write_data_by_identifier(did: u16, value: &[u8]) -> Self {
+        let mut data = did.to_be_bytes().to_vec();
+        data.extend_from_slice(value);
+        UdsRequest {
+            service: UdsService::WriteDataByIdentifier,
+            sub_function: None,
+            data,
+        }
+    }
+
+    /// SecurityAccess, requesting the seed for a given level.
+    ///
+    /// Levels are odd for requestSeed and even for sendKey, so level 1 asks for
+    /// the seed that level 2 answers. Modules that gate configuration behind
+    /// security use low levels for exactly that; the high levels used for
+    /// immobiliser and key operations are refused by risk class long before
+    /// they reach here, so this being present does not make those reachable.
+    pub fn security_access_request_seed(level: u8) -> Self {
+        UdsRequest {
+            service: UdsService::SecurityAccess,
+            sub_function: Some(level),
+            data: Vec::new(),
+        }
+    }
+
+    /// SecurityAccess, sending the computed key back.
+    pub fn security_access_send_key(level: u8, key: &[u8]) -> Self {
+        UdsRequest {
+            service: UdsService::SecurityAccess,
+            sub_function: Some(level),
+            data: key.to_vec(),
+        }
+    }
+
     /// TesterPresent, optionally suppressing the positive response.
     pub fn tester_present(suppress_response: bool) -> Self {
         UdsRequest {

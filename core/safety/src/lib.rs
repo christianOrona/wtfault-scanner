@@ -9,8 +9,12 @@
 //!    never "best effort" executed.
 //! 2. **Fail closed.** Every path that cannot prove an operation is safe
 //!    rejects it. There is no default-allow branch in [`SafetyGate::authorize`].
-//! 3. **Levels.** L0 runs freely; L1 needs an explicit confirmation token;
-//!    L2 and L3 are compiled off in this build via [`MAX_ENABLED_LEVEL`].
+//! 3. **Two ceilings.** L0 runs freely; L1 and L2 need an explicit confirmation
+//!    token; L3 (programming) is compiled off via [`MAX_ENABLED_LEVEL`]. A
+//!    second, independent ceiling — [`MAX_ENABLED_RISK`] — refuses on
+//!    consequence rather than privilege, because a mirror-fold preference and a
+//!    brake calibration are the same permission level and must not be the same
+//!    decision.
 //! 4. **Audit.** Every authorization decision — allowed or rejected — produces
 //!    an [`AuditRecord`] naming the initiator. A non-read operation cannot be
 //!    authorized without one.
@@ -30,11 +34,38 @@ use std::collections::BTreeMap;
 
 /// The highest permission level this build will execute.
 ///
-/// L2 (configuration writes) and L3 (programming) are out of scope for Phase 1
-/// and are refused by the gate regardless of confirmation. Raising this
-/// constant is a deliberate, reviewable change — not a runtime setting, not a
-/// config file, and certainly not something an agent can ask for.
-pub const MAX_ENABLED_LEVEL: PermissionLevel = PermissionLevel::L1;
+/// L2 is configuration writes: changing a setting a vehicle already supports,
+/// through the same public standard used to read it. Those are enabled, behind
+/// a typed confirmation and the full precondition list. L3 is programming —
+/// firmware — and stays refused.
+///
+/// Raising this constant is a deliberate, reviewable change: not a runtime
+/// setting, not a config file, and never something an agent can ask for.
+pub const MAX_ENABLED_LEVEL: PermissionLevel = PermissionLevel::L2;
+
+/// The most consequential kind of thing this build will touch, whatever its
+/// permission level.
+///
+/// This is a second ceiling, deliberately independent of [`MAX_ENABLED_LEVEL`],
+/// because "how privileged is this operation" and "what happens if it is wrong"
+/// are different questions. A convenience setting and a brake calibration can
+/// both be L2 writes; only one of them can hurt somebody.
+///
+/// Everything above [`RiskClass::Service`] is refused here **as policy, not as
+/// an unfinished feature**. The distinction matters and is worth stating
+/// plainly, because the two look identical from the outside:
+///
+/// - **Safety-critical** — anything in the path of stopping, steering or
+///   accelerating. Refused because a diagnostic tool that a person runs in
+///   their own driveway should not be able to change how the vehicle stops.
+/// - **Security** — immobiliser, keys. Refused because the legitimate uses are
+///   indistinguishable, over a wire, from the illegitimate ones.
+/// - **Programming** — firmware. Refused because a failed write leaves a module
+///   that does not boot, and recovery needs equipment this app cannot assume.
+///
+/// Raising this is not a matter of writing more code. It is a decision about
+/// what this tool is for.
+pub const MAX_ENABLED_RISK: RiskClass = RiskClass::Service;
 
 /// Risk class for a capability deserialized from an older record that predates
 /// the field. Read is the safe default: it under-claims rather than over-claims.
@@ -60,6 +91,15 @@ pub struct Capability {
     pub risk: RiskClass,
     /// True when this operation changes vehicle state.
     pub mutating: bool,
+    /// True when a model may not initiate this, whatever else permits it.
+    ///
+    /// Not the same as "mutating". An agent proposing a self-test that a person
+    /// then confirms is the product working as intended. An agent erasing the
+    /// readiness monitors, or changing how a vehicle is configured, is not
+    /// something a confirmation dialog makes acceptable — the model should not
+    /// be the thing that raised the idea.
+    #[serde(default)]
+    pub agent_forbidden: bool,
 }
 
 impl Capability {
@@ -73,7 +113,14 @@ impl Capability {
             required_adapter_flags: Vec::new(),
             risk: RiskClass::Read,
             mutating: false,
+            agent_forbidden: false,
         }
+    }
+
+    /// Mark this as something a model may never initiate.
+    pub fn never_for_agents(mut self) -> Self {
+        self.agent_forbidden = true;
+        self
     }
 
     /// Set the risk class.
@@ -209,6 +256,7 @@ impl CapabilityRegistry {
             )
             .at_level(PermissionLevel::L2)
             .with_risk(RiskClass::Convenience)
+            .never_for_agents()
             .requiring(vec![
                 Precondition::IgnitionOn,
                 Precondition::EngineOff,
@@ -236,18 +284,26 @@ impl CapabilityRegistry {
             )
             .at_level(PermissionLevel::L1)
             .with_risk(RiskClass::Service)
+            .never_for_agents()
             .requiring(vec![
                 Precondition::EngineOff,
                 Precondition::VehicleStationary,
                 Precondition::StableConnection,
             ])
             .needing_adapter(vec![AdapterFlag::SupportsTransmit]),
-            // L2/L3: registered so the refusal is explicit and auditable
-            // rather than an "unknown operation" accident.
-            Capability::read_only("config.write_configuration", "Write module configuration")
-                .at_level(PermissionLevel::L2),
+            // There is deliberately no unbounded "write any configuration"
+            // capability. One existed while L2 was compiled off, as a
+            // placeholder whose only job was to be refused explicitly. Enabling
+            // L2 turned it into exactly what this design exists to prevent: a
+            // write with no feature definition behind it, no preconditions and
+            // no read-back. `config.write_feature` is the only way in, and it
+            // cannot name a value the catalogue does not describe.
+            //
+            // L3: registered so the refusal is explicit and auditable rather
+            // than an "unknown operation" accident.
             Capability::read_only("program.program_module", "Reprogram a module")
-                .at_level(PermissionLevel::L3),
+                .at_level(PermissionLevel::L3)
+                .with_risk(RiskClass::Programming),
         ] {
             r.register(c);
         }
@@ -480,6 +536,36 @@ impl SafetyGate {
             };
         }
 
+        // 2b. Risk ceiling. Independent of the level, and deliberately so: a
+        // convenience setting and a brake calibration are both L2 writes.
+        // Refusals here are policy and say so, because "this build will not do
+        // that" and "that is not written yet" are different sentences and a
+        // person deserves to know which one they are being told.
+        if cap.risk > MAX_ENABLED_RISK {
+            audit.reason = Some(String::from("risk_class_refused"));
+            return Decision {
+                result: Err(AimError::new(
+                    ErrorCode::OperationNotAllowed,
+                    format!(
+                        "{} is classed {}, and this tool does not perform {} operations. \
+                         That is a deliberate limit rather than an unfinished feature: \
+                         the ceiling is {}.",
+                        cap.id,
+                        cap.risk.label(),
+                        cap.risk.label(),
+                        MAX_ENABLED_RISK.label()
+                    ),
+                )
+                .with_details(serde_json::json!({
+                    "operation": cap.id,
+                    "risk": cap.risk,
+                    "max_enabled_risk": MAX_ENABLED_RISK,
+                    "policy": true,
+                }))),
+                audit,
+            };
+        }
+
         // 3. Initiator. Mandatory for anything that is not a pure read.
         if request.initiator.trim().is_empty() {
             audit.reason = Some(String::from("missing_initiator"));
@@ -488,6 +574,38 @@ impl SafetyGate {
                     ErrorCode::BadRequest,
                     "every operation must record an initiator",
                 )),
+                audit,
+            };
+        }
+
+        // 3b. A model may not change a vehicle. Ever, by any route.
+        //
+        // This used to be arranged indirectly, by giving the destructive tools
+        // a permission level the build did not execute. That held right up
+        // until the build started executing that level, at which point raising
+        // an unrelated ceiling would have handed an agent the ability to erase
+        // somebody's readiness monitors. A property this important should not
+        // be a side effect of an unrelated constant, so it is stated here as
+        // itself: initiator is a model, operation mutates, refused.
+        //
+        // Refused *after* the initiator check so the audit record names who
+        // asked, and before confirmation so that a model cannot get further by
+        // supplying one.
+        if cap.agent_forbidden && request.initiator.starts_with("agent:") {
+            audit.reason = Some(String::from("agent_may_not_mutate"));
+            return Decision {
+                result: Err(AimError::new(
+                    ErrorCode::OperationNotAllowed,
+                    format!(
+                        "{} changes the vehicle, and a model is not permitted to do that by any \
+                         route. A person can, from the interface, after being told what it costs.",
+                        cap.id
+                    ),
+                )
+                .with_details(serde_json::json!({
+                    "operation": cap.id,
+                    "initiator": request.initiator,
+                }))),
                 audit,
             };
         }
@@ -684,9 +802,9 @@ mod tests {
     }
 
     #[test]
-    fn l2_and_l3_operations_are_all_refused() {
+    fn programming_stays_refused_by_level() {
         let gate = SafetyGate::phase1();
-        for op in ["config.write_configuration", "program.program_module"] {
+        for op in ["program.program_module"] {
             let d = gate.authorize(
                 &OperationRequest::new(op, "user").confirmed_by("owner"),
                 Some(&caps(true)),
@@ -698,6 +816,63 @@ mod tests {
                 "{op}"
             );
         }
+    }
+
+    /// The risk ceiling is not the level ceiling, and it has to bite on its own.
+    ///
+    /// Once L2 is enabled, level alone stops being a defence: a brake
+    /// calibration and a mirror-fold preference are the same level. This proves
+    /// the second ceiling refuses on consequence, and says it is policy.
+    #[test]
+    fn a_dangerous_change_is_refused_on_risk_even_at_an_enabled_level() {
+        let mut registry = CapabilityRegistry::phase1();
+        registry.register(
+            Capability::read_only("config.calibrate_brakes", "Calibrate the ABS module")
+                .at_level(PermissionLevel::L2)
+                .with_risk(RiskClass::SafetyCritical),
+        );
+        let gate = SafetyGate::new(registry);
+
+        let d = gate.authorize(
+            &OperationRequest::new("config.calibrate_brakes", "user").confirmed_by("owner"),
+            Some(&caps(true)),
+            &ready(),
+        );
+        assert_eq!(d.audit.reason.as_deref(), Some("risk_class_refused"));
+        let err = d.into_result().unwrap_err();
+        assert_eq!(err.code, ErrorCode::OperationNotAllowed);
+        assert!(
+            err.message.contains("deliberate limit"),
+            "a policy refusal must not read as an unfinished feature: {}",
+            err.message
+        );
+    }
+
+    /// The change this whole seam exists for now actually goes through.
+    #[test]
+    fn a_convenience_write_is_allowed_once_confirmed() {
+        let gate = SafetyGate::phase1();
+
+        let unconfirmed = gate.authorize(
+            &OperationRequest::new("config.write_feature", "user"),
+            Some(&caps(true)),
+            &ready(),
+        );
+        assert_eq!(
+            unconfirmed.into_result().unwrap_err().code,
+            ErrorCode::ConfirmationRequired,
+            "a write must never happen without a confirmation"
+        );
+
+        let confirmed = gate.authorize(
+            &OperationRequest::new("config.write_feature", "user").confirmed_by("owner"),
+            Some(&caps(true)),
+            &ready(),
+        );
+        assert!(
+            confirmed.into_result().is_ok(),
+            "a confirmed convenience write should be authorised"
+        );
     }
 
     #[test]
@@ -831,17 +1006,131 @@ mod tests {
     }
 
     #[test]
-    fn the_enabled_set_excludes_l2_and_l3() {
+    fn the_enabled_set_stops_at_both_ceilings() {
         let r = CapabilityRegistry::phase1();
         assert!(r.all().len() > r.enabled().len());
         for c in r.enabled() {
             assert!(c.level <= MAX_ENABLED_LEVEL, "{} is enabled", c.id);
         }
-        for id in ["config.write_configuration", "program.program_module", "config.write_feature"] {
+        // Programming is still off, by level.
+        for id in ["program.program_module"] {
             assert!(
                 !r.enabled().iter().any(|c| c.id == id),
                 "{id} must not be enabled"
             );
         }
+        // The configuration write this build does support is on.
+        assert!(
+            r.enabled().iter().any(|c| c.id == "config.write_feature"),
+            "config.write_feature should be enabled now that L2 is"
+        );
+    }
+
+    /// Nothing above the risk ceiling may be reachable, whatever its level.
+    ///
+    /// Written as a sweep over the registry rather than a list of ids, so that
+    /// registering a new safety-critical capability fails this test instead of
+    /// quietly becoming reachable.
+    #[test]
+    fn no_enabled_capability_exceeds_the_risk_ceiling() {
+        for c in CapabilityRegistry::phase1().enabled() {
+            assert!(
+                c.risk <= MAX_ENABLED_RISK,
+                "{} is enabled at risk {:?}, above the ceiling {:?}",
+                c.id,
+                c.risk,
+                MAX_ENABLED_RISK
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod agent_write_tests {
+    use super::*;
+    use crate::preconditions::VehicleConditions;
+
+    fn caps() -> aim_types::AdapterCapabilities {
+        let mut c = aim_types::AdapterCapabilities::unknown(aim_types::TransportKind::Usb);
+        c.supports_transmit = true;
+        c.supports_long_messages = true;
+        c.can_29_bit = true;
+        c.multiple_can_buses = true;
+        c
+    }
+
+    fn ready() -> VehicleConditions {
+        VehicleConditions {
+            ignition_on: true,
+            engine_running: false,
+            battery_voltage: Some(13.0),
+            connection_stable: true,
+            vehicle_speed_kph: Some(0.0),
+        }
+    }
+
+    /// The property, stated over the whole registry rather than a list of ids.
+    ///
+    /// A new mutating capability added later is covered by this without anyone
+    /// remembering to extend a list, which is the only way a rule like this
+    /// survives contact with future edits.
+    #[test]
+    fn nothing_marked_agent_forbidden_is_reachable_by_an_agent() {
+        let gate = SafetyGate::phase1();
+        for cap in CapabilityRegistry::phase1().all() {
+            if !cap.agent_forbidden {
+                continue;
+            }
+            let decision = gate.authorize(
+                &OperationRequest::new(&cap.id, "agent:planner").confirmed_by("the-owner"),
+                Some(&caps()),
+                &ready(),
+            );
+            assert!(
+                !decision.is_allowed(),
+                "{} is agent-forbidden and an agent was allowed to run it",
+                cap.id
+            );
+        }
+    }
+
+    /// The flag has to actually be set on the operations that matter.
+    ///
+    /// Without this, the sweep above passes vacuously the moment somebody
+    /// forgets to mark a new destructive capability.
+    #[test]
+    fn the_destructive_operations_are_the_ones_marked() {
+        let r = CapabilityRegistry::phase1();
+        for id in ["obd2.clear_dtcs", "config.write_feature"] {
+            assert!(
+                r.get(id).expect("registered").agent_forbidden,
+                "{id} must be closed to the agent"
+            );
+        }
+    }
+
+    /// And the same operation, asked for by a person, is allowed - otherwise
+    /// the test above would pass on a gate that simply refused everything.
+    #[test]
+    fn a_person_can_still_do_what_the_agent_cannot() {
+        let gate = SafetyGate::phase1();
+        let decision = gate.authorize(
+            &OperationRequest::new("obd2.clear_dtcs", "user").confirmed_by("the-owner"),
+            Some(&caps()),
+            &ready(),
+        );
+        assert!(decision.is_allowed(), "a person must still be able to clear codes");
+    }
+
+    #[test]
+    fn the_refusal_names_who_asked_so_it_is_auditable() {
+        let gate = SafetyGate::phase1();
+        let decision = gate.authorize(
+            &OperationRequest::new("obd2.clear_dtcs", "agent:planner").confirmed_by("the-owner"),
+            Some(&caps()),
+            &ready(),
+        );
+        assert_eq!(decision.audit.reason.as_deref(), Some("agent_may_not_mutate"));
+        assert_eq!(decision.audit.initiator, "agent:planner");
     }
 }
