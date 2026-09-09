@@ -1302,6 +1302,8 @@ impl DiagnosticService {
         let modules = feature.modules.clone();
         let source = feature.source.clone();
         let verification = feature.verification;
+        let write_evidence = feature.write_verification.clone();
+        let writable = feature.support() == aim_decoders::FeatureSupport::Writable;
         let target = feature.mapping.as_ref().and_then(|m| m.as_data_identifier());
 
         // No executable mapping. Report it as an open question with the steps
@@ -1371,6 +1373,8 @@ impl DiagnosticService {
                 "owning_modules": modules,
                 "mapping_source": source,
                 "verification": verification,
+                "write_evidence": write_evidence,
+                "writable": writable,
             })),
             warnings,
             ..Default::default()

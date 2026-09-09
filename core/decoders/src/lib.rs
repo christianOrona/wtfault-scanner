@@ -26,7 +26,10 @@ pub mod vin;
 pub use dtc::{DtcCatalog, DtcInfo, DtcSystem};
 pub use explain::{ExplainKind, Explanation, ExplanationCatalog};
 pub use expr::Formula;
-pub use features::{Applicability, FeatureCatalog, FeatureDef, FeatureSupport, Mapping};
+pub use features::{
+    Applicability, DataIdentifierTarget, FeatureCatalog, FeatureDef, FeatureSupport, Mapping,
+    OperationEvidence,
+};
 pub use monitors::{MonitorCatalog, MonitorReading, RawCounts};
 pub use pids::{PidDefinition, PidKind, PidRegistry};
 pub use profiles::{ProfileKind, ProfileLoad, ProfileReport};

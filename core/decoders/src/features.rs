@@ -191,8 +191,27 @@ pub struct FeatureDef {
     #[serde(default)]
     pub mapping: Option<Mapping>,
     /// Whether the mapping has been validated against a real vehicle.
+    ///
+    /// This is evidence about **reading**: somebody read the record, and the
+    /// bits described here held what this feature claims they hold.
     #[serde(default)]
     pub verification: VerificationStatus,
+    /// Evidence that this setting can actually be *changed* this way.
+    ///
+    /// Deliberately separate from [`FeatureDef::verification`], and absent by
+    /// default, because knowing where a setting lives is not the same as
+    /// knowing how to change it safely. A module can serve a record happily and
+    /// then refuse to write it, demand an extended session, demand security
+    /// access, or accept the write and ignore it. Those are discovered by
+    /// trying, on a vehicle, and recording what happened.
+    ///
+    /// The default matters as much as the field. Every profile written before
+    /// this existed said `verification: verified` meaning "I checked the
+    /// mapping", and none of them meant "and writing it is proven safe". They
+    /// now grant reading and not writing, which is the correct reading of what
+    /// their authors actually verified.
+    #[serde(default)]
+    pub write_verification: Option<OperationEvidence>,
     /// Where the mapping came from, so a wrong one can be traced to its source
     /// rather than blamed on the tool.
     #[serde(default)]
@@ -270,12 +289,57 @@ pub enum FeatureSupport {
     Writable,
 }
 
+/// What is known about one operation on one feature, and who established it.
+///
+/// A struct rather than more enum variants. "Verified on one vehicle" and
+/// "verified by the community" are the same fact with a different count, and
+/// encoding a count as a variant means inventing a new variant every time the
+/// number changes shape.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OperationEvidence {
+    /// Whether this operation has been demonstrated on a real vehicle.
+    #[serde(default)]
+    pub verification: VerificationStatus,
+    /// How many distinct vehicles it has been demonstrated on.
+    ///
+    /// One is meaningfully different from twelve, and a person deciding whether
+    /// to let a tool write to their door module deserves the number rather than
+    /// an adjective.
+    #[serde(default)]
+    pub verified_on_vehicles: u32,
+    /// Where the evidence came from, named so a wrong one is traceable.
+    #[serde(default)]
+    pub source: Option<String>,
+    /// When it was last confirmed, as an ISO date.
+    #[serde(default)]
+    pub last_verified: Option<String>,
+    /// Anything the next person should know before relying on it.
+    #[serde(default)]
+    pub notes: Option<String>,
+}
+
+impl OperationEvidence {
+    /// Whether this is enough to act on.
+    pub fn is_verified(&self) -> bool {
+        self.verification == VerificationStatus::Verified && self.verified_on_vehicles > 0
+    }
+}
+
 impl FeatureDef {
     /// What this build can actually do with this feature.
+    ///
+    /// Writing needs its own evidence. A mapping verified for reading gets
+    /// `ReadOnly` and nothing more, because a module that will show you a
+    /// record will not necessarily let you change it.
     pub fn support(&self) -> FeatureSupport {
         match (&self.mapping, self.verification) {
             (None, _) => FeatureSupport::DescribedOnly,
-            (Some(_), VerificationStatus::Verified) => FeatureSupport::Writable,
+            (Some(_), VerificationStatus::Verified)
+                if self.write_verification.as_ref().is_some_and(|w| w.is_verified()) =>
+            {
+                FeatureSupport::Writable
+            }
+            (Some(_), VerificationStatus::Verified) => FeatureSupport::ReadOnly,
             (Some(_), _) => FeatureSupport::ReadOnly,
         }
     }
@@ -433,8 +497,15 @@ mod tests {
                 on: 0x01,
                 off: 0x00,
             }),
-            // Even fully verified.
+            // Even fully verified, for reading and for writing.
             verification: VerificationStatus::Verified,
+            write_verification: Some(OperationEvidence {
+                verification: VerificationStatus::Verified,
+                verified_on_vehicles: 4,
+                source: Some("test".into()),
+                last_verified: None,
+                notes: None,
+            }),
             source: Some("test".into()),
             notes: None,
         };
@@ -461,6 +532,10 @@ features:
     risk: convenience
     modules: [DDM]
     verification: verified
+    write_verification:
+      verification: verified
+      verified_on_vehicles: 1
+      source: "measured on my own truck"
     mapping:
       kind: as_built_bits
       block: "740-01"
@@ -571,5 +646,96 @@ mod mapping_tests {
     fn an_as_built_mapping_is_not_executable() {
         let m = Mapping::AsBuiltBits { block: "726-01".into(), byte: 0, mask: 1, on: 1, off: 0 };
         assert!(m.as_data_identifier().is_none());
+    }
+}
+
+#[cfg(test)]
+mod operation_evidence_tests {
+    use super::*;
+
+    fn feature(yaml_extra: &str) -> FeatureDef {
+        let y = format!(
+            r#"
+features:
+  - id: f
+    name: "F"
+    easy: "e"
+    technical: "t"
+    risk: convenience
+    modules: [BODY]
+    mapping:
+      kind: data_identifier_bits
+      module: 0x726
+      did: 0xDE01
+      byte: 0
+      mask: 0x01
+      on: 0x01
+      off: 0x00
+{yaml_extra}
+"#
+        );
+        let mut cat = FeatureCatalog::default();
+        cat.load_yaml(&y, "test").expect("loads");
+        cat.get("f").expect("feature").clone()
+    }
+
+    /// The migration-safety property, and the reason the field defaults to
+    /// absent rather than to the read verification.
+    ///
+    /// Every profile written before write evidence existed says
+    /// `verification: verified` and means "I checked where the setting lives".
+    /// None of them means "and writing it is proven safe". If the write gate
+    /// read the same field, enabling writes would have silently made every
+    /// existing profile writable on evidence nobody gathered.
+    #[test]
+    fn a_read_verified_mapping_does_not_become_writable_on_its_own() {
+        let f = feature("    verification: verified");
+        assert_eq!(f.support(), FeatureSupport::ReadOnly);
+        assert!(f.write_verification.is_none());
+    }
+
+    #[test]
+    fn writing_needs_its_own_evidence_on_at_least_one_vehicle() {
+        let f = feature(
+            "    verification: verified\n    \
+             write_verification:\n      verification: verified\n      \
+             verified_on_vehicles: 1\n      source: \"measured\"",
+        );
+        assert_eq!(f.support(), FeatureSupport::Writable);
+    }
+
+    /// A claim of verification with no vehicle behind it is not evidence.
+    #[test]
+    fn write_evidence_verified_on_nothing_is_not_enough() {
+        let f = feature(
+            "    verification: verified\n    \
+             write_verification:\n      verification: verified\n      \
+             verified_on_vehicles: 0",
+        );
+        assert_eq!(f.support(), FeatureSupport::ReadOnly);
+    }
+
+    /// Read evidence still gates everything above it: write evidence cannot
+    /// rescue a mapping nobody has confirmed the location of.
+    #[test]
+    fn write_evidence_cannot_substitute_for_an_unverified_mapping() {
+        let f = feature(
+            "    verification: unverified\n    \
+             write_verification:\n      verification: verified\n      \
+             verified_on_vehicles: 9",
+        );
+        assert_eq!(f.support(), FeatureSupport::ReadOnly);
+    }
+
+    #[test]
+    fn the_vehicle_count_survives_the_round_trip_for_the_interface_to_show() {
+        let f = feature(
+            "    verification: verified\n    \
+             write_verification:\n      verification: verified\n      \
+             verified_on_vehicles: 3\n      last_verified: \"2026-09-09\"",
+        );
+        let w = f.write_verification.expect("evidence");
+        assert_eq!(w.verified_on_vehicles, 3);
+        assert_eq!(w.last_verified.as_deref(), Some("2026-09-09"));
     }
 }
