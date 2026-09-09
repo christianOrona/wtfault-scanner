@@ -744,6 +744,23 @@ fn a_silent_bus_reports_no_modules_rather_than_an_empty_success() {
 /// a mapping that is wrong for every real vehicle, which is the exact failure
 /// this project exists to avoid.
 fn service_with_profile(yaml: &str) -> (DiagnosticService, tempfile::TempDir) {
+    let (s, _e, d) = service_with_profile_and_emulator(yaml);
+    (s, d)
+}
+
+/// Everything the write preconditions need to have been observed.
+///
+/// The gate refuses on unknown rather than assuming: an unread road speed is
+/// not a stationary vehicle, and a module nobody has heard from is not present.
+fn prepare_for_write(service: &mut DiagnosticService) {
+    service.scan_modules(USER);
+    assert!(service.read_pid("ECU_7E8", "vehicle_speed", USER).success);
+    assert!(service.scan_all_modules(USER).success);
+}
+
+fn service_with_profile_and_emulator(
+    yaml: &str,
+) -> (DiagnosticService, aim_simulator::SharedEmulator, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("test-profile.yaml"), yaml).unwrap();
 
@@ -755,6 +772,7 @@ fn service_with_profile(yaml: &str) -> (DiagnosticService, tempfile::TempDir) {
     );
 
     let transport = SimulatedTransport::new(ScenarioId::Healthy);
+    let emulator = transport.emulator();
     let adapter: Box<dyn DiagnosticAdapter> =
         Box::new(Elm327Adapter::new(Box::new(transport), Elm327Config::fast()));
     let mut service = DiagnosticService::start(
@@ -766,7 +784,7 @@ fn service_with_profile(yaml: &str) -> (DiagnosticService, tempfile::TempDir) {
     )
     .unwrap();
     assert!(service.connect(USER).success);
-    (service, dir)
+    (service, emulator, dir)
 }
 
 const MIRROR_PROFILE: &str = r#"
@@ -925,4 +943,84 @@ fn capturing_from_a_module_that_holds_nothing_says_so() {
     let r = service.capture_configuration(0x7E0, &[0xDE01], None, USER);
     assert!(!r.success);
     assert_eq!(r.error.as_ref().unwrap().code, aim_types::ErrorCode::NoData);
+}
+
+/// Set how the simulated body module handles a configuration write.
+fn set_write_behaviour(
+    emulator: &aim_simulator::SharedEmulator,
+    behaviour: aim_simulator::ConfigWriteBehaviour,
+) {
+    let mut e = emulator.lock().unwrap();
+    for ecu in e.vehicle.ecus.iter_mut() {
+        if ecu.response_id == 0x7A8 {
+            ecu.config_write = behaviour;
+        }
+    }
+}
+
+/// The whole reason a positive response is not allowed to count as success.
+///
+/// A module that answers "accepted" and then changes nothing is a real
+/// behaviour, and an app tested only against a simulator that always tells the
+/// truth would report this write as done.
+#[test]
+fn a_write_the_module_accepts_and_ignores_is_reported_as_unverified() {
+    let (mut service, emulator, _dir) = service_with_profile_and_emulator(MIRROR_PROFILE);
+    prepare_for_write(&mut service);
+    set_write_behaviour(&emulator, aim_simulator::ConfigWriteBehaviour::AcceptButIgnore);
+
+    let r = service.apply_configuration_change(
+        "test_body_setting",
+        aim_diagnostics::DesiredValue::On,
+        USER,
+        "the-owner",
+    );
+
+    assert!(r.success, "the operation ran; what it reports is the point");
+    let data = r.data.as_ref().unwrap();
+    assert_eq!(data["changed"], false, "nothing actually changed");
+    assert_eq!(data["verified"], false);
+
+    let codes: Vec<&str> = r.warnings.iter().map(|w| w.code.as_str()).collect();
+    assert!(codes.contains(&"write_not_verified"), "{codes:?}");
+}
+
+/// A module that refuses is not a module that quietly failed.
+#[test]
+fn a_write_the_module_refuses_is_an_error_naming_the_refusal() {
+    let (mut service, emulator, _dir) = service_with_profile_and_emulator(MIRROR_PROFILE);
+    prepare_for_write(&mut service);
+    set_write_behaviour(&emulator, aim_simulator::ConfigWriteBehaviour::Refuse);
+
+    let r = service.apply_configuration_change(
+        "test_body_setting",
+        aim_diagnostics::DesiredValue::On,
+        USER,
+        "the-owner",
+    );
+    assert!(!r.success, "a refused write must not read as a success");
+
+    // And the setting is untouched, which the app can still demonstrate.
+    let read = service.read_feature("test_body_setting", USER);
+    assert!(read.success);
+    assert_eq!(read.data.as_ref().unwrap()["state"], false);
+}
+
+/// Asking for the state it is already in writes nothing at all.
+#[test]
+fn a_change_to_the_value_already_set_writes_nothing() {
+    let (mut service, _emulator, _dir) = service_with_profile_and_emulator(MIRROR_PROFILE);
+    prepare_for_write(&mut service);
+
+    let r = service.apply_configuration_change(
+        "test_body_setting",
+        aim_diagnostics::DesiredValue::Off,
+        USER,
+        "the-owner",
+    );
+    assert!(r.success);
+    let data = r.data.as_ref().unwrap();
+    assert_eq!(data["changed"], false);
+    assert_eq!(data["reason"], "already_set");
+    assert!(r.warnings.iter().any(|w| w.code == "already_set"));
 }
