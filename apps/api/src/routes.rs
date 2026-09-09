@@ -37,6 +37,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/explanations", get(explanations))
         .route("/api/v1/profiles", get(profiles))
         .route("/api/v1/features", get(features))
+        .route("/api/v1/features/{id}", get(read_feature))
         .route("/api/v1/features/{id}/preview", post(preview_feature_change))
         .route("/api/v1/features/{id}/apply", post(apply_feature_change))
         .route("/api/v1/tools", get(tools))
@@ -150,6 +151,19 @@ async fn features(State(state): State<AppState>) -> ApiResult<Json<ToolResult>> 
 struct PreviewBody {
     /// What the feature should be set to.
     desired: aim_diagnostics::DesiredValue,
+}
+
+/// Read one feature's current setting from the vehicle.
+///
+/// Read-only, so no confirmation. A feature with no measured mapping answers
+/// with what is known and what would establish the rest, rather than a 404 -
+/// the question "can my truck do this" has a useful answer even when "where
+/// does the setting live" does not.
+async fn read_feature(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<ToolResult>> {
+    Ok(Json(state.with_service(move |s| s.read_feature(&id, "user:api")).await?))
 }
 
 /// Evaluate a proposed configuration change. Sends nothing to the vehicle.

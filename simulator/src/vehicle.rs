@@ -24,6 +24,7 @@ use crate::scenario::{Scenario, ScenarioId};
 use crate::state::{encode_pid, VehicleState};
 use aim_protocols::{encode_supported_pids, Service};
 use aim_types::DtcStatus;
+use std::collections::BTreeMap;
 use std::time::Instant;
 
 /// A synthetic VIN with a valid SAE J272 check digit. Identifies no real
@@ -110,6 +111,18 @@ pub struct VirtualEcu {
     /// memory" versus "my fault memory is empty" — and both occur on real
     /// vehicles, so both are modelled.
     pub uds_faults: Option<Vec<[u8; 4]>>,
+    /// Configuration records this module serves to UDS `0x22` and accepts on
+    /// `0x2E`, keyed by data identifier.
+    ///
+    /// Deliberately raw bytes with no interpretation. The simulator has no idea
+    /// which bit means "fold the mirrors" and must not: that mapping lives in a
+    /// vehicle profile, and if the simulator knew it too there would be two
+    /// copies of the one fact this project is careful about, which is exactly
+    /// how a test comes to pass against a mapping that is wrong.
+    ///
+    /// An empty map means the module answers `0x22` with serviceNotSupported,
+    /// which is what most modules on most vehicles actually do.
+    pub config_records: BTreeMap<u16, Vec<u8>>,
 }
 
 impl VirtualEcu {
@@ -176,6 +189,7 @@ impl VirtualVehicle {
             runs_monitors: true,
             reports_vin: true,
             uds_faults: Some(Vec::new()),
+            config_records: BTreeMap::new(),
         };
         // Two further modules answer the standard broadcast. Their function is
         // not asserted: on a given vehicle 7EA and 7EB could be almost
@@ -193,6 +207,7 @@ impl VirtualVehicle {
             runs_monitors: false,
             reports_vin: false,
             uds_faults: Some(Vec::new()),
+            config_records: BTreeMap::new(),
         };
         let third = VirtualEcu {
             response_id: 0x7EB,
@@ -206,6 +221,7 @@ impl VirtualVehicle {
             runs_monitors: false,
             reports_vin: false,
             uds_faults: None,
+            config_records: BTreeMap::new(),
         };
 
         // Two modules outside the legislated emissions block, answering UDS and
@@ -243,6 +259,7 @@ impl VirtualVehicle {
                 // not currently failing — the common and confusing case.
                 [0xC1, 0x21, 0x87, 0x08],
             ]),
+            config_records: BTreeMap::new(),
         };
         let body = VirtualEcu {
             response_id: 0x7A8,
@@ -258,6 +275,18 @@ impl VirtualVehicle {
             // Present, healthy, and worth reporting as such: "we asked and it
             // said nothing is wrong" is a finding.
             uds_faults: Some(Vec::new()),
+            // A body module that holds configuration, which is what makes the
+            // whole read → change → read-back path exercisable with no vehicle.
+            //
+            // These bytes mean nothing here on purpose. The simulator does not
+            // know which bit is which feature and must not: that fact lives in
+            // a vehicle profile, and keeping the only copy there is what stops
+            // a test passing against a mapping that is wrong. A profile pointed
+            // at identifier 0xDE01 will find byte 3 sitting at 0b1011_0011.
+            config_records: BTreeMap::from([
+                (0xDE01u16, vec![0x00, 0x11, 0x22, 0b1011_0011, 0x44, 0x55]),
+                (0xDE02u16, vec![0x01, 0x00]),
+            ]),
         };
 
         VirtualVehicle {
@@ -310,6 +339,13 @@ impl VirtualVehicle {
         let mut replies = Vec::new();
         for i in addressed {
             if let Some(payload) = self.answer(&self.ecus[i], request, &state) {
+                // A configuration write that the module accepted actually
+                // changes it. Applied here because `answer` takes `&self` on
+                // purpose - one place mutates a module, and it is this one.
+                if request[0] == 0x2E && payload.first() == Some(&0x6E) && request.len() >= 3 {
+                    let did = u16::from_be_bytes([request[1], request[2]]);
+                    self.ecus[i].config_records.insert(did, request[3..].to_vec());
+                }
                 replies.push(EcuReply { response_id: self.ecus[i].response_id, payload });
             }
         }
@@ -482,6 +518,49 @@ impl VirtualVehicle {
                 // A module with no fault memory service. Common, and a
                 // different answer from "no faults".
                 Some(vec![0x7F, 0x19, 0x11])
+            }
+            // ReadDataByIdentifier. A module that has been given no
+            // configuration records answers serviceNotSupported, which is what
+            // most modules on most vehicles do.
+            None if service == 0x22 => {
+                let did = match request.get(1..3) {
+                    Some([hi, lo]) => u16::from_be_bytes([*hi, *lo]),
+                    // Malformed: a DID is two bytes and this was not.
+                    _ => return Some(vec![0x7F, 0x22, 0x13]),
+                };
+                match ecu.config_records.get(&did) {
+                    Some(record) => {
+                        let mut v = vec![0x62, (did >> 8) as u8, did as u8];
+                        v.extend_from_slice(record);
+                        Some(v)
+                    }
+                    None if ecu.config_records.is_empty() => Some(vec![0x7F, 0x22, 0x11]),
+                    // The module does configuration, but not this identifier.
+                    None => Some(vec![0x7F, 0x22, 0x31]),
+                }
+            }
+            // WriteDataByIdentifier. Deliberately strict about length: a real
+            // module rejects a record of the wrong size rather than accepting a
+            // truncated one, and an app that only ever meets a lenient
+            // simulator will not have handled the rejection.
+            None if service == 0x2E => {
+                let did = match request.get(1..3) {
+                    Some([hi, lo]) => u16::from_be_bytes([*hi, *lo]),
+                    _ => return Some(vec![0x7F, 0x2E, 0x13]),
+                };
+                let value = &request[3.min(request.len())..];
+                match ecu.config_records.get(&did) {
+                    None if ecu.config_records.is_empty() => Some(vec![0x7F, 0x2E, 0x11]),
+                    None => Some(vec![0x7F, 0x2E, 0x31]),
+                    Some(existing) if existing.len() != value.len() => {
+                        // incorrectMessageLengthOrInvalidFormat
+                        Some(vec![0x7F, 0x2E, 0x13])
+                    }
+                    // Accepted. The record itself is updated in `handle`,
+                    // which is the one place that may mutate a module - the
+                    // same arrangement service 04 uses.
+                    Some(_) => Some(vec![0x6E, (did >> 8) as u8, did as u8]),
+                }
             }
             None if ecu.reports_dtcs => Some(vec![0x7F, service, 0x11]),
             None => None,
