@@ -251,6 +251,10 @@ features:
     risk: convenience
     modules: [DDM, PDM]
     verification: verified
+    write_verification:
+      verification: verified
+      verified_on_vehicles: 1
+      source: "measured on my own truck"
     mapping:
       kind: as_built_bits
       block: "740-01"

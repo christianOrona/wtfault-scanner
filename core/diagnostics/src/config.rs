@@ -233,9 +233,19 @@ pub fn plan_change(
         )),
         FeatureSupport::ReadOnly => checks.push(Check::fail(
             "mapping_known",
-            "Do we know where this setting lives?",
-            "A mapping exists but has not been verified against a real vehicle. \
-             It can be used to read the current setting and never to change it.",
+            "Do we know where this setting lives, and that it can be changed?",
+            if f.verification == aim_types::VerificationStatus::Verified {
+                "Where this setting lives has been verified, so it can be read. Whether it \
+                 can be *changed* this way has not been: a module that will show you a \
+                 record does not necessarily accept a write to it, and some want an \
+                 extended session or security access first. That has to be established on \
+                 a vehicle and recorded before this app will attempt it."
+                    .to_string()
+            } else {
+                "A mapping exists but has not been verified against a real vehicle. It can \
+                 be used to read the current setting and never to change it."
+                    .to_string()
+            },
         )),
         FeatureSupport::Writable => {
             checks.push(Check::pass("mapping_known", "Do we know where this setting lives?"))
@@ -398,6 +408,20 @@ mod tests {
             requires: vec![],
             mapping,
             verification: v,
+            // These tests say "verified" meaning "fully verified", from before
+            // reading and writing had separate evidence. Writing needs its own
+            // now, so a `Verified` fixture carries both - otherwise every write
+            // test here would be asserting the read gate rather than the one it
+            // was written to exercise.
+            write_verification: (v == VerificationStatus::Verified).then(|| {
+                aim_decoders::OperationEvidence {
+                    verification: VerificationStatus::Verified,
+                    verified_on_vehicles: 1,
+                    source: Some("test".into()),
+                    last_verified: None,
+                    notes: None,
+                }
+            }),
             source: Some("test".into()),
             notes: None,
         }
