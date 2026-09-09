@@ -36,4 +36,6 @@ pub use replay::{Exchange, ReplayMode, ReplayTransport, Transcript};
 pub use scenario::{Scenario, ScenarioId, SimDtc, SimMonitorTest};
 pub use state::VehicleState;
 pub use transport::{SharedEmulator, SimulatedTransport};
-pub use vehicle::{EcuReply, TimeSource, VirtualEcu, VirtualVehicle, SIMULATED_VIN};
+pub use vehicle::{
+    ConfigWriteBehaviour, EcuReply, TimeSource, VirtualEcu, VirtualVehicle, SIMULATED_VIN,
+};
