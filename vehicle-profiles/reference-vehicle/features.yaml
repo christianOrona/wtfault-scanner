@@ -1,0 +1,76 @@
+# Configurable features on the built-in virtual vehicle.
+#
+# WHAT THIS FILE IS, AND WHAT IT IS NOT.
+#
+# It is a worked example of a complete, verified configuration capability, so
+# that the whole flow - read the current setting, show what would change, ask,
+# write, read back, verify - is exercisable by anyone who installs the app,
+# with no vehicle and no adapter.
+#
+# It is NOT a mapping for any real vehicle. Every entry here is scoped by exact
+# VIN to the simulated truck, which means it cannot match a real one even if
+# that truck is the same make, year and model. That scoping is the whole reason
+# this file is safe to ship with verified write evidence on it while every
+# real-vehicle mapping in this project is still null.
+#
+# If you are here looking for how to write a profile for your own vehicle, this
+# is the right shape to copy. What you must not copy is the numbers: the module
+# address, data identifier, byte and bit below are true of the simulator and of
+# nothing else. Measure your own, with the procedure in the app under
+# "capture configuration", and record where they came from.
+#
+# The app is not a Ford tool. The virtual vehicle is modelled on the truck this
+# project had access to for hardware testing, and the profile format, the
+# matching rules and the write path have nothing manufacturer-specific in them.
+
+version: 1
+profile: reference-vehicle
+
+features:
+  - id: reference_body_setting
+    name: "Example body setting"
+    risk: convenience
+
+    easy: >-
+      A comfort setting held in one of the smaller computers in the car, used
+      here to demonstrate what changing a setting looks like from start to
+      finish. It only exists on the practice vehicle built into this app, so
+      turning it on or off changes nothing about any real car.
+
+    technical: >-
+      A single configuration bit in a body module, reachable over the standard
+      ISO 14229 services: read with 0x22, written whole with 0x2E, verified by
+      reading it back. Present only on the built-in virtual vehicle.
+
+    modules: ["7A8"]
+
+    # The scoping that makes shipping this safe. An exact VIN match, and the
+    # VIN belongs to a vehicle that does not exist.
+    applies_to:
+      vins: ["1FT7W2BT6KEC00001"]
+
+    # Evidence for reading: where the setting lives.
+    verification: verified
+    source: "measured on the built-in virtual vehicle"
+
+    # Evidence for writing, which is a separate fact. On a real vehicle this is
+    # the part that takes a second tool and a careful afternoon; here it is
+    # simply true of the simulator.
+    write_verification:
+      verification: verified
+      verified_on_vehicles: 1
+      source: "measured on the built-in virtual vehicle"
+      last_verified: "2026-09-09"
+      notes: >-
+        Demonstrated end to end against the simulator, including the cases where
+        the module refuses the write and where it accepts the write and changes
+        nothing.
+
+    mapping:
+      kind: data_identifier_bits
+      module: 0x7A0
+      did: 0xDE01
+      byte: 3
+      mask: 0x04
+      on: 0x04
+      off: 0x00
