@@ -238,6 +238,26 @@ pub struct Applicability {
     /// World manufacturer identifier prefixes, e.g. `1FT`.
     #[serde(default)]
     pub wmi_prefixes: Vec<String>,
+    /// Exact vehicle identification numbers this applies to.
+    ///
+    /// The narrowest scope there is, and the honest one for a mapping measured
+    /// on exactly one vehicle. "Verified on one vehicle" and "verified on this
+    /// vehicle" are different claims, and until somebody confirms the second on
+    /// a second truck the first is the only one anybody can make.
+    ///
+    /// Also what lets a profile shipped for the built-in virtual vehicle stay
+    /// bound to it, rather than quietly matching a real one that happens to be
+    /// the same make and year.
+    #[serde(default)]
+    pub vins: Vec<String>,
+    /// Free-text platform label, e.g. a manufacturer's own name for a chassis.
+    ///
+    /// Carried for grouping and display, deliberately not used for matching:
+    /// platform naming is a manufacturer's own vocabulary and no two agree, so
+    /// letting it decide whether a write happens would be a guess wearing a
+    /// taxonomy.
+    #[serde(default)]
+    pub platform: Option<String>,
 }
 
 impl Applicability {
@@ -268,6 +288,17 @@ impl Applicability {
         if !self.wmi_prefixes.is_empty() {
             let v = vin.unwrap_or("");
             if v.len() >= 3 && !self.wmi_prefixes.iter().any(|p| v.starts_with(p.as_str())) {
+                return false;
+            }
+        }
+        // Exact VINs are the one constraint that fails closed on a missing
+        // value. Every other field here answers "could this apply", where an
+        // unknown year or make should not hide a feature. This one answers "was
+        // this measured on the vehicle in front of us", and an unidentified
+        // vehicle is not that vehicle.
+        if !self.vins.is_empty() {
+            let Some(v) = vin else { return false };
+            if !self.vins.iter().any(|x| x.eq_ignore_ascii_case(v)) {
                 return false;
             }
         }
@@ -369,11 +400,21 @@ pub struct FeatureCatalog {
 
 impl FeatureCatalog {
     /// Load the feature definitions embedded in the binary.
+    /// One file per manufacturer, plus the reference vehicle. Nothing here is
+    /// privileged over a profile a person drops in themselves: these are
+    /// loaded first and can be corrected or completed by a later file.
     pub fn embedded() -> AimResult<FeatureCatalog> {
         let mut c = FeatureCatalog::default();
         c.load_yaml(
             include_str!("../../../vehicle-profiles/ford/features.yaml"),
             "embedded:ford/features.yaml",
+        )?;
+        // Scoped by exact VIN to the vehicle that does not exist, which is what
+        // makes it safe to ship with verified write evidence while every real
+        // mapping in this project is still null.
+        c.load_yaml(
+            include_str!("../../../vehicle-profiles/reference-vehicle/features.yaml"),
+            "embedded:reference-vehicle/features.yaml",
         )?;
         Ok(c)
     }
@@ -462,12 +503,20 @@ mod tests {
     }
 
     #[test]
-    fn no_shipped_feature_claims_a_verified_mapping() {
-        // The honest position for this build. Every mapping here came from
-        // public description rather than from a vehicle this project has
-        // measured, so none of them may authorise a write. If this test ever
-        // fails, someone added a mapping without verifying it.
+    fn no_real_vehicle_feature_claims_a_verified_mapping() {
+        // The honest position for this build. Every real-vehicle mapping here
+        // came from public description rather than from a vehicle this project
+        // has measured, so none may authorise a write. If this fails, somebody
+        // added a mapping without measuring it.
+        //
+        // The one exemption is a feature scoped to specific VINs, which is how
+        // the reference profile for the built-in virtual vehicle ships with
+        // write evidence: an exact-VIN scope fails closed, so it cannot reach a
+        // real truck even of the same make, year and manufacturer prefix.
         for f in catalog().all() {
+            if !f.applies_to.vins.is_empty() {
+                continue;
+            }
             assert_ne!(f.support(), FeatureSupport::Writable, "{} claims a verified mapping", f.id);
         }
     }
@@ -559,6 +608,8 @@ features:
             makes: vec!["Ford".into()],
             model_years: Some([2017, 2022]),
             wmi_prefixes: vec!["1FT".into()],
+            vins: Vec::new(),
+            platform: None,
         };
         assert!(a.matches(Some("Ford Motor Company (US, truck)"), Some(2019), Some("1FT7W2BT")));
         assert!(!a.matches(Some("Toyota"), Some(2019), Some("JTD")));
@@ -737,5 +788,46 @@ features:
         let w = f.write_verification.expect("evidence");
         assert_eq!(w.verified_on_vehicles, 3);
         assert_eq!(w.last_verified.as_deref(), Some("2026-09-09"));
+    }
+}
+
+#[cfg(test)]
+mod reference_profile_tests {
+    use super::*;
+
+    fn reference() -> FeatureDef {
+        FeatureCatalog::embedded()
+            .expect("embedded catalogue loads")
+            .get("reference_body_setting")
+            .expect("the reference feature ships")
+            .clone()
+    }
+
+    /// The property that makes shipping a writable mapping safe at all.
+    ///
+    /// This profile carries verified write evidence, which every real-vehicle
+    /// mapping in this project deliberately does not. It is only defensible
+    /// because it cannot match a real vehicle - including one of the same make,
+    /// year and manufacturer prefix as the truck the simulator is modelled on.
+    #[test]
+    fn the_reference_profile_cannot_match_a_real_vehicle() {
+        let f = reference();
+        assert_eq!(f.support(), FeatureSupport::Writable, "it is writable on the sim");
+
+        // The simulated vehicle.
+        assert!(f.applies_to.matches(Some("Ford"), Some(2019), Some("1FT7W2BT6KEC00001")));
+
+        // A real truck of the same make, year and WMI. One digit of VIN apart,
+        // and that is the entire difference that must stop the write.
+        assert!(
+            !f.applies_to.matches(Some("Ford"), Some(2019), Some("1FT7W2BT6KEC00002")),
+            "a real vehicle must never pick up the reference mapping"
+        );
+
+        // And a vehicle nobody has identified is not the reference vehicle.
+        assert!(
+            !f.applies_to.matches(Some("Ford"), Some(2019), None),
+            "an unidentified vehicle must fail closed against an exact-VIN scope"
+        );
     }
 }
