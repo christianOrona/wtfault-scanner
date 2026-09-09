@@ -778,9 +778,13 @@ features:
     risk: convenience
     easy: "A comfort setting held in the body module."
     technical: "Bit 2 of byte 3 of data identifier DE01 on the module at 7A0."
-    modules: [BODY]
+    modules: ["7A8"]
     verification: verified
     source: "measured on the simulated vehicle"
+    write_verification:
+      verification: verified
+      verified_on_vehicles: 1
+      source: "measured on the simulated vehicle"
     mapping:
       kind: data_identifier_bits
       module: 0x7A0
@@ -842,4 +846,83 @@ fn an_unknown_feature_id_is_an_error_rather_than_an_invented_answer() {
     let r = service.read_feature("no_such_feature", USER);
     assert!(!r.success);
     assert_eq!(r.error.as_ref().unwrap().code, ErrorCode::NotFound);
+}
+
+/// The whole investigation procedure, end to end, with no mapping in hand at
+/// the start and a proposed one at the end.
+///
+/// This is the workflow that turns "nobody has measured where that bit lives"
+/// from a dead end into a job with four steps. The middle step - changing the
+/// setting with a tool that already knows how - is played here by writing the
+/// record directly, which is exactly what a known-good tool would have done.
+#[test]
+fn capturing_twice_around_a_change_identifies_the_bits_that_moved() {
+    let (mut service, _dir) = service_with_profile(MIRROR_PROFILE);
+    const BODY: u16 = 0x7A0;
+    const DID: u16 = 0xDE01;
+
+    // 1. Capture.
+    let before = service.capture_configuration(BODY, &[DID], Some("before".into()), USER);
+    assert!(before.success, "capture failed: {:?}", before.error);
+    let before_capture: aim_diagnostics::capture::ConfigCapture =
+        serde_json::from_value(before.data.as_ref().unwrap()["capture"].clone()).unwrap();
+    assert_eq!(before_capture.records[&DID], vec![0x00, 0x11, 0x22, 0xB3, 0x44, 0x55]);
+
+    // The write preconditions include "the vehicle is stationary", and an
+    // unread speed is not a stationary vehicle - the gate refuses on unknown
+    // rather than assuming zero, which is why this read is here rather than
+    // being something the test could skip.
+    service.scan_modules(USER);
+    let speed = service.read_pid("ECU_7E8", "vehicle_speed", USER);
+    assert!(speed.success, "reading speed failed: {:?}", speed.error);
+
+    // The body module answers UDS but not the emissions services, so the
+    // legislated scan does not see it. This is the whole reason the full scan
+    // exists, and the write gate requires the owning module to have actually
+    // answered rather than being assumed present.
+    let all = service.scan_all_modules(USER);
+    assert!(all.success, "full scan failed: {:?}", all.error);
+
+    // 2. Somebody changes the setting with another tool. Bit 2 of byte 3.
+    let changed = service.apply_configuration_change(
+        "test_body_setting",
+        aim_diagnostics::DesiredValue::On,
+        USER,
+        "the-owner",
+    );
+    assert!(changed.success, "the change failed: {:?}", changed.error);
+
+    // 3. Capture again.
+    let after = service.capture_configuration(BODY, &[DID], Some("after".into()), USER);
+    assert!(after.success);
+    let after_capture: aim_diagnostics::capture::ConfigCapture =
+        serde_json::from_value(after.data.as_ref().unwrap()["capture"].clone()).unwrap();
+
+    // 4. Exactly one byte moved, and only the bit that actually changed is
+    //    claimed by the mapping it proposes.
+    let d = aim_diagnostics::capture::diff(&before_capture, &after_capture);
+    assert!(d.is_unambiguous(), "expected one byte to move, got {:?}", d.changes);
+    let c = &d.changes[0];
+    assert_eq!(c.byte, 3);
+    assert_eq!(c.before, 0xB3);
+    assert_eq!(c.after, 0xB7);
+    assert_eq!(c.changed_mask, 0x04, "only bit 2, not the whole byte");
+
+    match c.as_mapping(BODY, true) {
+        aim_decoders::Mapping::DataIdentifierBits { module, did, byte, mask, on, off } => {
+            assert_eq!((module, did, byte, mask, on, off), (BODY, DID, 3, 0x04, 0x04, 0x00));
+        }
+        other => panic!("wrong mapping kind: {other:?}"),
+    }
+}
+
+/// A module that holds none of the requested identifiers is an error with a
+/// reason, not an empty success that reads as "your module has no settings".
+#[test]
+fn capturing_from_a_module_that_holds_nothing_says_so() {
+    let (mut service, _dir) = service_with_profile(MIRROR_PROFILE);
+    // The engine controller answers plenty, but holds no configuration records.
+    let r = service.capture_configuration(0x7E0, &[0xDE01], None, USER);
+    assert!(!r.success);
+    assert_eq!(r.error.as_ref().unwrap().code, aim_types::ErrorCode::NoData);
 }
