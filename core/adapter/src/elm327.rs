@@ -460,7 +460,12 @@ impl Elm327Adapter {
             self.set_header(&RequestTarget::Functional)?;
 
             let r = self.send_raw(&probe.to_elm_command(), self.config.request_timeout)?;
-            if r.class.is_success() {
+            // Only actual data proves a protocol. `is_success()` also admits
+            // Ok and Info, and an adapter says plenty of non-error things on a
+            // protocol the vehicle does not speak - init banners, prompts,
+            // anything unrecognised. Accepting those picks the first protocol
+            // that fails politely instead of the one the vehicle answers on.
+            if matches!(r.class, ResponseClass::Data) {
                 let found = ObdProtocol::from_elm_id(id);
                 self.caps.add_caveat(format!(
                     "automatic protocol detection (ATSP0) failed; {} was found by trying each \

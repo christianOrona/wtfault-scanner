@@ -553,3 +553,68 @@ button.mini {
   color: var(--accent);
   text-shadow: 0 0 18px var(--accent-glow);
 }
+
+/* ---------- about ----------
+
+   Deliberately narrow and centred. This is the one screen in the app that is
+   read once and then never again, so it gets less room than anything that is
+   read every session. */
+
+.about-dialog {
+  width: min(400px, 100%);
+  text-align: center;
+  padding: 26px 24px 18px;
+}
+.about-icon {
+  width: 76px;
+  height: 76px;
+  margin: 0 auto 12px;
+  display: block;
+  border-radius: 16px;
+}
+.about-name { font-size: 17px; font-weight: 600; letter-spacing: 0.01em; }
+.about-tagline {
+  font-style: italic;
+  color: var(--text-faint);
+  font-size: 12.5px;
+  margin-top: 3px;
+}
+
+.about-facts {
+  margin: 18px 0 16px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  padding: 12px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  text-align: left;
+}
+.about-facts > div { display: flex; justify-content: space-between; gap: 14px; }
+/* The database path is long and must not widen the dialog. */
+.about-path { word-break: break-all; text-align: right; font-size: 11px; }
+
+.about-links { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+.about-link {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  text-decoration: none;
+  color: var(--text);
+  background: var(--bg-sunken, transparent);
+}
+.about-link:hover { border-color: var(--accent); }
+
+.about-more { margin-top: 16px; text-align: left; }
+.about-more > summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-faint);
+  list-style: none;
+}
+.about-more > summary::before { content: "▸ "; }
+.about-more[open] > summary::before { content: "▾ "; }
+.about-more > summary:hover { color: var(--text); }
+.about-more p { font-size: 12px; color: var(--text-faint); line-height: 1.5; }

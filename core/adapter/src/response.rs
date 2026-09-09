@@ -179,6 +179,17 @@ fn classify(lines: &[String], terminated: bool) -> ResponseClass {
         if l.contains("STOPPED") {
             return ResponseClass::Stopped;
         }
+        // "BUS INIT: ...ERROR" and "BUS INIT: ERROR" are how an ELM327 reports
+        // that the slow or fast initialisation sequence on ISO 9141-2 and
+        // KWP2000 failed. None of the checks below catch it: it does not
+        // contain "BUS ERROR", it is not equal to "ERROR", and it starts with
+        // "BUS" rather than "ERR". It therefore used to fall all the way
+        // through to Info, which counts as success - so a protocol sweep would
+        // accept a protocol whose bus init had just failed and stop looking.
+        // That is how a CAN-only vehicle gets diagnosed as ISO 9141-2.
+        if l.contains("BUS INIT") && l.contains("ERROR") {
+            return ResponseClass::BusError;
+        }
         if l.contains("BUS BUSY")
             || l.contains("BUS ERROR")
             || l.contains("CAN ERROR")
@@ -315,6 +326,29 @@ mod tests {
         );
         assert_eq!(r.class, ResponseClass::Data);
         assert_eq!(r.lines.len(), 3);
+    }
+
+    #[test]
+    fn a_failed_bus_init_is_a_bus_error_not_an_informational_banner() {
+        // The string a real ELM327 produced on a 2023 Honda while the app was
+        // sweeping protocols. It used to classify as Info, and Info counts as
+        // success, so the sweep accepted ISO 9141-2 on a CAN-only vehicle and
+        // stopped before trying anything that would have worked.
+        for text in [
+            "BUS INIT: ...ERROR\r\r>",
+            "BUS INIT: ERROR\r\r>",
+            "BUS INIT:ERROR\r\r>",
+        ] {
+            let r = p("0902", text);
+            assert_eq!(r.class, ResponseClass::BusError, "{text:?}");
+            assert!(!r.class.is_success(), "{text:?} must not count as success");
+        }
+    }
+
+    #[test]
+    fn a_successful_bus_init_is_not_mistaken_for_a_failure() {
+        let r = p("0100", "BUS INIT: ...OK\r41 00 BE 3F A8 13\r\r>");
+        assert_eq!(r.class, ResponseClass::Data);
     }
 
     #[test]

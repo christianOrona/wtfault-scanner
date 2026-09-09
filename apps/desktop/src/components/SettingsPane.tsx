@@ -9,6 +9,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, describeError, type ProviderInput } from "../api/client";
 import type { ProbeResult, ProfilesResponse, ProviderKindId, ProviderView, ProvidersResponse, ScanPurpose, Tone, Health } from "../api/types";
 import { LINKEDIN_URL, PRODUCT_NAME, REPO_URL, TAGLINE } from "../branding";
+import appIcon from "../assets/icon.png";
 import { ErrorBanner, Spinner } from "./primitives";
 
 const BLANK: ProviderInput = {
@@ -615,72 +616,116 @@ function AgentVoice({
  * summary — what it reads, what it refuses, and where the data lives.
  */
 function About({ health }: { health: Health | null }) {
+  const [open, setOpen] = useState(false);
   return (
     <div className="section" style={{ marginTop: 26 }}>
-      <h2>About</h2>
-      <div className="card">
-        <div style={{ fontSize: 15, fontWeight: 600 }}>{PRODUCT_NAME}</div>
-        <div className="explain" style={{ fontStyle: "italic" }}>{TAGLINE}</div>
+      <div className="row" style={{ gap: 10, alignItems: "center" }}>
+        <button onClick={() => setOpen(true)}>About {PRODUCT_NAME}</button>
+        <span className="faint" style={{ fontSize: 12 }}>
+          version {health?.build_version ?? "?"}
+        </span>
+      </div>
+      {open && <AboutDialog health={health} onClose={() => setOpen(false)} />}
+    </div>
+  );
+}
 
-        <div className="explain" style={{ marginTop: 12 }}>
-          An OBD-II scanner with a language model attached. It reads trouble codes from every
-          module that answers, the vehicle's own emissions self-tests and how close each one
-          is to failing, live sensor data, freeze frames, and the history since the codes
-          were last cleared — then explains all of it in plain language.
+/**
+ * The About box, deliberately small.
+ *
+ * It used to be four paragraphs and a table sitting permanently at the bottom
+ * of Settings, which is a lot of screen for something read once. The honest
+ * content did not deserve deleting, so it moved behind a disclosure rather
+ * than out of the app: what it refuses to do and where your data lives are
+ * still one click away, they are simply no longer shouted every visit.
+ */
+function AboutDialog({ health, onClose }: { health: Health | null; onClose: () => void }) {
+  return (
+    <div className="overlay" onClick={onClose}>
+      <div className="dialog about-dialog" onClick={(e) => e.stopPropagation()}>
+        <img src={appIcon} alt="" className="about-icon" />
+        <div className="about-name">{PRODUCT_NAME}</div>
+        <div className="about-tagline">{TAGLINE}</div>
+
+        <div className="about-facts">
+          <div><span className="faint">Version</span><span className="mono">{health?.build_version ?? "?"}</span></div>
+          <div><span className="faint">Database schema</span><span className="mono">{health?.schema_version ?? "?"}</span></div>
+          <div>
+            <span className="faint">Scans stored in</span>
+            <span className="mono about-path">{health?.database ?? "in memory"}</span>
+          </div>
         </div>
 
-        <div className="explain" style={{ marginTop: 10 }}>
-          <strong>What it will not do.</strong> It does not write configuration, program
-          modules, or touch anything to do with immobilisers or keys. Clearing trouble codes
-          is the single exception and needs typing a confirmation. It will not invent a
-          reading: every number on screen can show you the exact exchange with the vehicle
-          that produced it, and anything from the model's general knowledge rather than from
-          your car is labelled as such.
+        <div className="about-links">
+          <ExternalLink href={REPO_URL} label="Source code" />
+          <ExternalLink href={LINKEDIN_URL} label="Author" />
         </div>
 
-        <div className="explain" style={{ marginTop: 10 }}>
-          <strong>Where your data is.</strong> Scans are stored on this machine only. API
-          keys sit in a file in your own profile, in plain text, readable by your Windows
-          account — the OS credential store would be better and is not implemented. Nothing
-          is uploaded anywhere except the questions you ask a hosted model, if you have
-          configured one.
-        </div>
+        <details className="about-more">
+          <summary>What it does, and what it refuses to do</summary>
+          <p>
+            An OBD-II scanner with a language model attached. It reads trouble codes from
+            every module that answers, the vehicle's own emissions self-tests and how close
+            each one is to failing, live sensor data, freeze frames, and the history since
+            the codes were last cleared — then explains all of it in plain language.
+          </p>
+          <p>
+            <strong>What it will not do.</strong> It does not write configuration, program
+            modules, or touch anything to do with immobilisers or keys. Clearing trouble
+            codes is the single exception and needs typing a confirmation. It will not
+            invent a reading: every number on screen can show you the exact exchange with
+            the vehicle that produced it, and anything from the model's general knowledge
+            rather than from your car is labelled as such.
+          </p>
+          <p>
+            <strong>Where your data is.</strong> Scans are stored on this machine only. API
+            keys sit in a file in your own profile, in plain text, readable by your Windows
+            account — the OS credential store would be better and is not implemented.
+            Nothing is uploaded anywhere except the questions you ask a hosted model, if you
+            have configured one.
+          </p>
+        </details>
 
-        <table style={{ marginTop: 12 }}>
-          <tbody>
-            <tr><td className="faint">Version</td><td className="mono">{health?.build_version ?? "?"}</td></tr>
-            <tr><td className="faint">Database schema</td><td className="mono">{health?.schema_version ?? "?"}</td></tr>
-            <tr>
-              <td className="faint">Scans stored in</td>
-              <td className="mono" style={{ wordBreak: "break-all" }}>{health?.database ?? "in memory"}</td>
-            </tr>
-            <tr>
-              <td className="faint">Source</td>
-              <td><ExternalLink href={REPO_URL} /></td>
-            </tr>
-            <tr>
-              <td className="faint">Author</td>
-              <td><ExternalLink href={LINKEDIN_URL} /></td>
-            </tr>
-          </tbody>
-        </table>
+        <div className="row" style={{ justifyContent: "flex-end", marginTop: 16 }}>
+          <button onClick={onClose}>Close</button>
+        </div>
       </div>
     </div>
   );
 }
 
 /**
- * A link, or an honest gap.
+ * A link out of the app, with a fallback for when that is not possible.
  *
- * An About box with a dead link in it is worse than one with a visible blank:
- * the blank tells you it has not been set, the dead link wastes a click and
- * makes the whole box look unmaintained. Set both in `src/branding.ts`.
+ * A webview is not a browser: `target="_blank"` can silently do nothing, which
+ * is exactly how the export button failed earlier in this project. So the click
+ * is attempted, and if the window does not open the URL goes to the clipboard
+ * instead and the button says so. Either way the person ends up able to reach
+ * the page, and neither path lies about which one happened.
  */
-function ExternalLink({ href }: { href: string | null }) {
-  if (!href) return <span className="faint">not set yet</span>;
+function ExternalLink({ href, label }: { href: string | null; label: string }) {
+  const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
+  if (!href) {
+    return <span className="faint">{label}: not set yet</span>;
+  }
+
+  const click = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    const w = window.open(href, "_blank", "noopener,noreferrer");
+    if (w) return;
+    try {
+      await navigator.clipboard.writeText(href);
+      setState("copied");
+    } catch {
+      setState("failed");
+    }
+  };
+
   return (
-    <a href={href} target="_blank" rel="noreferrer noopener" className="mono">
-      {href.replace(/^https?:\/\//, "")}
+    <a href={href} onClick={click} className="about-link" title={href}>
+      {state === "copied" ? "Link copied — paste it in your browser" : null}
+      {state === "failed" ? `${label}: ${href}` : null}
+      {state === "idle" ? `${label} ↗` : null}
     </a>
   );
 }
