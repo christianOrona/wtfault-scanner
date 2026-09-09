@@ -137,11 +137,12 @@ pub async fn update_provider(
     Json(body): Json<ProviderBody>,
 ) -> ApiResult<Json<Value>> {
     let mut settings = state.settings.load().map_err(agent_error)?;
-    let existing = settings
-        .providers
-        .iter_mut()
-        .find(|p| p.id == id)
-        .ok_or_else(|| ApiError::new(aim_types::AimError::new(aim_types::ErrorCode::NotFound, format!("no provider {id:?}"))))?;
+    let existing = settings.providers.iter_mut().find(|p| p.id == id).ok_or_else(|| {
+        ApiError::new(aim_types::AimError::new(
+            aim_types::ErrorCode::NotFound,
+            format!("no provider {id:?}"),
+        ))
+    })?;
 
     existing.kind = body.kind;
     existing.label = body.label.trim().to_string();
@@ -176,7 +177,10 @@ pub async fn delete_provider(
     let before = settings.providers.len();
     settings.providers.retain(|p| p.id != id);
     if settings.providers.len() == before {
-        return Err(ApiError::new(aim_types::AimError::new(aim_types::ErrorCode::NotFound, format!("no provider {id:?}"))));
+        return Err(ApiError::new(aim_types::AimError::new(
+            aim_types::ErrorCode::NotFound,
+            format!("no provider {id:?}"),
+        )));
     }
     if settings.selected.as_deref() == Some(id.as_str()) {
         settings.selected = settings.providers.first().map(|p| p.id.clone());
@@ -192,7 +196,10 @@ pub async fn select_provider(
 ) -> ApiResult<Json<Value>> {
     let mut settings = state.settings.load().map_err(agent_error)?;
     if !settings.providers.iter().any(|p| p.id == id) {
-        return Err(ApiError::new(aim_types::AimError::new(aim_types::ErrorCode::NotFound, format!("no provider {id:?}"))));
+        return Err(ApiError::new(aim_types::AimError::new(
+            aim_types::ErrorCode::NotFound,
+            format!("no provider {id:?}"),
+        )));
     }
     settings.selected = Some(id);
     state.settings.save(&settings).map_err(agent_error)?;
@@ -208,11 +215,12 @@ pub async fn test_provider(
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
     let settings = state.settings.load().map_err(agent_error)?;
-    let config = settings
-        .providers
-        .iter()
-        .find(|p| p.id == id)
-        .ok_or_else(|| ApiError::new(aim_types::AimError::new(aim_types::ErrorCode::NotFound, format!("no provider {id:?}"))))?;
+    let config = settings.providers.iter().find(|p| p.id == id).ok_or_else(|| {
+        ApiError::new(aim_types::AimError::new(
+            aim_types::ErrorCode::NotFound,
+            format!("no provider {id:?}"),
+        ))
+    })?;
 
     let provider = match config.build() {
         Ok(p) => p,
@@ -280,9 +288,7 @@ pub async fn inspect(
         .unwrap_or_else(|| DEFAULT_INSPECTION.to_string());
 
     let mut sink = RecordingSink::default();
-    let outcome = agent::run_inspection(&state, &request, &mut sink)
-        .await
-        .map_err(agent_error)?;
+    let outcome = agent::run_inspection(&state, &request, &mut sink).await.map_err(agent_error)?;
 
     Ok(Json(json!({
         "report": outcome.report,
@@ -333,9 +339,7 @@ pub async fn messages(
         .collect();
 
     let mut sink = RecordingSink::default();
-    let outcome = agent::run_chat(&state, history, &mut sink)
-        .await
-        .map_err(agent_error)?;
+    let outcome = agent::run_chat(&state, history, &mut sink).await.map_err(agent_error)?;
 
     Ok(Json(json!({
         "text": outcome.text,
@@ -367,10 +371,8 @@ fn trace_of(sink: &RecordingSink) -> Vec<Value> {
 /// A short random id without pulling in a dependency for it.
 fn fastrand_id() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0);
+    let nanos =
+        SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0);
     // Mix so consecutive calls do not produce near-identical ids.
     let mut x = nanos ^ 0x9E37_79B9_7F4A_7C15;
     x ^= x >> 30;

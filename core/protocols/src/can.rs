@@ -58,12 +58,12 @@ impl CanId {
     pub fn parse_hex(s: &str) -> AimResult<CanId> {
         let t = s.trim();
         match t.len() {
-            3 => u16::from_str_radix(t, 16)
-                .map(CanId::Standard)
-                .map_err(|e| bad(t, &e.to_string())),
-            8 => u32::from_str_radix(t, 16)
-                .map(CanId::Extended)
-                .map_err(|e| bad(t, &e.to_string())),
+            3 => {
+                u16::from_str_radix(t, 16).map(CanId::Standard).map_err(|e| bad(t, &e.to_string()))
+            }
+            8 => {
+                u32::from_str_radix(t, 16).map(CanId::Extended).map_err(|e| bad(t, &e.to_string()))
+            }
             _ => Err(bad(t, "expected 3 or 8 hex digits")),
         }
     }
@@ -73,7 +73,8 @@ impl CanId {
     pub fn obd_response_to_request(&self) -> Option<CanId> {
         match self {
             CanId::Standard(v)
-                if (OBD_PHYSICAL_RESPONSE_BASE..OBD_PHYSICAL_RESPONSE_BASE + OBD_PHYSICAL_COUNT)
+                if (OBD_PHYSICAL_RESPONSE_BASE
+                    ..OBD_PHYSICAL_RESPONSE_BASE + OBD_PHYSICAL_COUNT)
                     .contains(v) =>
             {
                 Some(CanId::Standard(v - OBD_PHYSICAL_COUNT))
@@ -171,14 +172,8 @@ mod tests {
     #[test]
     fn header_width_selects_the_id_type() {
         assert_eq!(CanId::parse_hex("7E8").unwrap(), CanId::Standard(0x7E8));
-        assert_eq!(
-            CanId::parse_hex("18DAF110").unwrap(),
-            CanId::Extended(0x18DAF110)
-        );
-        assert_eq!(
-            CanId::parse_hex("7E").unwrap_err().code,
-            ErrorCode::ProtocolMalformedResponse
-        );
+        assert_eq!(CanId::parse_hex("18DAF110").unwrap(), CanId::Extended(0x18DAF110));
+        assert_eq!(CanId::parse_hex("7E").unwrap_err().code, ErrorCode::ProtocolMalformedResponse);
         assert!(CanId::parse_hex("ZZZ").is_err());
     }
 
@@ -212,9 +207,7 @@ mod tests {
 
     #[test]
     fn padding_fills_to_eight_bytes() {
-        let f = CanFrame::new(CanId::Standard(0x7DF), vec![0x02, 0x01, 0x0C])
-            .unwrap()
-            .padded(0x55);
+        let f = CanFrame::new(CanId::Standard(0x7DF), vec![0x02, 0x01, 0x0C]).unwrap().padded(0x55);
         assert_eq!(f.data, vec![0x02, 0x01, 0x0C, 0x55, 0x55, 0x55, 0x55, 0x55]);
     }
 

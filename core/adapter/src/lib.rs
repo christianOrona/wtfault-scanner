@@ -62,14 +62,15 @@ impl RequestTarget {
     /// guessing.
     pub fn from_response_address(address: &str) -> Option<RequestTarget> {
         let id = aim_protocols::CanId::parse_hex(address).ok()?;
-        id.obd_response_to_request()
-            .map(|req| RequestTarget::Physical(req.to_hex()))
+        id.obd_response_to_request().map(|req| RequestTarget::Physical(req.to_hex()))
     }
 
     /// The adapter header this target sets.
     pub fn header(&self) -> String {
         match self {
-            RequestTarget::Functional => format!("{:03X}", aim_protocols::OBD_FUNCTIONAL_REQUEST_ID),
+            RequestTarget::Functional => {
+                format!("{:03X}", aim_protocols::OBD_FUNCTIONAL_REQUEST_ID)
+            }
             RequestTarget::Physical(h) => h.clone(),
         }
     }

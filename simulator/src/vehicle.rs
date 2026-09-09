@@ -54,17 +54,12 @@ impl TimeSource {
     /// The default deterministic clock: a quarter second of simulated time per
     /// request.
     pub fn deterministic() -> Self {
-        TimeSource::Ticks {
-            tick: 0,
-            ms_per_tick: 250,
-        }
+        TimeSource::Ticks { tick: 0, ms_per_tick: 250 }
     }
 
     /// A wall-clock source starting now.
     pub fn wall() -> Self {
-        TimeSource::Wall {
-            started: Instant::now(),
-        }
+        TimeSource::Wall { started: Instant::now() }
     }
 
     fn advance(&mut self) {
@@ -172,9 +167,9 @@ impl VirtualVehicle {
             // reports each one inside the preceding mask so a tool can walk
             // the chain, and so does this one.
             supported_service01: vec![
-                0x01, 0x03, 0x04, 0x05, 0x0B, 0x0C, 0x0D, 0x0F, 0x10, 0x11, 0x1C, 0x1F, 0x20,
-                0x21, 0x23, 0x2C, 0x2D, 0x2F, 0x30, 0x31, 0x33, 0x40, 0x42, 0x43, 0x45, 0x46,
-                0x49, 0x4A, 0x51, 0x5A, 0x5C, 0x5E, 0x60, 0x61, 0x62, 0x63, 0x78, 0x7C,
+                0x01, 0x03, 0x04, 0x05, 0x0B, 0x0C, 0x0D, 0x0F, 0x10, 0x11, 0x1C, 0x1F, 0x20, 0x21,
+                0x23, 0x2C, 0x2D, 0x2F, 0x30, 0x31, 0x33, 0x40, 0x42, 0x43, 0x45, 0x46, 0x49, 0x4A,
+                0x51, 0x5A, 0x5C, 0x5E, 0x60, 0x61, 0x62, 0x63, 0x78, 0x7C,
             ],
             supported_service09: vec![0x02, 0x04, 0x06, 0x0A],
             reports_dtcs: true,
@@ -315,10 +310,7 @@ impl VirtualVehicle {
         let mut replies = Vec::new();
         for i in addressed {
             if let Some(payload) = self.answer(&self.ecus[i], request, &state) {
-                replies.push(EcuReply {
-                    response_id: self.ecus[i].response_id,
-                    payload,
-                });
+                replies.push(EcuReply { response_id: self.ecus[i].response_id, payload });
             }
         }
 
@@ -391,10 +383,7 @@ impl VirtualVehicle {
                     let supported = self.supported_mids();
                     // As with service 01, a mask with nothing above it is not
                     // answered at all rather than answered with zeroes.
-                    if !supported
-                        .iter()
-                        .any(|m| *m > mid && *m <= mid.saturating_add(32))
-                    {
+                    if !supported.iter().any(|m| *m > mid && *m <= mid.saturating_add(32)) {
                         return None;
                     }
                     let mask = encode_supported_pids(mid, &supported);
@@ -405,12 +394,8 @@ impl VirtualVehicle {
                 // Every test for this monitor comes back in one response, and
                 // each record restates the monitor id — including the first,
                 // whose id doubles as the response's echoed byte.
-                let tests: Vec<_> = self
-                    .scenario
-                    .monitor_tests
-                    .iter()
-                    .filter(|t| t.mid == mid)
-                    .collect();
+                let tests: Vec<_> =
+                    self.scenario.monitor_tests.iter().filter(|t| t.mid == mid).collect();
                 if tests.is_empty() {
                     return None;
                 }
@@ -524,11 +509,8 @@ impl VirtualVehicle {
         if !ecu.reports_dtcs {
             return None;
         }
-        let codes: Vec<&crate::scenario::SimDtc> = if self.dtcs_cleared {
-            Vec::new()
-        } else {
-            self.scenario.dtcs_with_status(status)
-        };
+        let codes: Vec<&crate::scenario::SimDtc> =
+            if self.dtcs_cleared { Vec::new() } else { self.scenario.dtcs_with_status(status) };
         // ISO 15765-4 puts a code count between the service byte and the
         // codes; the pre-CAN protocols do not. This vehicle speaks CAN.
         let mut v = vec![response, codes.len() as u8];
@@ -728,5 +710,4 @@ mod tests {
         let cvn = v.handle(0x7E0, &[0x09, 0x06]).remove(0).payload;
         assert_eq!(cvn.len(), 3 + 4);
     }
-
 }

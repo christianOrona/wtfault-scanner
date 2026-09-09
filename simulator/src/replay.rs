@@ -63,10 +63,7 @@ impl Transcript {
                 if let Some(prev) = current.take() {
                     t.exchanges.push(prev);
                 }
-                current = Some(Exchange {
-                    command: cmd.trim().to_string(),
-                    lines: Vec::new(),
-                });
+                current = Some(Exchange { command: cmd.trim().to_string(), lines: Vec::new() });
             } else if let Some(reply) = trimmed.strip_prefix('<') {
                 match current.as_mut() {
                     Some(e) => e.lines.push(reply.trim().to_string()),
@@ -172,11 +169,7 @@ impl ReplayTransport {
     pub fn from_file(path: impl AsRef<std::path::Path>, mode: ReplayMode) -> AimResult<Self> {
         let p = path.as_ref();
         let descriptor = format!("replay:{}", p.display());
-        Ok(ReplayTransport::new(
-            Transcript::from_file(p)?,
-            mode,
-            descriptor,
-        ))
+        Ok(ReplayTransport::new(Transcript::from_file(p)?, mode, descriptor))
     }
 
     /// True when every recorded exchange has been replayed.
@@ -216,12 +209,7 @@ impl ReplayTransport {
                 Ok(next.lines.clone())
             }
             ReplayMode::Lookup => {
-                match self
-                    .transcript
-                    .exchanges
-                    .iter()
-                    .find(|e| normalize(&e.command) == wanted)
-                {
+                match self.transcript.exchanges.iter().find(|e| normalize(&e.command) == wanted) {
                     Some(e) => Ok(e.lines.clone()),
                     None => {
                         self.misses.push(command.to_string());
@@ -237,11 +225,7 @@ impl ReplayTransport {
 }
 
 fn normalize(command: &str) -> String {
-    command
-        .chars()
-        .filter(|c| !c.is_whitespace())
-        .collect::<String>()
-        .to_ascii_uppercase()
+    command.chars().filter(|c| !c.is_whitespace()).collect::<String>().to_ascii_uppercase()
 }
 
 impl Transport for ReplayTransport {

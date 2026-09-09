@@ -110,10 +110,7 @@ impl ObdProtocol {
 
     /// True when this CAN variant uses 29-bit identifiers.
     pub fn is_29_bit(&self) -> bool {
-        matches!(
-            self,
-            ObdProtocol::Iso15765Can29_500 | ObdProtocol::Iso15765Can29_250
-        )
+        matches!(self, ObdProtocol::Iso15765Can29_500 | ObdProtocol::Iso15765Can29_250)
     }
 
     /// Human-readable protocol name (safe to log; not a UI string).
@@ -201,11 +198,8 @@ impl AdapterCapabilities {
         // Fall back to something an ELM327 clone manages when nothing has been
         // measured yet. A default is not a limit: it is replaced the moment the
         // adapter reports what it actually did.
-        let per_second = if self.max_reliable_throughput > 0.1 {
-            self.max_reliable_throughput
-        } else {
-            14.0
-        };
+        let per_second =
+            if self.max_reliable_throughput > 0.1 { self.max_reliable_throughput } else { 14.0 };
         let one = std::time::Duration::from_secs_f64(1.0 / per_second);
         RequestBudget {
             // Silence is the common answer during discovery, so this only has
@@ -300,10 +294,7 @@ pub enum ConnectionState {
 impl ConnectionState {
     /// True when diagnostic requests may be issued.
     pub fn is_usable(&self) -> bool {
-        matches!(
-            self,
-            ConnectionState::Ready | ConnectionState::Degraded { .. }
-        )
+        matches!(self, ConnectionState::Ready | ConnectionState::Degraded { .. })
     }
 
     /// Short stable discriminant, used in the event log and API payloads.

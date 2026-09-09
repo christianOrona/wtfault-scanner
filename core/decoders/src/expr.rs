@@ -237,10 +237,7 @@ fn tokenize(s: &str) -> AimResult<Vec<Token>> {
         }
     }
     if out.is_empty() {
-        return Err(AimError::new(
-            ErrorCode::DecoderInputInvalid,
-            format!("empty formula {s:?}"),
-        ));
+        return Err(AimError::new(ErrorCode::DecoderInputInvalid, format!("empty formula {s:?}")));
     }
     Ok(out)
 }
@@ -253,10 +250,7 @@ struct Parser<'a> {
 
 impl Parser<'_> {
     fn err(&self, msg: String) -> AimError {
-        AimError::new(
-            ErrorCode::DecoderInputInvalid,
-            format!("formula {:?}: {msg}", self.source),
-        )
+        AimError::new(ErrorCode::DecoderInputInvalid, format!("formula {:?}: {msg}", self.source))
     }
 
     fn peek(&self) -> Option<&Token> {
@@ -418,23 +412,10 @@ mod tests {
 
     #[test]
     fn bad_formulas_fail_at_parse_time() {
-        for src in [
-            "",
-            "  ",
-            "A +",
-            "(A",
-            "A)",
-            "A $ B",
-            "rpm(A)",
-            "Z + 1",
-            "min(A)",
-            "min A, B",
-            "A B",
-        ] {
-            assert!(
-                Formula::parse(src).is_err(),
-                "expected {src:?} to be rejected"
-            );
+        for src in
+            ["", "  ", "A +", "(A", "A)", "A $ B", "rpm(A)", "Z + 1", "min(A)", "min A, B", "A B"]
+        {
+            assert!(Formula::parse(src).is_err(), "expected {src:?} to be rejected");
         }
     }
 

@@ -163,17 +163,12 @@ impl AppState {
     /// Refuses when something is already connected: silently dropping a live
     /// session would orphan its flight recorder mid-scan.
     pub async fn connect(&self, request: ConnectRequest) -> ApiResult<aim_types::ToolResult> {
-        let already = self
-            .peek_service(|s| s.state().is_usable())
-            .await?
-            .unwrap_or(false);
+        let already = self.peek_service(|s| s.state().is_usable()).await?.unwrap_or(false);
         if already {
-            return Err(ApiError::new(
-                AimError::new(
-                    ErrorCode::AdapterBusy,
-                    "an adapter is already connected; disconnect before connecting again",
-                ),
-            ));
+            return Err(ApiError::new(AimError::new(
+                ErrorCode::AdapterBusy,
+                "an adapter is already connected; disconnect before connecting again",
+            )));
         }
 
         let config = Arc::clone(&self.config);
@@ -239,10 +234,7 @@ fn build_adapter(
             let transport =
                 SimulatedTransport::with_personality(scenario, config.personality.build())
                     .with_latency(config.simulator_latency);
-            Ok(Box::new(Elm327Adapter::new(
-                Box::new(transport),
-                Elm327Config::fast(),
-            )))
+            Ok(Box::new(Elm327Adapter::new(Box::new(transport), Elm327Config::fast())))
         }
         TransportChoice::Serial => {
             let port = port.ok_or_else(|| {
@@ -287,10 +279,7 @@ fn build_serial_adapter(port: &str) -> ApiResult<Box<dyn DiagnosticAdapter>> {
     }
 
     let transport = SerialTransport::new(config);
-    Ok(Box::new(Elm327Adapter::new(
-        Box::new(transport),
-        Elm327Config::default(),
-    )))
+    Ok(Box::new(Elm327Adapter::new(Box::new(transport), Elm327Config::default())))
 }
 
 #[cfg(not(feature = "serial"))]

@@ -243,24 +243,15 @@ impl ToolResult {
         if !unverified.is_empty() {
             self.warnings.push(Warning::caution(
                 "unverified_decoder",
-                format!(
-                    "decoder definitions not validated for: {}",
-                    unverified.join(", ")
-                ),
+                format!("decoder definitions not validated for: {}", unverified.join(", ")),
             ));
         }
-        let out_of_range: Vec<&str> = values
-            .iter()
-            .filter(|v| v.out_of_range)
-            .map(|v| v.signal_id.as_str())
-            .collect();
+        let out_of_range: Vec<&str> =
+            values.iter().filter(|v| v.out_of_range).map(|v| v.signal_id.as_str()).collect();
         if !out_of_range.is_empty() {
             self.warnings.push(Warning::serious(
                 "value_out_of_range",
-                format!(
-                    "decoded outside declared valid range: {}",
-                    out_of_range.join(", ")
-                ),
+                format!("decoded outside declared valid range: {}", out_of_range.join(", ")),
             ));
         }
         self.values = values;
@@ -291,7 +282,12 @@ mod tests {
     use super::*;
     use crate::{provenance::VerificationStatus, Provenance, Value};
 
-    fn value(id: &str, status: VerificationStatus, v: f64, range: Option<crate::ValidRange>) -> DecodedValue {
+    fn value(
+        id: &str,
+        status: VerificationStatus,
+        v: f64,
+        range: Option<crate::ValidRange>,
+    ) -> DecodedValue {
         DecodedValue::new(
             id,
             id,
@@ -314,34 +310,39 @@ mod tests {
 
     #[test]
     fn unverified_values_force_a_warning_onto_the_envelope() {
-        let r = ToolResult::success("read_pid", SessionId::from_string("ses_1"), "obd2.read_pid", 3)
-            .with_values(vec![value("dpf_temp", VerificationStatus::Unverified, 300.0, None)]);
+        let r =
+            ToolResult::success("read_pid", SessionId::from_string("ses_1"), "obd2.read_pid", 3)
+                .with_values(vec![value("dpf_temp", VerificationStatus::Unverified, 300.0, None)]);
         assert!(r.warnings.iter().any(|w| w.code == "unverified_decoder"));
         assert_eq!(r.warnings[0].severity, WarningSeverity::Caution);
     }
 
     #[test]
     fn out_of_range_values_force_a_serious_warning() {
-        let r = ToolResult::success("read_pid", SessionId::from_string("ses_1"), "obd2.read_pid", 3)
-            .with_values(vec![value(
-                "coolant",
-                VerificationStatus::Verified,
-                9000.0,
-                Some(crate::ValidRange { min: 0.0, max: 100.0 }),
-            )]);
-        assert!(r.warnings.iter().any(|w| w.code == "value_out_of_range"
-            && w.severity == WarningSeverity::Serious));
+        let r =
+            ToolResult::success("read_pid", SessionId::from_string("ses_1"), "obd2.read_pid", 3)
+                .with_values(vec![value(
+                    "coolant",
+                    VerificationStatus::Verified,
+                    9000.0,
+                    Some(crate::ValidRange { min: 0.0, max: 100.0 }),
+                )]);
+        assert!(r
+            .warnings
+            .iter()
+            .any(|w| w.code == "value_out_of_range" && w.severity == WarningSeverity::Serious));
     }
 
     #[test]
     fn clean_verified_values_produce_no_warnings() {
-        let r = ToolResult::success("read_pid", SessionId::from_string("ses_1"), "obd2.read_pid", 3)
-            .with_values(vec![value(
-                "coolant",
-                VerificationStatus::Verified,
-                90.0,
-                Some(crate::ValidRange { min: 0.0, max: 200.0 }),
-            )]);
+        let r =
+            ToolResult::success("read_pid", SessionId::from_string("ses_1"), "obd2.read_pid", 3)
+                .with_values(vec![value(
+                    "coolant",
+                    VerificationStatus::Verified,
+                    90.0,
+                    Some(crate::ValidRange { min: 0.0, max: 200.0 }),
+                )]);
         assert!(r.warnings.is_empty());
     }
 

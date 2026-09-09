@@ -10,7 +10,9 @@
 //!   cargo test -p aim-agent --test live_provider -- --nocapture
 //! ```
 
-use aim_agent::provider::{ollama::OllamaProvider, ChatRequest, Content, LlmProvider, Message, StopReason, ToolSpec};
+use aim_agent::provider::{
+    ollama::OllamaProvider, ChatRequest, Content, LlmProvider, Message, StopReason, ToolSpec,
+};
 use aim_agent::settings::Speed;
 use serde_json::json;
 

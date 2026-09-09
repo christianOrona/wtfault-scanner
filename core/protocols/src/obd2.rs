@@ -385,10 +385,7 @@ pub fn encode_dtc(code: &str) -> AimResult<[u8; 2]> {
             format!("DTC {code:?}: the first digit must be 0-3"),
         ));
     }
-    Ok([
-        (system << 6) | (digits[0] << 4) | digits[1],
-        (digits[2] << 4) | digits[3],
-    ])
+    Ok([(system << 6) | (digits[0] << 4) | digits[1], (digits[2] << 4) | digits[3]])
 }
 
 /// Split a service 03/07/0A payload into DTC strings.
@@ -469,12 +466,7 @@ pub fn encode_supported_pids(base: u8, pids: &[u8]) -> [u8; 4] {
 pub fn decode_vin(data: &[u8]) -> AimResult<String> {
     // Drop the leading NODI (number of data items) byte when present.
     let body = if data.len() == 18 || data.len() == 20 { &data[1..] } else { data };
-    let text: String = body
-        .iter()
-        .copied()
-        .filter(|b| *b != 0x00)
-        .map(|b| b as char)
-        .collect();
+    let text: String = body.iter().copied().filter(|b| *b != 0x00).map(|b| b as char).collect();
     let vin: String = text.trim().to_string();
     if vin.len() != 17 {
         return Err(AimError::new(
@@ -667,19 +659,10 @@ mod tests {
     #[test]
     fn supported_pid_bit_order_is_msb_first() {
         // 0x80000000 means only PID base+1 is supported.
-        assert_eq!(
-            decode_supported_pids(0x00, &[0x80, 0x00, 0x00, 0x00]).unwrap(),
-            vec![0x01]
-        );
+        assert_eq!(decode_supported_pids(0x00, &[0x80, 0x00, 0x00, 0x00]).unwrap(), vec![0x01]);
         // 0x00000001 means only PID base+32.
-        assert_eq!(
-            decode_supported_pids(0x00, &[0x00, 0x00, 0x00, 0x01]).unwrap(),
-            vec![0x20]
-        );
-        assert_eq!(
-            decode_supported_pids(0x20, &[0x00, 0x00, 0x00, 0x01]).unwrap(),
-            vec![0x40]
-        );
+        assert_eq!(decode_supported_pids(0x00, &[0x00, 0x00, 0x00, 0x01]).unwrap(), vec![0x20]);
+        assert_eq!(decode_supported_pids(0x20, &[0x00, 0x00, 0x00, 0x01]).unwrap(), vec![0x40]);
         assert!(decode_supported_pids(0x00, &[0x00]).is_err());
     }
 
@@ -700,10 +683,7 @@ mod tests {
     fn ascii_records_are_split_on_fixed_widths() {
         let mut payload = vec![0x01];
         payload.extend_from_slice(b"CAL-ID-EXAMPLE\0\0");
-        assert_eq!(
-            decode_ascii_records(&payload, 16),
-            vec![String::from("CAL-ID-EXAMPLE")]
-        );
+        assert_eq!(decode_ascii_records(&payload, 16), vec![String::from("CAL-ID-EXAMPLE")]);
     }
 }
 
@@ -774,7 +754,8 @@ mod monitor_tests {
 
     #[test]
     fn pass_and_fail_are_decided_by_the_vehicles_own_limits() {
-        let t = |v, lo, hi| MonitorTest { mid: 0x21, tid: 1, uasid: 0x0B, value: v, min: lo, max: hi };
+        let t =
+            |v, lo, hi| MonitorTest { mid: 0x21, tid: 1, uasid: 0x0B, value: v, min: lo, max: hi };
         assert!(t(58, 0, 60).passed());
         assert!(t(60, 0, 60).passed(), "a value on the limit still passes");
         assert!(!t(61, 0, 60).passed());

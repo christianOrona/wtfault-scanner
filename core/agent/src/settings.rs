@@ -217,9 +217,9 @@ impl ProviderConfig {
                 &self.label,
                 &self.model,
                 self.base_url.as_deref(),
-                self.api_key
-                    .clone()
-                    .ok_or_else(|| AgentError::MissingCredential { provider: self.label.clone() })?,
+                self.api_key.clone().ok_or_else(|| AgentError::MissingCredential {
+                    provider: self.label.clone(),
+                })?,
                 self.speed,
             )?)),
             ProviderKind::Xai => Ok(Box::new(OpenAiProvider::new(
@@ -328,10 +328,7 @@ impl ProviderSettings {
     /// Redacted view of everything, for the settings UI.
     pub fn views(&self) -> Vec<ProviderView> {
         let active = self.active().map(|p| p.id.clone());
-        self.providers
-            .iter()
-            .map(|p| p.view(active.as_ref() == Some(&p.id)))
-            .collect()
+        self.providers.iter().map(|p| p.view(active.as_ref() == Some(&p.id))).collect()
     }
 }
 
@@ -365,10 +362,9 @@ impl SettingsStore {
                 ))
             }),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(ProviderSettings::default()),
-            Err(e) => Err(AgentError::Settings(format!(
-                "cannot read {}: {e}",
-                self.path.display()
-            ))),
+            Err(e) => {
+                Err(AgentError::Settings(format!("cannot read {}: {e}", self.path.display())))
+            }
         }
     }
 
@@ -376,8 +372,9 @@ impl SettingsStore {
     /// a half-written file where the credentials used to be.
     pub fn save(&self, settings: &ProviderSettings) -> Result<(), AgentError> {
         if let Some(dir) = self.path.parent() {
-            std::fs::create_dir_all(dir)
-                .map_err(|e| AgentError::Settings(format!("cannot create {}: {e}", dir.display())))?;
+            std::fs::create_dir_all(dir).map_err(|e| {
+                AgentError::Settings(format!("cannot create {}: {e}", dir.display()))
+            })?;
         }
         let json = serde_json::to_string_pretty(settings)
             .map_err(|e| AgentError::Settings(e.to_string()))?;
@@ -472,7 +469,10 @@ mod tests {
 
         let back = store.load().unwrap();
         assert_eq!(back.providers.len(), 1);
-        assert_eq!(back.active().unwrap().api_key.as_ref().unwrap().expose(), "sk-ant-api03-abcdefghijklmnop");
+        assert_eq!(
+            back.active().unwrap().api_key.as_ref().unwrap().expose(),
+            "sk-ant-api03-abcdefghijklmnop"
+        );
     }
 
     #[test]

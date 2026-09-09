@@ -99,20 +99,14 @@ mod tests {
 
     #[test]
     fn status_codes_follow_the_error_code() {
-        assert_eq!(
-            ApiError::no_session().into_response().status(),
-            StatusCode::CONFLICT
-        );
+        assert_eq!(ApiError::no_session().into_response().status(), StatusCode::CONFLICT);
         // NotFound reaches the API from the store rather than being
         // constructed here, so it is checked through a core error.
         assert_eq!(
             ApiError::new(AimError::not_found("no session")).into_response().status(),
             StatusCode::NOT_FOUND
         );
-        assert_eq!(
-            ApiError::bad_request("x").into_response().status(),
-            StatusCode::BAD_REQUEST
-        );
+        assert_eq!(ApiError::bad_request("x").into_response().status(), StatusCode::BAD_REQUEST);
         assert_eq!(
             ApiError::not_implemented("x").into_response().status(),
             StatusCode::NOT_IMPLEMENTED

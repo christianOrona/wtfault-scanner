@@ -162,12 +162,8 @@ impl PidRegistry {
     /// from disk with [`PidRegistry::load_yaml`] for profile development.
     pub fn generic_obd() -> AimResult<PidRegistry> {
         let mut r = PidRegistry::new();
-        r.load_yaml(include_str!(
-            "../../../vehicle-profiles/generic-obd/pids/mode01.yaml"
-        ))?;
-        r.load_yaml(include_str!(
-            "../../../vehicle-profiles/generic-obd/pids/mode09.yaml"
-        ))?;
+        r.load_yaml(include_str!("../../../vehicle-profiles/generic-obd/pids/mode01.yaml"))?;
+        r.load_yaml(include_str!("../../../vehicle-profiles/generic-obd/pids/mode09.yaml"))?;
         Ok(r)
     }
 
@@ -205,10 +201,8 @@ impl PidRegistry {
                 ));
             }
             self.by_signal_id.insert(def.signal_id.clone(), key);
-            self.by_service_pid.insert(
-                key,
-                CompiledPid { def, file_version: file.version, formula, derived },
-            );
+            self.by_service_pid
+                .insert(key, CompiledPid { def, file_version: file.version, formula, derived });
         }
         self.sources.push(file.source);
         Ok(())
@@ -268,9 +262,7 @@ impl PidRegistry {
 
     /// Look up by stable signal id.
     pub fn by_signal(&self, signal_id: &str) -> Option<&CompiledPid> {
-        self.by_signal_id
-            .get(signal_id)
-            .and_then(|k| self.by_service_pid.get(k))
+        self.by_signal_id.get(signal_id).and_then(|k| self.by_service_pid.get(k))
     }
 
     /// The `(service, pid)` pair behind a signal id.
@@ -280,11 +272,7 @@ impl PidRegistry {
 
     /// Every definition for a service, in PID order.
     pub fn for_service(&self, service: u8) -> Vec<&CompiledPid> {
-        self.by_service_pid
-            .iter()
-            .filter(|((s, _), _)| *s == service)
-            .map(|(_, v)| v)
-            .collect()
+        self.by_service_pid.iter().filter(|((s, _), _)| *s == service).map(|(_, v)| v).collect()
     }
 
     /// Decode a payload for one PID into one or more values.
@@ -353,10 +341,7 @@ impl PidRegistry {
                     c.def.signal_id.clone(),
                     c.def.name.clone(),
                     Value::Text(
-                        pids.iter()
-                            .map(|p| format!("{p:02X}"))
-                            .collect::<Vec<_>>()
-                            .join(","),
+                        pids.iter().map(|p| format!("{p:02X}")).collect::<Vec<_>>().join(","),
                     ),
                     None,
                     None,
@@ -615,9 +600,7 @@ pids:
     #[test]
     fn supported_pid_masks_decode_to_a_pid_list() {
         let r = registry();
-        let v = &r
-            .decode(1, 0x00, &[0xBE, 0x3F, 0xA8, 0x13], aim_types::now())
-            .unwrap()[0];
+        let v = &r.decode(1, 0x00, &[0xBE, 0x3F, 0xA8, 0x13], aim_types::now()).unwrap()[0];
         let text = v.value.as_str().unwrap();
         assert!(text.starts_with("01,03,04,05,06,07"), "got {text}");
     }
@@ -626,9 +609,7 @@ pids:
     fn bitfields_decode_flags_and_derived_counters() {
         let r = registry();
         // MIL on, 3 confirmed DTCs.
-        let values = r
-            .decode(1, 0x01, &[0x83, 0x07, 0x65, 0x00], aim_types::now())
-            .unwrap();
+        let values = r.decode(1, 0x01, &[0x83, 0x07, 0x65, 0x00], aim_types::now()).unwrap();
         assert_eq!(values.len(), 2);
         match &values[0].value {
             Value::Flags(flags) => {
@@ -645,10 +626,7 @@ pids:
     fn enums_report_unmapped_selectors_honestly() {
         let r = registry();
         let v = &r.decode(1, 0x03, &[0x02, 0x00], aim_types::now()).unwrap()[0];
-        assert_eq!(
-            v.value.as_str().unwrap(),
-            "Closed loop, using oxygen sensor feedback"
-        );
+        assert_eq!(v.value.as_str().unwrap(), "Closed loop, using oxygen sensor feedback");
         let v = &r.decode(1, 0x03, &[0x77, 0x00], aim_types::now()).unwrap()[0];
         assert_eq!(v.value.as_str().unwrap(), "unmapped value 0x77");
     }

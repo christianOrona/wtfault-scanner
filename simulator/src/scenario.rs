@@ -31,26 +31,17 @@ pub struct SimDtc {
 impl SimDtc {
     /// A confirmed (service 03) code.
     pub fn confirmed(code: &str) -> Self {
-        SimDtc {
-            code: code.to_string(),
-            status: DtcStatus::Confirmed,
-        }
+        SimDtc { code: code.to_string(), status: DtcStatus::Confirmed }
     }
 
     /// A pending (service 07) code.
     pub fn pending(code: &str) -> Self {
-        SimDtc {
-            code: code.to_string(),
-            status: DtcStatus::Pending,
-        }
+        SimDtc { code: code.to_string(), status: DtcStatus::Pending }
     }
 
     /// A permanent (service 0A) code.
     pub fn permanent(code: &str) -> Self {
-        SimDtc {
-            code: code.to_string(),
-            status: DtcStatus::Permanent,
-        }
+        SimDtc { code: code.to_string(), status: DtcStatus::Permanent }
     }
 }
 
@@ -79,14 +70,7 @@ pub struct SimMonitorTest {
 impl SimMonitorTest {
     /// A result, in raw counts.
     pub fn new(mid: u8, tid: u8, uasid: u8, value: u16, min: u16, max: u16) -> Self {
-        SimMonitorTest {
-            mid,
-            tid,
-            uasid,
-            value,
-            min,
-            max,
-        }
+        SimMonitorTest { mid, tid, uasid, value, min, max }
     }
 }
 
@@ -126,11 +110,7 @@ impl ScenarioId {
 
     /// Every scenario, for `--list-scenarios` and the API.
     pub fn all() -> [ScenarioId; 3] {
-        [
-            ScenarioId::Healthy,
-            ScenarioId::DpfRegen,
-            ScenarioId::BusSilent,
-        ]
+        [ScenarioId::Healthy, ScenarioId::DpfRegen, ScenarioId::BusSilent]
     }
 }
 
@@ -344,7 +324,9 @@ mod tests {
         assert!(regen.dpf_inlet_c > 500.0);
         assert!(regen.regen_active);
         assert!(regen.mil_on);
-        assert!(regen.dpf_soot_pct < Scenario::new(ScenarioId::DpfRegen).state_at(0.0).dpf_soot_pct);
+        assert!(
+            regen.dpf_soot_pct < Scenario::new(ScenarioId::DpfRegen).state_at(0.0).dpf_soot_pct
+        );
     }
 
     #[test]

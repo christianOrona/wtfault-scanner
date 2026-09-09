@@ -105,12 +105,10 @@ pub struct RawCounts {
 impl MonitorCatalog {
     /// Load the generic SAE catalogue embedded in the binary.
     pub fn generic_obd() -> AimResult<MonitorCatalog> {
-        const SRC: &str = include_str!("../../../vehicle-profiles/generic-obd/monitors/mode06.yaml");
+        const SRC: &str =
+            include_str!("../../../vehicle-profiles/generic-obd/monitors/mode06.yaml");
         let file: MonitorFile = serde_yaml_ng::from_str(SRC).map_err(|e| {
-            AimError::new(
-                ErrorCode::DecoderInputInvalid,
-                format!("mode06.yaml is not valid: {e}"),
-            )
+            AimError::new(ErrorCode::DecoderInputInvalid, format!("mode06.yaml is not valid: {e}"))
         })?;
         Ok(MonitorCatalog {
             monitors: file.monitors.into_iter().map(|m| (m.mid, m)).collect(),

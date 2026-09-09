@@ -103,9 +103,7 @@ impl DtcCatalog {
     /// Load the generic SAE table embedded in the binary.
     pub fn generic_sae() -> AimResult<DtcCatalog> {
         let mut c = DtcCatalog::new();
-        c.load_yaml(include_str!(
-            "../../../vehicle-profiles/generic-obd/dtc/generic-sae.yaml"
-        ))?;
+        c.load_yaml(include_str!("../../../vehicle-profiles/generic-obd/dtc/generic-sae.yaml"))?;
         Ok(c)
     }
 
@@ -190,7 +188,9 @@ fn validate_code(code: &str) -> AimResult<()> {
     } else {
         Err(AimError::new(
             ErrorCode::BadRequest,
-            format!("{code:?} is not a valid DTC (expected P/C/B/U, a digit 0-3, then 3 hex digits)"),
+            format!(
+                "{code:?} is not a valid DTC (expected P/C/B/U, a digit 0-3, then 3 hex digits)"
+            ),
         ))
     }
 }
@@ -230,10 +230,7 @@ mod tests {
         let c = catalog();
         for code in ["P2463", "P242F", "P2002"] {
             let info = c.describe(code).unwrap();
-            assert!(
-                info.has_trustworthy_description(),
-                "{code} should have a description"
-            );
+            assert!(info.has_trustworthy_description(), "{code} should have a description");
             assert!(info.is_generic, "{code} is in the SAE P2xxx range");
         }
     }
@@ -253,10 +250,7 @@ mod tests {
         let c = catalog();
         let info = c.describe("P1234").unwrap();
         assert!(!info.is_generic);
-        assert_eq!(
-            info.structural_summary,
-            "Powertrain — manufacturer-specific code"
-        );
+        assert_eq!(info.structural_summary, "Powertrain — manufacturer-specific code");
         assert_eq!(info.description, None);
         let info = c.describe("P3000").unwrap();
         assert!(!info.is_generic);

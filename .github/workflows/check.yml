@@ -27,11 +27,20 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  fmt:
+    name: formatting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # rust-toolchain.toml pins the version; rustup honours it automatically.
+      - name: Check formatting
+        run: cargo fmt --all --check
+
   core:
     name: core (linux)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # The serial transport binds libudev. This is the only system dependency
       # the core has, and it is why the desktop shell's Tauri tree is kept out
@@ -58,7 +67,7 @@ jobs:
     name: core without serial (linux)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: Swatinem/rust-cache@v2
 
       # core/transport/Cargo.toml claims the workspace builds cleanly with
@@ -75,9 +84,9 @@ jobs:
       run:
         working-directory: apps/desktop
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -95,9 +104,9 @@ jobs:
     name: desktop shell (windows)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version-file: .nvmrc
           cache: npm

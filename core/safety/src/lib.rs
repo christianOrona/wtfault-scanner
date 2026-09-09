@@ -250,21 +250,18 @@ impl CapabilityRegistry {
             // The risk class is carried separately from the level because a
             // policy that says "convenience changes only" cannot be expressed
             // in levels alone.
-            Capability::read_only(
-                "config.write_feature",
-                "Change a vehicle configuration setting",
-            )
-            .at_level(PermissionLevel::L2)
-            .with_risk(RiskClass::Convenience)
-            .never_for_agents()
-            .requiring(vec![
-                Precondition::IgnitionOn,
-                Precondition::EngineOff,
-                Precondition::StableConnection,
-                Precondition::VehicleStationary,
-                Precondition::BatteryVoltageAtLeast(12.4),
-            ])
-            .needing_adapter(vec![AdapterFlag::SupportsTransmit]),
+            Capability::read_only("config.write_feature", "Change a vehicle configuration setting")
+                .at_level(PermissionLevel::L2)
+                .with_risk(RiskClass::Convenience)
+                .never_for_agents()
+                .requiring(vec![
+                    Precondition::IgnitionOn,
+                    Precondition::EngineOff,
+                    Precondition::StableConnection,
+                    Precondition::VehicleStationary,
+                    Precondition::BatteryVoltageAtLeast(12.4),
+                ])
+                .needing_adapter(vec![AdapterFlag::SupportsTransmit]),
             // Clearing codes is the one write every twenty-pound code reader
             // performs, and refusing it made this tool strictly less capable
             // than the thing it is meant to replace. It is L1: implemented,
@@ -327,10 +324,7 @@ impl CapabilityRegistry {
 
     /// Capabilities this build will actually execute.
     pub fn enabled(&self) -> Vec<&Capability> {
-        self.capabilities
-            .values()
-            .filter(|c| c.level <= MAX_ENABLED_LEVEL)
-            .collect()
+        self.capabilities.values().filter(|c| c.level <= MAX_ENABLED_LEVEL).collect()
     }
 }
 
@@ -365,10 +359,8 @@ impl OperationRequest {
 
     /// Attach a human confirmation.
     pub fn confirmed_by(mut self, user: impl Into<String>) -> Self {
-        self.confirmation = Some(Confirmation {
-            confirmed_by: user.into(),
-            confirmed_at: aim_types::now(),
-        });
+        self.confirmation =
+            Some(Confirmation { confirmed_by: user.into(), confirmed_at: aim_types::now() });
         self
     }
 }
@@ -745,10 +737,7 @@ mod tests {
             );
             assert!(!d.is_allowed(), "{op:?} must be rejected");
             assert_eq!(d.audit.reason.as_deref(), Some("operation_not_allowed"));
-            assert_eq!(
-                d.into_result().unwrap_err().code,
-                ErrorCode::OperationNotAllowed
-            );
+            assert_eq!(d.into_result().unwrap_err().code, ErrorCode::OperationNotAllowed);
         }
     }
 
@@ -884,10 +873,7 @@ mod tests {
             &ready(),
         );
         assert_eq!(d.audit.reason.as_deref(), Some("confirmation_required"));
-        assert_eq!(
-            d.into_result().unwrap_err().code,
-            ErrorCode::ConfirmationRequired
-        );
+        assert_eq!(d.into_result().unwrap_err().code, ErrorCode::ConfirmationRequired);
 
         let d = gate.authorize(
             &OperationRequest::new("obd2.run_self_test", "agent:planner").confirmed_by("owner"),
@@ -938,20 +924,14 @@ mod tests {
             Some(&caps(false)),
             &ready(),
         );
-        assert_eq!(
-            d.into_result().unwrap_err().code,
-            ErrorCode::CapabilityMissing
-        );
+        assert_eq!(d.into_result().unwrap_err().code, ErrorCode::CapabilityMissing);
         // No adapter connected at all: also closed.
         let d = gate.authorize(
             &OperationRequest::new("obd2.run_self_test", "user").confirmed_by("owner"),
             None,
             &ready(),
         );
-        assert_eq!(
-            d.into_result().unwrap_err().code,
-            ErrorCode::CapabilityMissing
-        );
+        assert_eq!(d.into_result().unwrap_err().code, ErrorCode::CapabilityMissing);
     }
 
     #[test]
@@ -966,10 +946,7 @@ mod tests {
         );
         assert!(!d.is_allowed());
         assert_eq!(d.audit.reason.as_deref(), Some("precondition_failed"));
-        assert_eq!(
-            d.into_result().unwrap_err().code,
-            ErrorCode::PreconditionFailed
-        );
+        assert_eq!(d.into_result().unwrap_err().code, ErrorCode::PreconditionFailed);
     }
 
     #[test]
@@ -980,11 +957,8 @@ mod tests {
             ("obd2.clear_dtcs", "agent:planner"),
             ("does.not.exist", "agent:planner"),
         ] {
-            let d = gate.authorize(
-                &OperationRequest::new(op, initiator),
-                Some(&caps(true)),
-                &ready(),
-            );
+            let d =
+                gate.authorize(&OperationRequest::new(op, initiator), Some(&caps(true)), &ready());
             assert_eq!(d.audit.initiator, initiator);
             assert_eq!(d.audit.operation, op);
             assert_eq!(d.audit.allowed, d.is_allowed());
@@ -1014,10 +988,7 @@ mod tests {
         }
         // Programming is still off, by level.
         for id in ["program.program_module"] {
-            assert!(
-                !r.enabled().iter().any(|c| c.id == id),
-                "{id} must not be enabled"
-            );
+            assert!(!r.enabled().iter().any(|c| c.id == id), "{id} must not be enabled");
         }
         // The configuration write this build does support is on.
         assert!(

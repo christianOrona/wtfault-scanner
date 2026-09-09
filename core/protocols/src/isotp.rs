@@ -119,7 +119,8 @@ impl IsoTpFrame {
                 Ok(IsoTpFrame::Single { data: payload[1..1 + len].to_vec() })
             }
             PCI_FIRST => {
-                let short_len = (((first & 0x0F) as usize) << 8) | *payload.get(1).unwrap_or(&0) as usize;
+                let short_len =
+                    (((first & 0x0F) as usize) << 8) | *payload.get(1).unwrap_or(&0) as usize;
                 if short_len == 0 {
                     // 32-bit escape form: 10 00 LL LL LL LL then data.
                     if payload.len() < 6 {
@@ -139,21 +140,14 @@ impl IsoTpFrame {
                     Ok(IsoTpFrame::First { total_length: total, data: payload[6..].to_vec() })
                 } else {
                     if payload.len() < 2 {
-                        return Err(AimError::new(
-                            ErrorCode::IsoTpError,
-                            "first frame truncated",
-                        ));
+                        return Err(AimError::new(ErrorCode::IsoTpError, "first frame truncated"));
                     }
-                    Ok(IsoTpFrame::First {
-                        total_length: short_len,
-                        data: payload[2..].to_vec(),
-                    })
+                    Ok(IsoTpFrame::First { total_length: short_len, data: payload[2..].to_vec() })
                 }
             }
-            PCI_CONSECUTIVE => Ok(IsoTpFrame::Consecutive {
-                sequence: first & 0x0F,
-                data: payload[1..].to_vec(),
-            }),
+            PCI_CONSECUTIVE => {
+                Ok(IsoTpFrame::Consecutive { sequence: first & 0x0F, data: payload[1..].to_vec() })
+            }
             PCI_FLOW_CONTROL => {
                 if payload.len() < 3 {
                     return Err(AimError::new(
@@ -339,13 +333,14 @@ impl IsoTpReceiver {
                     self.reset();
                     return Err(AimError::new(
                         ErrorCode::IsoTpError,
-                        format!("out of order consecutive frame: expected {expected}, got {sequence}"),
+                        format!(
+                            "out of order consecutive frame: expected {expected}, got {sequence}"
+                        ),
                     ));
                 }
                 self.next_sequence = (self.next_sequence + 1) & 0x0F;
                 let remaining = self.expected_length.saturating_sub(self.buffer.len());
-                self.buffer
-                    .extend_from_slice(&data[..remaining.min(data.len())]);
+                self.buffer.extend_from_slice(&data[..remaining.min(data.len())]);
                 if self.buffer.len() >= self.expected_length {
                     let out = std::mem::take(&mut self.buffer);
                     self.reset();
@@ -571,10 +566,7 @@ mod tests {
         })
         .unwrap();
         assert!(s.next_frame().unwrap().is_some(), "one frame of credit");
-        assert!(
-            s.next_frame().unwrap().is_none(),
-            "credit exhausted, must wait for flow control"
-        );
+        assert!(s.next_frame().unwrap().is_none(), "credit exhausted, must wait for flow control");
         s.apply_flow_control(&IsoTpFrame::FlowControl {
             status: FlowStatus::ContinueToSend,
             block_size: 0,
@@ -624,9 +616,7 @@ mod tests {
     #[test]
     fn oversized_messages_get_an_overflow_flow_control() {
         let mut r = IsoTpReceiver::new(0, 0).with_max_message_length(16);
-        let out = r
-            .feed(IsoTpFrame::First { total_length: 4095, data: vec![0; 6] })
-            .unwrap();
+        let out = r.feed(IsoTpFrame::First { total_length: 4095, data: vec![0; 6] }).unwrap();
         assert_eq!(
             out,
             ReceiveOutcome::SendFlowControl(IsoTpFrame::FlowControl {
@@ -641,11 +631,8 @@ mod tests {
     #[test]
     fn out_of_order_consecutive_frames_are_rejected_not_patched_over() {
         let mut r = IsoTpReceiver::new(0, 0);
-        r.feed(IsoTpFrame::First { total_length: 20, data: vec![1, 2, 3, 4, 5, 6] })
-            .unwrap();
-        let err = r
-            .feed(IsoTpFrame::Consecutive { sequence: 3, data: vec![7; 7] })
-            .unwrap_err();
+        r.feed(IsoTpFrame::First { total_length: 20, data: vec![1, 2, 3, 4, 5, 6] }).unwrap();
+        let err = r.feed(IsoTpFrame::Consecutive { sequence: 3, data: vec![7; 7] }).unwrap_err();
         assert_eq!(err.code, ErrorCode::IsoTpError);
         assert!(err.message.contains("expected 1"));
         assert!(!r.in_progress(), "receiver must abandon the broken message");
@@ -654,9 +641,7 @@ mod tests {
     #[test]
     fn consecutive_frame_without_a_first_frame_is_rejected() {
         let mut r = IsoTpReceiver::new(0, 0);
-        let err = r
-            .feed(IsoTpFrame::Consecutive { sequence: 1, data: vec![0; 7] })
-            .unwrap_err();
+        let err = r.feed(IsoTpFrame::Consecutive { sequence: 1, data: vec![0; 7] }).unwrap_err();
         assert_eq!(err.code, ErrorCode::IsoTpError);
     }
 
@@ -693,10 +678,12 @@ mod tests {
         );
         // A final consecutive frame must be truncated to the declared length.
         let mut r = IsoTpReceiver::new(0, 0);
-        r.feed(IsoTpFrame::First { total_length: 9, data: vec![1, 2, 3, 4, 5, 6] })
-            .unwrap();
+        r.feed(IsoTpFrame::First { total_length: 9, data: vec![1, 2, 3, 4, 5, 6] }).unwrap();
         let done = r
-            .feed(IsoTpFrame::Consecutive { sequence: 1, data: vec![7, 8, 9, 0xAA, 0xAA, 0xAA, 0xAA] })
+            .feed(IsoTpFrame::Consecutive {
+                sequence: 1,
+                data: vec![7, 8, 9, 0xAA, 0xAA, 0xAA, 0xAA],
+            })
             .unwrap();
         assert_eq!(done, ReceiveOutcome::Complete(vec![1, 2, 3, 4, 5, 6, 7, 8, 9]));
     }

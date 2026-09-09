@@ -223,10 +223,7 @@ mod tests {
     fn shape_violations_are_rejected() {
         assert!(validate("TOOSHORT").is_err());
         assert!(validate("1FT7W2BT9KEC0000!").is_err());
-        assert!(
-            validate("1FT7W2BT9KEC0000I").is_err(),
-            "I is excluded by ISO 3779"
-        );
+        assert!(validate("1FT7W2BT9KEC0000I").is_err(), "I is excluded by ISO 3779");
         assert!(validate("1FT7W2BT9KEC0000O").is_err());
         assert!(validate("1FT7W2BT9KEC0000Q").is_err());
     }

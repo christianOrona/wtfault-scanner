@@ -229,9 +229,10 @@ impl Applicability {
     pub fn matches(&self, make: Option<&str>, model_year: Option<u16>, vin: Option<&str>) -> bool {
         if !self.makes.is_empty() {
             let m = make.unwrap_or("");
-            if !self.makes.iter().any(|x| m.eq_ignore_ascii_case(x)
-                || m.to_ascii_lowercase().contains(&x.to_ascii_lowercase()))
-            {
+            if !self.makes.iter().any(|x| {
+                m.eq_ignore_ascii_case(x)
+                    || m.to_ascii_lowercase().contains(&x.to_ascii_lowercase())
+            }) {
                 return false;
             }
         }
@@ -362,10 +363,7 @@ impl FeatureCatalog {
         model_year: Option<u16>,
         vin: Option<&str>,
     ) -> Vec<&FeatureDef> {
-        self.by_id
-            .values()
-            .filter(|f| f.applies_to.matches(make, model_year, vin))
-            .collect()
+        self.by_id.values().filter(|f| f.applies_to.matches(make, model_year, vin)).collect()
     }
 
     /// How many definitions are loaded.
@@ -406,12 +404,7 @@ mod tests {
         // measured, so none of them may authorise a write. If this test ever
         // fails, someone added a mapping without verifying it.
         for f in catalog().all() {
-            assert_ne!(
-                f.support(),
-                FeatureSupport::Writable,
-                "{} claims a verified mapping",
-                f.id
-            );
+            assert_ne!(f.support(), FeatureSupport::Writable, "{} claims a verified mapping", f.id);
         }
     }
 
@@ -512,7 +505,14 @@ mod mapping_tests {
 
     fn target() -> DataIdentifierTarget {
         // Bit 2 of byte 3: on = 0b100, off = 0b000.
-        DataIdentifierTarget { module: 0x726, did: 0xDE01, byte: 3, mask: 0b0000_0100, on: 0b0000_0100, off: 0 }
+        DataIdentifierTarget {
+            module: 0x726,
+            did: 0xDE01,
+            byte: 3,
+            mask: 0b0000_0100,
+            on: 0b0000_0100,
+            off: 0,
+        }
     }
 
     #[test]
@@ -540,7 +540,14 @@ mod mapping_tests {
     /// settings the feature does not describe.
     #[test]
     fn a_value_outside_its_mask_is_refused() {
-        let bad = DataIdentifierTarget { module: 0x726, did: 0xDE01, byte: 0, mask: 0x0F, on: 0x1F, off: 0 };
+        let bad = DataIdentifierTarget {
+            module: 0x726,
+            did: 0xDE01,
+            byte: 0,
+            mask: 0x0F,
+            on: 0x1F,
+            off: 0,
+        };
         let err = bad.apply(&[0x00], true).unwrap_err();
         assert!(err.contains("outside its own mask"), "{err}");
     }
@@ -554,16 +561,15 @@ mod mapping_tests {
         assert_eq!(t.current(&record), Some(false));
 
         // A masked value matching neither on nor off is not guessed at.
-        let odd = DataIdentifierTarget { module: 1, did: 2, byte: 0, mask: 0b11, on: 0b01, off: 0b00 };
+        let odd =
+            DataIdentifierTarget { module: 1, did: 2, byte: 0, mask: 0b11, on: 0b01, off: 0b00 };
         assert_eq!(odd.current(&[0b10]), None);
         assert_eq!(odd.current(&[]), None);
     }
 
     #[test]
     fn an_as_built_mapping_is_not_executable() {
-        let m = Mapping::AsBuiltBits {
-            block: "726-01".into(), byte: 0, mask: 1, on: 1, off: 0,
-        };
+        let m = Mapping::AsBuiltBits { block: "726-01".into(), byte: 0, mask: 1, on: 1, off: 0 };
         assert!(m.as_data_identifier().is_none());
     }
 }

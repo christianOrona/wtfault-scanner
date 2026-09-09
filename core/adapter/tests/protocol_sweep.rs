@@ -111,8 +111,7 @@ impl Transport for PickyElm {
 }
 
 fn connect_to(speaks: u8) -> Elm327Adapter {
-    let mut adapter =
-        Elm327Adapter::new(Box::new(PickyElm::new(speaks)), Elm327Config::fast());
+    let mut adapter = Elm327Adapter::new(Box::new(PickyElm::new(speaks)), Elm327Config::fast());
     adapter.connect().expect("connect should not error");
     adapter
 }

@@ -267,8 +267,14 @@ struct WireUsage {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum WireContent {
-    Text { text: String },
-    ToolUse { id: String, name: String, input: serde_json::Value },
+    Text {
+        text: String,
+    },
+    ToolUse {
+        id: String,
+        name: String,
+        input: serde_json::Value,
+    },
     /// Thinking blocks arrive when adaptive thinking is on. They are not part
     /// of the answer and are dropped rather than shown as content.
     #[serde(other)]
@@ -289,7 +295,14 @@ mod tests {
 
     #[test]
     fn a_missing_key_is_caught_before_any_request() {
-        let e = AnthropicProvider::new("p1", "Anthropic", DEFAULT_MODEL, None, Secret::new("  "), Speed::Quality);
+        let e = AnthropicProvider::new(
+            "p1",
+            "Anthropic",
+            DEFAULT_MODEL,
+            None,
+            Secret::new("  "),
+            Speed::Quality,
+        );
         assert!(matches!(e.err(), Some(AgentError::MissingCredential { .. })));
     }
 
@@ -320,7 +333,8 @@ mod tests {
           "usage": {"input_tokens": 10, "output_tokens": 20}
         }"#;
         let parsed: WireResponse = serde_json::from_str(body).unwrap();
-        let content: Vec<Content> = parsed.content.into_iter().filter_map(from_wire_content).collect();
+        let content: Vec<Content> =
+            parsed.content.into_iter().filter_map(from_wire_content).collect();
         // The thinking block is dropped, not rendered as an empty answer.
         assert_eq!(content.len(), 2);
         assert!(matches!(&content[0], Content::Text { text } if text.contains("read the codes")));
@@ -333,7 +347,8 @@ mod tests {
         let body = r#"{"content":[{"type":"something_new","x":1},{"type":"text","text":"ok"}],
                        "stop_reason":"end_turn","usage":{}}"#;
         let parsed: WireResponse = serde_json::from_str(body).unwrap();
-        let content: Vec<Content> = parsed.content.into_iter().filter_map(from_wire_content).collect();
+        let content: Vec<Content> =
+            parsed.content.into_iter().filter_map(from_wire_content).collect();
         assert_eq!(content, vec![Content::text("ok")]);
     }
 }

@@ -20,8 +20,8 @@
 
 #![warn(missing_docs)]
 
-use aim_api::state::{AppState, PersonalityChoice, ServerConfig, TransportChoice};
 use aim_api::routes;
+use aim_api::state::{AppState, PersonalityChoice, ServerConfig, TransportChoice};
 use aim_decoders::DecoderSet;
 use aim_session::SessionStore;
 use aim_simulator::ScenarioId;
@@ -31,11 +31,7 @@ use std::time::Duration;
 
 /// Command line.
 #[derive(Debug, Parser)]
-#[command(
-    name = "aim-api",
-    about = "AI Mechanic localhost diagnostic API",
-    version
-)]
+#[command(name = "aim-api", about = "AI Mechanic localhost diagnostic API", version)]
 struct Args {
     /// Use the built-in virtual vehicle instead of real hardware.
     #[arg(long, conflicts_with = "serial")]
@@ -120,11 +116,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Neither flag given means the simulator, because that is the only thing
     // guaranteed to work on any machine. Choosing hardware is explicit.
-    let default_transport = if args.serial.is_some() {
-        TransportChoice::Serial
-    } else {
-        TransportChoice::Simulator
-    };
+    let default_transport =
+        if args.serial.is_some() { TransportChoice::Serial } else { TransportChoice::Simulator };
 
     let store = match &args.db {
         Some(path) => SessionStore::open(path)?,
@@ -140,7 +133,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         personality,
         bind: addr.to_string(),
         simulator_latency: Duration::from_millis(args.simulator_latency_ms),
-        settings_path: args.settings.clone().map(std::path::PathBuf::from).unwrap_or_else(default_settings_path),
+        settings_path: args
+            .settings
+            .clone()
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(default_settings_path),
     };
 
     tracing::info!(

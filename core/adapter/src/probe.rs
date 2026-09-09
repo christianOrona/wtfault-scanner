@@ -120,10 +120,7 @@ fn identify_open_transport(
     }
 
     if !reset.class.is_success() {
-        return Ok(Identification::silent(
-            descriptor,
-            started.elapsed().as_millis() as u64,
-        ));
+        return Ok(Identification::silent(descriptor, started.elapsed().as_millis() as u64));
     }
 
     // Echo off, so the banner is not confused with our own command.
@@ -329,10 +326,7 @@ mod tests {
         assert!(id.responded);
         assert!(id.elm327_compatible);
         assert_eq!(id.banner.as_deref(), Some("ELM327 v1.5"));
-        assert_eq!(
-            id.description.as_deref(),
-            Some("OBDII to RS232 Interpreter")
-        );
+        assert_eq!(id.description.as_deref(), Some("OBDII to RS232 Interpreter"));
     }
 
     #[test]

@@ -197,11 +197,7 @@ pub fn migrate(conn: &mut Connection) -> AimResult<i64> {
     .map_err(storage)?;
 
     let applied: i64 = conn
-        .query_row(
-            "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
-            [],
-            |r| r.get(0),
-        )
+        .query_row("SELECT COALESCE(MAX(version), 0) FROM schema_migrations", [], |r| r.get(0))
         .map_err(storage)?;
 
     for m in MIGRATIONS {
@@ -224,8 +220,7 @@ pub fn migrate(conn: &mut Connection) -> AimResult<i64> {
     }
 
     let current = MIGRATIONS.last().map(|m| m.version).unwrap_or(0);
-    conn.pragma_update(None, "user_version", current)
-        .map_err(storage)?;
+    conn.pragma_update(None, "user_version", current).map_err(storage)?;
     Ok(current)
 }
 
@@ -246,11 +241,7 @@ mod tests {
     fn migration_versions_are_unique_and_ascending() {
         let mut last = 0;
         for m in MIGRATIONS {
-            assert!(
-                m.version > last,
-                "migration {} is out of order",
-                m.version
-            );
+            assert!(m.version > last, "migration {} is out of order", m.version);
             last = m.version;
         }
     }
@@ -260,9 +251,8 @@ mod tests {
         let mut conn = Connection::open_in_memory().unwrap();
         assert_eq!(migrate(&mut conn).unwrap(), latest_version());
         assert_eq!(migrate(&mut conn).unwrap(), latest_version());
-        let applied: i64 = conn
-            .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
-            .unwrap();
+        let applied: i64 =
+            conn.query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0)).unwrap();
         assert_eq!(applied, MIGRATIONS.len() as i64);
     }
 
@@ -270,9 +260,7 @@ mod tests {
     fn the_user_version_pragma_identifies_the_database() {
         let mut conn = Connection::open_in_memory().unwrap();
         migrate(&mut conn).unwrap();
-        let v: i64 = conn
-            .query_row("PRAGMA user_version", [], |r| r.get(0))
-            .unwrap();
+        let v: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
         assert_eq!(v, latest_version());
     }
 
@@ -324,9 +312,8 @@ mod tests {
         let delete = conn.execute("DELETE FROM session_events", []);
         assert!(delete.is_err(), "the event log must reject deletes");
 
-        let still_there: i64 = conn
-            .query_row("SELECT COUNT(*) FROM session_events", [], |r| r.get(0))
-            .unwrap();
+        let still_there: i64 =
+            conn.query_row("SELECT COUNT(*) FROM session_events", [], |r| r.get(0)).unwrap();
         assert_eq!(still_there, 1);
     }
 }

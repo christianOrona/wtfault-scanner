@@ -14,27 +14,19 @@ use serde_json::Value;
 
 /// Check `arguments` against `schema`, or explain exactly what is wrong.
 pub fn validate(tool: &str, schema: &Value, arguments: &Value) -> AimResult<()> {
-    let properties = schema
-        .get("properties")
-        .and_then(Value::as_object)
-        .ok_or_else(|| {
-            AimError::internal(format!("tool {tool} has a schema with no properties object"))
-        })?;
+    let properties = schema.get("properties").and_then(Value::as_object).ok_or_else(|| {
+        AimError::internal(format!("tool {tool} has a schema with no properties object"))
+    })?;
 
     let object = arguments.as_object().ok_or_else(|| {
-        reject(
-            tool,
-            format!("arguments must be a JSON object, got {}", type_name(arguments)),
-        )
+        reject(tool, format!("arguments must be a JSON object, got {}", type_name(arguments)))
     })?;
 
     // Unknown properties are rejected rather than ignored: a typo that is
     // silently dropped becomes a request with a default the caller never asked
     // for.
-    let additional_allowed = schema
-        .get("additionalProperties")
-        .and_then(Value::as_bool)
-        .unwrap_or(true);
+    let additional_allowed =
+        schema.get("additionalProperties").and_then(Value::as_bool).unwrap_or(true);
     if !additional_allowed {
         for key in object.keys() {
             if !properties.contains_key(key) {
@@ -87,10 +79,7 @@ fn check_type(tool: &str, name: &str, spec: &Value, value: &Value) -> AimResult<
     if !ok {
         return Err(reject(
             tool,
-            format!(
-                "argument {name:?} must be {expected}, got {}",
-                type_name(value)
-            ),
+            format!("argument {name:?} must be {expected}, got {}", type_name(value)),
         ));
     }
 
@@ -101,7 +90,12 @@ fn check_type(tool: &str, name: &str, spec: &Value, value: &Value) -> AimResult<
             .and_then(Value::as_str)
             .unwrap_or("string");
         for (i, item) in value.as_array().into_iter().flatten().enumerate() {
-            check_type(tool, &format!("{name}[{i}]"), &serde_json::json!({"type": items_type}), item)?;
+            check_type(
+                tool,
+                &format!("{name}[{i}]"),
+                &serde_json::json!({"type": items_type}),
+                item,
+            )?;
         }
         if spec
             .get("minItems")
@@ -110,21 +104,20 @@ fn check_type(tool: &str, name: &str, spec: &Value, value: &Value) -> AimResult<
         {
             return Err(reject(
                 tool,
-                format!(
-                    "argument {name:?} needs at least {} item(s)",
-                    spec["minItems"]
-                ),
+                format!("argument {name:?} needs at least {} item(s)", spec["minItems"]),
             ));
         }
     }
 
     if expected == "integer" {
-        if let (Some(v), Some(min)) = (value.as_i64(), spec.get("minimum").and_then(Value::as_i64)) {
+        if let (Some(v), Some(min)) = (value.as_i64(), spec.get("minimum").and_then(Value::as_i64))
+        {
             if v < min {
                 return Err(reject(tool, format!("argument {name:?} must be >= {min}")));
             }
         }
-        if let (Some(v), Some(max)) = (value.as_i64(), spec.get("maximum").and_then(Value::as_i64)) {
+        if let (Some(v), Some(max)) = (value.as_i64(), spec.get("maximum").and_then(Value::as_i64))
+        {
             if v > max {
                 return Err(reject(tool, format!("argument {name:?} must be <= {max}")));
             }
@@ -182,12 +175,7 @@ mod tests {
     #[test]
     fn optional_arguments_may_be_omitted_or_null() {
         validate("t", &schema(), &json!({ "module": "ECU_7E8" })).unwrap();
-        validate(
-            "t",
-            &schema(),
-            &json!({ "module": "ECU_7E8", "signals": null }),
-        )
-        .unwrap();
+        validate("t", &schema(), &json!({ "module": "ECU_7E8", "signals": null })).unwrap();
     }
 
     #[test]

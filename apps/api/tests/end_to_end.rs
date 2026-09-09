@@ -62,12 +62,7 @@ impl Harness {
     }
 
     async fn get(&self, path: &str) -> Value {
-        let r = self
-            .client
-            .get(format!("{}{path}", self.base))
-            .send()
-            .await
-            .unwrap();
+        let r = self.client.get(format!("{}{path}", self.base)).send().await.unwrap();
         let status = r.status();
         let body: Value = r.json().await.unwrap();
         assert!(status.is_success(), "GET {path} -> {status}: {body}");
@@ -75,13 +70,7 @@ impl Harness {
     }
 
     async fn post(&self, path: &str, body: Value) -> Value {
-        let r = self
-            .client
-            .post(format!("{}{path}", self.base))
-            .json(&body)
-            .send()
-            .await
-            .unwrap();
+        let r = self.client.post(format!("{}{path}", self.base)).json(&body).send().await.unwrap();
         let status = r.status();
         let value: Value = r.json().await.unwrap();
         assert!(status.is_success(), "POST {path} -> {status}: {value}");
@@ -89,34 +78,18 @@ impl Harness {
     }
 
     async fn post_raw(&self, path: &str, body: Value) -> (u16, Value) {
-        let r = self
-            .client
-            .post(format!("{}{path}", self.base))
-            .json(&body)
-            .send()
-            .await
-            .unwrap();
+        let r = self.client.post(format!("{}{path}", self.base)).json(&body).send().await.unwrap();
         (r.status().as_u16(), r.json().await.unwrap())
     }
 
     async fn get_status(&self, path: &str) -> u16 {
-        self.client
-            .get(format!("{}{path}", self.base))
-            .send()
-            .await
-            .unwrap()
-            .status()
-            .as_u16()
+        self.client.get(format!("{}{path}", self.base)).send().await.unwrap().status().as_u16()
     }
 }
 
 /// Assert a tool endpoint answered with a successful envelope.
 fn ok(result: &Value, what: &str) {
-    assert_eq!(
-        result["success"], true,
-        "{what} failed: {}",
-        result["error"]
-    );
+    assert_eq!(result["success"], true, "{what} failed: {}", result["error"]);
 }
 
 #[tokio::test]
@@ -136,9 +109,7 @@ async fn the_full_read_only_diagnostic_flow_over_http_and_websocket() {
     assert_eq!(body["error"]["code"], "no_active_session");
 
     // ---- connect ---------------------------------------------------------
-    let connect = h
-        .post("/adapter/connect", json!({ "label": "end to end" }))
-        .await;
+    let connect = h.post("/adapter/connect", json!({ "label": "end to end" })).await;
     ok(&connect, "connect");
     assert_eq!(connect["data"]["state"]["state"], "ready");
     assert_eq!(connect["data"]["protocol_label"], "ISO 15765-4 CAN 11/500");
@@ -151,12 +122,8 @@ async fn the_full_read_only_diagnostic_flow_over_http_and_websocket() {
         .collect();
     assert!(caveats.contains(&"adapter_caveat"));
 
-    let session_id = SessionId::from_string(
-        h.get("/adapter").await["session_id"]
-            .as_str()
-            .unwrap()
-            .to_string(),
-    );
+    let session_id =
+        SessionId::from_string(h.get("/adapter").await["session_id"].as_str().unwrap().to_string());
 
     // ---- identify the vehicle -------------------------------------------
     let identify = h.post("/vehicles/identify", json!({})).await;
@@ -186,10 +153,7 @@ async fn the_full_read_only_diagnostic_flow_over_http_and_websocket() {
     ok(&signals, "read_supported_pids");
     let pids = signals["data"]["pids"].as_array().unwrap();
     assert!(pids.len() > 30, "expected a full mask walk, got {}", pids.len());
-    let signal_ids: Vec<&str> = pids
-        .iter()
-        .filter_map(|p| p["signal_id"].as_str())
-        .collect();
+    let signal_ids: Vec<&str> = pids.iter().filter_map(|p| p["signal_id"].as_str()).collect();
     assert!(signal_ids.contains(&"engine_rpm"));
     assert!(signal_ids.contains(&"dpf_temp_bank1_inlet"));
 
@@ -217,9 +181,8 @@ async fn the_full_read_only_diagnostic_flow_over_http_and_websocket() {
     assert!(!frame["values"].as_array().unwrap().is_empty());
 
     // ---- stream live data over the websocket -----------------------------
-    let (mut socket, _) = tokio_tungstenite::connect_async(format!("{}/live", h.ws_base))
-        .await
-        .unwrap();
+    let (mut socket, _) =
+        tokio_tungstenite::connect_async(format!("{}/live", h.ws_base)).await.unwrap();
 
     let hello: Value = serde_json::from_str(&next_text(&mut socket).await).unwrap();
     assert_eq!(hello["type"], "hello");
@@ -280,10 +243,7 @@ async fn the_full_read_only_diagnostic_flow_over_http_and_websocket() {
         "live values should change between samples: {rpm_samples:?}"
     );
 
-    socket
-        .send(Message::Text(json!({"type":"unsubscribe"}).to_string().into()))
-        .await
-        .unwrap();
+    socket.send(Message::Text(json!({"type":"unsubscribe"}).to_string().into())).await.unwrap();
     let unsub: Value = serde_json::from_str(&next_text(&mut socket).await).unwrap();
     assert_eq!(unsub["type"], "unsubscribed");
     drop(socket);
@@ -318,10 +278,7 @@ async fn the_full_read_only_diagnostic_flow_over_http_and_websocket() {
     assert_eq!(session.label.as_deref(), Some("end to end"));
 
     // Vehicle
-    let vehicle = store
-        .get_vehicle(session.vehicle_id.as_ref().unwrap())
-        .unwrap()
-        .unwrap();
+    let vehicle = store.get_vehicle(session.vehicle_id.as_ref().unwrap()).unwrap().unwrap();
     assert_eq!(vehicle.vin.as_deref(), Some(aim_simulator::SIMULATED_VIN));
     assert_eq!(vehicle.year, Some(2019));
     assert!(vehicle.model.is_none(), "model must never be inferred");
@@ -336,11 +293,7 @@ async fn the_full_read_only_diagnostic_flow_over_http_and_websocket() {
     let stored_modules = store.modules(&session_id).unwrap();
     assert_eq!(stored_modules.len(), 3);
     assert_eq!(
-        stored_modules
-            .iter()
-            .find(|m| m.module_key == "ECU_7E8")
-            .unwrap()
-            .name,
+        stored_modules.iter().find(|m| m.module_key == "ECU_7E8").unwrap().name,
         "SIM ENGINE CONTROL"
     );
 
@@ -350,9 +303,7 @@ async fn the_full_read_only_diagnostic_flow_over_http_and_websocket() {
     assert!(stored_dtcs.iter().all(|d| d.description.is_some()));
 
     // Measurements: every live sample was recorded with its raw bytes.
-    let rpm_rows = store
-        .measurements(&session_id, Some("engine_rpm"), 1000)
-        .unwrap();
+    let rpm_rows = store.measurements(&session_id, Some("engine_rpm"), 1000).unwrap();
     assert!(
         rpm_rows.len() >= 4,
         "expected the streamed samples to be recorded, got {}",
@@ -361,10 +312,7 @@ async fn the_full_read_only_diagnostic_flow_over_http_and_websocket() {
     for row in &rpm_rows {
         assert!(row.value.is_some());
         assert_eq!(row.unit.as_deref(), Some("rpm"));
-        assert!(
-            !row.raw_value.is_empty(),
-            "a measurement must keep the bytes it was decoded from"
-        );
+        assert!(!row.raw_value.is_empty(), "a measurement must keep the bytes it was decoded from");
     }
 
     // Events: the complete, ordered, gap-free trace.
@@ -394,13 +342,9 @@ async fn the_full_read_only_diagnostic_flow_over_http_and_websocket() {
     let refusal = events
         .iter()
         .find_map(|e| match &e.kind {
-            EventKind::SafetyDecision {
-                operation,
-                allowed,
-                initiator,
-                reason,
-                ..
-            } if operation == "obd2.clear_dtcs" => {
+            EventKind::SafetyDecision { operation, allowed, initiator, reason, .. }
+                if operation == "obd2.clear_dtcs" =>
+            {
                 Some((*allowed, initiator.clone(), reason.clone()))
             }
             _ => None,
@@ -411,9 +355,7 @@ async fn the_full_read_only_diagnostic_flow_over_http_and_websocket() {
     assert_eq!(refusal.2.as_deref(), Some("permission_level_disabled"));
 
     // A decoded value's evidence_ref resolves to the exact adapter exchange.
-    let evidence_ref = identify["values"][0]["provenance"]["evidence_ref"]
-        .as_i64()
-        .unwrap();
+    let evidence_ref = identify["values"][0]["provenance"]["evidence_ref"].as_i64().unwrap();
     match store.event_by_id(evidence_ref).unwrap().kind {
         EventKind::AdapterResponse { command, lines, .. } => {
             assert_eq!(command, "0902", "the VIN request");
@@ -434,14 +376,9 @@ async fn the_full_read_only_diagnostic_flow_over_http_and_websocket() {
     let detail = h.get(&format!("/sessions/{session_id}")).await;
     assert_eq!(detail["modules"].as_array().unwrap().len(), 3);
     assert_eq!(detail["dtcs"].as_array().unwrap().len(), 4);
-    assert_eq!(
-        detail["event_count"].as_i64().unwrap(),
-        events.len() as i64
-    );
+    assert_eq!(detail["event_count"].as_i64().unwrap(), events.len() as i64);
 
-    let page = h
-        .get(&format!("/sessions/{session_id}/events?after_seq=0&limit=5"))
-        .await;
+    let page = h.get(&format!("/sessions/{session_id}/events?after_seq=0&limit=5")).await;
     assert_eq!(page["events"].as_array().unwrap().len(), 5);
     assert_eq!(page["events"][0]["seq"], 1);
     assert_eq!(page["total"].as_i64().unwrap(), events.len() as i64);
@@ -449,9 +386,7 @@ async fn the_full_read_only_diagnostic_flow_over_http_and_websocket() {
     // ---- disconnect closes the record ------------------------------------
     let disconnect = h.post("/adapter/disconnect", json!({})).await;
     ok(&disconnect, "disconnect");
-    assert!(store.connections(&session_id).unwrap()[0]
-        .disconnected_at
-        .is_some());
+    assert!(store.connections(&session_id).unwrap()[0].disconnected_at.is_some());
     assert!(store.get_session(&session_id).unwrap().ended_at.is_some());
 }
 
@@ -459,10 +394,7 @@ async fn the_full_read_only_diagnostic_flow_over_http_and_websocket() {
 async fn the_session_event_websocket_replays_history_then_follows_live() {
     let h = Harness::start(ScenarioId::Healthy).await;
     ok(&h.post("/adapter/connect", json!({})).await, "connect");
-    let session_id = h.get("/adapter").await["session_id"]
-        .as_str()
-        .unwrap()
-        .to_string();
+    let session_id = h.get("/adapter").await["session_id"].as_str().unwrap().to_string();
 
     let (mut socket, _) =
         tokio_tungstenite::connect_async(format!("{}/sessions/{session_id}/stream", h.ws_base))
@@ -538,22 +470,17 @@ async fn connecting_twice_is_refused_so_a_live_session_is_never_orphaned() {
 #[tokio::test]
 async fn a_scenario_can_be_chosen_per_connection() {
     let h = Harness::start(ScenarioId::Healthy).await;
-    let connect = h
-        .post("/adapter/connect", json!({ "scenario": "dpf-regen" }))
-        .await;
+    let connect = h.post("/adapter/connect", json!({ "scenario": "dpf-regen" })).await;
     ok(&connect, "connect");
     h.post("/modules", json!({})).await;
     let dtcs = h.get("/modules/ECU_7E8/dtcs").await;
     assert_eq!(dtcs["data"]["confirmed_count"], 2, "the regen scenario was used");
 
-    let (status, body) = h
-        .post_raw("/adapter/disconnect", json!({}))
-        .await;
+    let (status, body) = h.post_raw("/adapter/disconnect", json!({})).await;
     assert_eq!(status, 200, "{body}");
 
-    let (status, body) = h
-        .post_raw("/adapter/connect", json!({ "scenario": "not-a-scenario" }))
-        .await;
+    let (status, body) =
+        h.post_raw("/adapter/connect", json!({ "scenario": "not-a-scenario" })).await;
     assert_eq!(status, 400);
     assert_eq!(body["error"]["code"], "bad_request");
 }
@@ -573,9 +500,7 @@ async fn unbuilt_features_answer_with_a_reason_rather_than_a_404() {
     assert_eq!(status, 409, "no configured provider should be a precondition failure");
     assert_eq!(body["error"]["details"]["agent_code"], "no_provider");
 
-    let (status, body) = h
-        .post_raw("/modules/ECU_7E8/tests/turbo_actuator/run", json!({}))
-        .await;
+    let (status, body) = h.post_raw("/modules/ECU_7E8/tests/turbo_actuator/run", json!({})).await;
     assert_eq!(status, 501);
     assert_eq!(body["error"]["code"], "not_implemented");
 
@@ -588,22 +513,14 @@ async fn the_tool_registry_is_published_for_the_future_agent() {
     let h = Harness::start(ScenarioId::Healthy).await;
     let tools = h.get("/tools").await;
 
-    let enabled: Vec<&str> = tools["enabled"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|t| t.as_str().unwrap())
-        .collect();
+    let enabled: Vec<&str> =
+        tools["enabled"].as_array().unwrap().iter().map(|t| t.as_str().unwrap()).collect();
     assert!(enabled.contains(&"read_dtcs"));
     assert!(!enabled.contains(&"clear_dtcs"));
 
     // Plain JSON Schema, no vendor wrapper.
-    let read_pid = tools["tools"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|t| t["name"] == "read_pid")
-        .unwrap();
+    let read_pid =
+        tools["tools"].as_array().unwrap().iter().find(|t| t["name"] == "read_pid").unwrap();
     assert_eq!(read_pid["parameters"]["type"], "object");
     assert_eq!(read_pid["parameters"]["additionalProperties"], false);
     assert_eq!(read_pid["permission_level"], "L0");

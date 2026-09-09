@@ -65,10 +65,7 @@ impl LoopbackTransport {
 }
 
 fn normalize(s: &str) -> String {
-    s.chars()
-        .filter(|c| !c.is_whitespace())
-        .flat_map(|c| c.to_uppercase())
-        .collect()
+    s.chars().filter(|c| !c.is_whitespace()).flat_map(|c| c.to_uppercase()).collect()
 }
 
 impl Transport for LoopbackTransport {

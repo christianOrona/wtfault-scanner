@@ -36,11 +36,7 @@ fn call(
     arguments: serde_json::Value,
 ) -> aim_types::ToolResult {
     let registry = ToolRegistry::phase1();
-    execute(
-        service,
-        &registry,
-        &ToolCall::new(tool, AGENT).with_arguments(arguments),
-    )
+    execute(service, &registry, &ToolCall::new(tool, AGENT).with_arguments(arguments))
 }
 
 #[test]
@@ -54,11 +50,7 @@ fn a_read_only_diagnostic_sequence_runs_entirely_through_the_registry() {
     let scan = call(&mut service, "scan_modules", json!({}));
     assert!(scan.success);
 
-    let pids = call(
-        &mut service,
-        "read_supported_pids",
-        json!({ "module": "ECU_7E8" }),
-    );
+    let pids = call(&mut service, "read_supported_pids", json!({ "module": "ECU_7E8" }));
     assert!(pids.success);
 
     let dtcs = call(&mut service, "read_dtcs", json!({ "module": "ECU_7E8" }));
@@ -83,11 +75,7 @@ fn a_read_only_diagnostic_sequence_runs_entirely_through_the_registry() {
 fn an_unknown_tool_is_refused_and_the_caller_is_told_what_exists() {
     let (mut service, _) = connected(ScenarioId::Healthy);
     let registry = ToolRegistry::phase1();
-    let result = execute(
-        &mut service,
-        &registry,
-        &ToolCall::new("reflash_ecu", AGENT),
-    );
+    let result = execute(&mut service, &registry, &ToolCall::new("reflash_ecu", AGENT));
     assert!(!result.success);
     let error = result.error.unwrap();
     assert_eq!(error.code, ErrorCode::OperationNotAllowed);
@@ -102,9 +90,9 @@ fn malformed_arguments_are_rejected_before_the_vehicle_is_touched() {
     let before = service.health().requests;
 
     for (tool, args) in [
-        ("read_pid", json!({ "module": "ECU_7E8" })),          // missing signal
+        ("read_pid", json!({ "module": "ECU_7E8" })), // missing signal
         ("read_pid", json!({ "modul": "ECU_7E8", "signal": "engine_rpm" })), // typo
-        ("read_live_data", json!({ "module": "ECU_7E8", "signals": [] })),   // empty
+        ("read_live_data", json!({ "module": "ECU_7E8", "signals": [] })), // empty
         ("read_live_data", json!({ "module": "ECU_7E8", "signals": "rpm" })), // wrong type
         ("read_freeze_frame", json!({ "module": "ECU_7E8", "frame": 999 })), // out of range
     ] {
@@ -144,10 +132,7 @@ fn the_write_tool_is_refused_through_the_registry_too() {
             .confirmed_by("the-owner"),
     );
     assert!(!result.success);
-    assert_eq!(
-        result.error.unwrap().code,
-        ErrorCode::PermissionLevelDisabled
-    );
+    assert_eq!(result.error.unwrap().code, ErrorCode::PermissionLevelDisabled);
     assert!(!emulator.lock().unwrap().vehicle.dtcs_cleared);
 }
 
@@ -173,16 +158,13 @@ fn every_dispatched_tool_is_recorded_in_the_flight_recorder() {
     let (mut service, _) = connected(ScenarioId::Healthy);
     call(&mut service, "scan_modules", json!({}));
 
-    let events = service
-        .store()
-        .events_since(service.session_id(), 0, 10_000)
-        .unwrap();
+    let events = service.store().events_since(service.session_id(), 0, 10_000).unwrap();
     let invoked: Vec<&str> = events
         .iter()
         .filter_map(|e| match &e.kind {
-            aim_types::EventKind::ToolInvoked {
-                tool, initiator, ..
-            } if initiator == AGENT => Some(tool.as_str()),
+            aim_types::EventKind::ToolInvoked { tool, initiator, .. } if initiator == AGENT => {
+                Some(tool.as_str())
+            }
             _ => None,
         })
         .collect();
@@ -221,10 +203,7 @@ fn an_agent_cannot_clear_codes_even_though_a_person_can() {
 
     // And the refusal is in the flight recorder. A refusal that leaves no trace
     // is the one shape an audit log must never have.
-    let events = service
-        .store()
-        .events_since(service.session_id(), 0, 500)
-        .unwrap();
+    let events = service.store().events_since(service.session_id(), 0, 500).unwrap();
     assert!(
         events.iter().any(|e| matches!(
             &e.kind,

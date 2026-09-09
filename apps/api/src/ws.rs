@@ -170,9 +170,7 @@ async fn run_event_stream(
             for event in backlog {
                 last_seq = event.seq;
                 if socket
-                    .send(text(&EventStreamMessage::Event {
-                        event: Box::new(event),
-                    }))
+                    .send(text(&EventStreamMessage::Event { event: Box::new(event) }))
                     .await
                     .is_err()
                 {
@@ -360,10 +358,7 @@ mod tests {
 
     #[test]
     fn stream_messages_carry_a_type_discriminant() {
-        let m = EventStreamMessage::Lagged {
-            missed: 12,
-            resume_after_seq: 400,
-        };
+        let m = EventStreamMessage::Lagged { missed: 12, resume_after_seq: 400 };
         let v = serde_json::to_value(&m).unwrap();
         assert_eq!(v["type"], "lagged");
         assert_eq!(v["missed"], 12);
@@ -377,11 +372,7 @@ mod tests {
         )
         .unwrap();
         match c {
-            LiveCommand::Subscribe {
-                module,
-                signals,
-                interval_ms,
-            } => {
+            LiveCommand::Subscribe { module, signals, interval_ms } => {
                 assert_eq!(module, "ECU_7E8");
                 assert_eq!(signals, vec!["engine_rpm"]);
                 assert_eq!(interval_ms, Some(250));
@@ -394,13 +385,7 @@ mod tests {
             r#"{"type":"subscribe","module":"ECU_7E8","signals":["engine_rpm"]}"#,
         )
         .unwrap();
-        assert!(matches!(
-            c,
-            LiveCommand::Subscribe {
-                interval_ms: None,
-                ..
-            }
-        ));
+        assert!(matches!(c, LiveCommand::Subscribe { interval_ms: None, .. }));
 
         assert!(matches!(
             serde_json::from_str::<LiveCommand>(r#"{"type":"unsubscribe"}"#).unwrap(),
