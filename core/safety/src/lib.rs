@@ -793,18 +793,12 @@ mod tests {
     #[test]
     fn programming_stays_refused_by_level() {
         let gate = SafetyGate::phase1();
-        for op in ["program.program_module"] {
-            let d = gate.authorize(
-                &OperationRequest::new(op, "user").confirmed_by("owner"),
-                Some(&caps(true)),
-                &ready(),
-            );
-            assert_eq!(
-                d.into_result().unwrap_err().code,
-                ErrorCode::PermissionLevelDisabled,
-                "{op}"
-            );
-        }
+        let d = gate.authorize(
+            &OperationRequest::new("program.program_module", "user").confirmed_by("owner"),
+            Some(&caps(true)),
+            &ready(),
+        );
+        assert_eq!(d.into_result().unwrap_err().code, ErrorCode::PermissionLevelDisabled);
     }
 
     /// The risk ceiling is not the level ceiling, and it has to bite on its own.
@@ -987,9 +981,10 @@ mod tests {
             assert!(c.level <= MAX_ENABLED_LEVEL, "{} is enabled", c.id);
         }
         // Programming is still off, by level.
-        for id in ["program.program_module"] {
-            assert!(!r.enabled().iter().any(|c| c.id == id), "{id} must not be enabled");
-        }
+        assert!(
+            !r.enabled().iter().any(|c| c.id == "program.program_module"),
+            "programming must not be enabled"
+        );
         // The configuration write this build does support is on.
         assert!(
             r.enabled().iter().any(|c| c.id == "config.write_feature"),
