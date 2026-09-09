@@ -123,6 +123,27 @@ pub struct VirtualEcu {
     /// An empty map means the module answers `0x22` with serviceNotSupported,
     /// which is what most modules on most vehicles actually do.
     pub config_records: BTreeMap<u16, Vec<u8>>,
+    /// How this module behaves when asked to change one of those records.
+    pub config_write: ConfigWriteBehaviour,
+}
+
+/// What a module does with a configuration write.
+///
+/// Real modules do all three of these, and the third is the one that matters:
+/// a module that answers "accepted" and then does not change is exactly why a
+/// positive response is not allowed to count as a successful change. An app
+/// tested only against a simulator that always tells the truth would report
+/// that write as a success.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ConfigWriteBehaviour {
+    /// Accepts the write and applies it.
+    #[default]
+    Accept,
+    /// Refuses with conditionsNotCorrect, the way a module outside the session
+    /// it wants, or with a security access it has not been given, does.
+    Refuse,
+    /// Answers positively and changes nothing.
+    AcceptButIgnore,
 }
 
 impl VirtualEcu {
@@ -190,6 +211,7 @@ impl VirtualVehicle {
             reports_vin: true,
             uds_faults: Some(Vec::new()),
             config_records: BTreeMap::new(),
+            config_write: ConfigWriteBehaviour::Accept,
         };
         // Two further modules answer the standard broadcast. Their function is
         // not asserted: on a given vehicle 7EA and 7EB could be almost
@@ -208,6 +230,7 @@ impl VirtualVehicle {
             reports_vin: false,
             uds_faults: Some(Vec::new()),
             config_records: BTreeMap::new(),
+            config_write: ConfigWriteBehaviour::Accept,
         };
         let third = VirtualEcu {
             response_id: 0x7EB,
@@ -222,6 +245,7 @@ impl VirtualVehicle {
             reports_vin: false,
             uds_faults: None,
             config_records: BTreeMap::new(),
+            config_write: ConfigWriteBehaviour::Accept,
         };
 
         // Two modules outside the legislated emissions block, answering UDS and
@@ -260,6 +284,7 @@ impl VirtualVehicle {
                 [0xC1, 0x21, 0x87, 0x08],
             ]),
             config_records: BTreeMap::new(),
+            config_write: ConfigWriteBehaviour::Accept,
         };
         let body = VirtualEcu {
             response_id: 0x7A8,
@@ -287,6 +312,7 @@ impl VirtualVehicle {
                 (0xDE01u16, vec![0x00, 0x11, 0x22, 0b1011_0011, 0x44, 0x55]),
                 (0xDE02u16, vec![0x01, 0x00]),
             ]),
+            config_write: ConfigWriteBehaviour::Accept,
         };
 
         VirtualVehicle {
@@ -342,7 +368,14 @@ impl VirtualVehicle {
                 // A configuration write that the module accepted actually
                 // changes it. Applied here because `answer` takes `&self` on
                 // purpose - one place mutates a module, and it is this one.
-                if request[0] == 0x2E && payload.first() == Some(&0x6E) && request.len() >= 3 {
+                // AcceptButIgnore answers positively and changes nothing, which
+                // is why the app is not allowed to treat a positive response as
+                // a changed setting.
+                if request[0] == 0x2E
+                    && payload.first() == Some(&0x6E)
+                    && request.len() >= 3
+                    && self.ecus[i].config_write == ConfigWriteBehaviour::Accept
+                {
                     let did = u16::from_be_bytes([request[1], request[2]]);
                     self.ecus[i].config_records.insert(did, request[3..].to_vec());
                 }
@@ -549,6 +582,13 @@ impl VirtualVehicle {
                     _ => return Some(vec![0x7F, 0x2E, 0x13]),
                 };
                 let value = &request[3.min(request.len())..];
+                // conditionsNotCorrect: the module is there, understands the
+                // request, and will not do it. A module outside the session it
+                // wants, or without a security access it has been given, says
+                // exactly this.
+                if ecu.config_write == ConfigWriteBehaviour::Refuse {
+                    return Some(vec![0x7F, 0x2E, 0x22]);
+                }
                 match ecu.config_records.get(&did) {
                     None if ecu.config_records.is_empty() => Some(vec![0x7F, 0x2E, 0x11]),
                     None => Some(vec![0x7F, 0x2E, 0x31]),
