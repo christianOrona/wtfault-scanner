@@ -111,6 +111,10 @@ impl Transport for SerialTransport {
         self.config.port.clone()
     }
 
+    fn baud(&self) -> Option<u32> {
+        (self.config.transport_kind != TransportKind::Bluetooth).then_some(self.config.baud_rate)
+    }
+
     fn open(&mut self) -> AimResult<()> {
         if self.port.is_some() {
             return Ok(());

@@ -16,8 +16,16 @@ use serde::{Deserialize, Serialize};
 pub enum PortKind {
     /// USB CDC/FTDI device.
     Usb,
-    /// Bluetooth Classic SPP virtual COM port.
+    /// Bluetooth Classic SPP virtual COM port, outgoing. The usable one.
     Bluetooth,
+    /// Bluetooth SPP port Windows created for *incoming* connections.
+    ///
+    /// Pairing an SPP device creates two ports and only one of them talks to
+    /// the device. This is the other one: a listening socket for something
+    /// connecting to this machine. Opening it succeeds and then every write
+    /// times out, which is indistinguishable from a dead adapter unless you
+    /// know the two exist.
+    BluetoothIncoming,
     /// On-board / PCI serial hardware.
     Native,
     /// Enumerated but unclassifiable.
@@ -44,6 +52,12 @@ pub struct PortInfo {
     /// Heuristic: this port *might* be an OBD adapter. Confirmed only by a
     /// successful `ATZ`/`ATI` probe, never by this flag.
     pub likely_obd_adapter: bool,
+    /// Why this port is not worth trying, when it is not.
+    ///
+    /// Present so the interface can say so rather than listing a dead port
+    /// beside a live one with nothing to tell them apart.
+    #[serde(default)]
+    pub unusable_because: Option<String>,
 }
 
 impl PortKind {
@@ -55,7 +69,9 @@ impl PortKind {
     /// wired is the assumption that fails safely.
     pub fn transport_kind(&self) -> aim_types::TransportKind {
         match self {
-            PortKind::Bluetooth => aim_types::TransportKind::Bluetooth,
+            PortKind::Bluetooth | PortKind::BluetoothIncoming => {
+                aim_types::TransportKind::Bluetooth
+            }
             PortKind::Usb | PortKind::Native | PortKind::Unknown => aim_types::TransportKind::Usb,
         }
     }
@@ -127,10 +143,52 @@ pub fn list_ports() -> Vec<PortInfo> {
                 manufacturer,
                 product,
                 likely_obd_adapter: false,
+                unusable_because: None,
             }
             .classify()
         })
+        .map(apply_bluetooth_role)
         .collect()
+}
+
+/// Correct a Bluetooth SPP port the enumeration could not classify.
+///
+/// Windows reports both of a paired device's COM ports as `Unknown` with no
+/// name, vendor or product, so the two are indistinguishable in a list - and
+/// one of them can never talk to the adapter. See [`crate::bluetooth_windows`].
+#[cfg(feature = "serial")]
+fn apply_bluetooth_role(mut port: PortInfo) -> PortInfo {
+    use crate::bluetooth_windows::{spp_roles, SppRole};
+
+    // Looked up once per listing rather than once per port.
+    thread_local! {
+        static ROLES: std::collections::BTreeMap<String, SppRole> = spp_roles();
+    }
+    let role = ROLES.with(|r| r.get(&port.name.to_ascii_uppercase()).copied());
+
+    match role {
+        Some(SppRole::Outgoing) => {
+            port.kind = PortKind::Bluetooth;
+            if port.product.is_none() {
+                port.product = Some(String::from("Bluetooth serial (outgoing)"));
+            }
+            // A paired SPP device is a plausible adapter; the probe still
+            // decides.
+            port.likely_obd_adapter = true;
+        }
+        Some(SppRole::Incoming) => {
+            port.kind = PortKind::BluetoothIncoming;
+            port.product = Some(String::from("Bluetooth serial (incoming)"));
+            port.likely_obd_adapter = false;
+            port.unusable_because = Some(String::from(
+                "This is the incoming half of a Bluetooth pairing - it waits for something to \
+                 connect to this computer, and never reaches your adapter. Windows always \
+                 creates one alongside the outgoing port. Pick the other one.",
+            ));
+        }
+        None => {}
+    }
+    port
 }
 
 /// Enumerate serial ports — stub used when the `serial` feature is off.
@@ -153,6 +211,7 @@ mod tests {
             manufacturer: None,
             product: product.map(String::from),
             likely_obd_adapter: false,
+            unusable_because: None,
         }
         .classify()
     }

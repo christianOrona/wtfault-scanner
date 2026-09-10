@@ -494,6 +494,29 @@ impl SessionStore {
         Ok(raw.and_then(|s| serde_json::from_value(serde_json::Value::String(s)).ok()))
     }
 
+    /// The line speed this adapter was last found answering at.
+    ///
+    /// Recorded inside the connection capabilities, so no new table is needed.
+    /// `None` for Bluetooth, where the virtual port ignores baud, and for a port
+    /// nothing has connected to yet.
+    pub fn last_baud_for_adapter(&self, adapter_id: &str) -> AimResult<Option<u32>> {
+        let conn = self.lock()?;
+        let raw: Option<String> = conn
+            .query_row(
+                "SELECT capabilities FROM connections
+                 WHERE adapter_id = ?1
+                 ORDER BY connected_at DESC
+                 LIMIT 1",
+                [adapter_id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(storage)?;
+        Ok(raw
+            .and_then(|s| serde_json::from_str::<aim_types::AdapterCapabilities>(&s).ok())
+            .and_then(|c| c.baud))
+    }
+
     /// Connections recorded for a session, oldest first.
     pub fn connections(&self, session_id: &SessionId) -> AimResult<Vec<ConnectionRecord>> {
         let conn = self.lock()?;
