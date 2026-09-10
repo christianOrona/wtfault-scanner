@@ -3,6 +3,69 @@
 Notable changes, newest first. Versions follow [semantic versioning](https://semver.org),
 with the caveat that everything below 1.0 is allowed to move.
 
+## [0.3.0] — 2026-09-11
+
+Talk to any vehicle, not just the one this was built against.
+
+### The bug that shaped this release
+
+- **A hardcoded 11-bit broadcast header made every 29-bit vehicle look absent.**
+  Fixed in five places: broadcast headers, the full-vehicle scan, module
+  capture, the configuration write path, and the community catalogue. On a 2023
+  Odyssey this turned "every protocol returns NO DATA" into a VIN, two modules,
+  readiness and live data — and auto-detection then succeeded on the *first*
+  probe, because the protocol sweep had only ever been compensating for our own
+  malformed request.
+- **29-bit addressing throughout**: `ATCP`/`ATSH` splitting for adapters that
+  reject the one-command form, 29-bit response parsing, 29-bit address sweeping,
+  and module addresses stored as text so `18DA10F1` is expressible.
+
+### Knowing what a vehicle can do
+
+- **Read-only capability probing**: which identifiers a module holds, which
+  diagnostic sessions it grants, whether it implements security access. Never
+  requests a programming session.
+- **Write-gate probing**: establishes whether a module accepts writes at all, by
+  asking it to write to an identifier it has just reported as absent. Nothing
+  can land, and the refusal is the measurement.
+- **A negative response code now carries its consequence.** `securityAccessDenied`
+  and `requestOutOfRange` used to reach a person as the same shrug.
+- **Uncatalogued codes say what can be measured next** instead of ending there.
+
+### Knowledge from outside this project
+
+- **Community signal definitions** in the OBDb format, matched to the vehicle,
+  labelled by how closely, and never presented as measurement.
+- **Factory as-built import**, with the block↔identifier correspondence measured
+  on a vehicle rather than assumed.
+- **One configuration mapping measured on a real vehicle**, scoped by exact VIN.
+
+### Adapters that misbehave
+
+- Bluetooth pairing creates two COM ports and only one reaches the adapter; the
+  dead one is now named as such rather than listed beside the live one.
+- A Bluetooth port no longer gets a baud sweep it cannot need — six open/close
+  cycles thrashing an RFCOMM link was the "it connects and then disconnects".
+- Line speed and protocol are remembered per adapter; connect went from 8519 ms
+  to 2890 ms on a cable that answers at 500000.
+- Errors are recognised when they arrive garbled, including truncated ones.
+- Recovery from adapter glitches, and a learned response window rather than an
+  assumed one.
+- The socket is checked for power before nine protocols are tried on it.
+
+### Interface
+
+- The splash stays long enough to be seen, and a click or key skips it.
+- The flight recorder can be exported, with the raw adapter lines intact.
+
+### Known limits
+
+- **A cheap ELM327 clone cannot perform a configuration write.** A 13-byte
+  request comes back `?` from the adapter in 11 ms and never reaches the
+  vehicle. STN hardware — OBDLink EX or MX+ — is what this needs.
+- The interface lags the core: it can find a failing part without showing where
+  it is, and buries past sessions below the fold.
+
 ## [0.2.0] — 2026-09-10
 
 Configuration writes, and the machinery that makes them safe to have.

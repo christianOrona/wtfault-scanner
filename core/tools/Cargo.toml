@@ -6,17 +6,17 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-aim-diagnostics = { version = "0.2.0", path = "../diagnostics", default-features = false }
-aim-safety = { version = "0.2.0", path = "../safety" }
-aim-types = { version = "0.2.0", path = "../types" }
+aim-diagnostics = { version = "0.3.0", path = "../diagnostics", default-features = false }
+aim-safety = { version = "0.3.0", path = "../safety" }
+aim-types = { version = "0.3.0", path = "../types" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 
 [dev-dependencies]
-aim-decoders = { version = "0.2.0", path = "../decoders" }
-aim-session = { version = "0.2.0", path = "../session" }
-aim-simulator = { version = "0.2.0", path = "../../simulator" }
-aim-adapter = { version = "0.2.0", path = "../adapter", default-features = false }
+aim-decoders = { version = "0.3.0", path = "../decoders" }
+aim-session = { version = "0.3.0", path = "../session" }
+aim-simulator = { version = "0.3.0", path = "../../simulator" }
+aim-adapter = { version = "0.3.0", path = "../adapter", default-features = false }
 
 [features]
 default = ["serial"]

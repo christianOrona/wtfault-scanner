@@ -15,18 +15,18 @@ path = "src/main.rs"
 
 [dependencies]
 directories = "5"
-aim-agent = { version = "0.2.0", path = "../../core/agent" }
+aim-agent = { version = "0.3.0", path = "../../core/agent" }
 async-trait = "0.1.89"
-aim-adapter = { version = "0.2.0", path = "../../core/adapter", default-features = false }
-aim-decoders = { version = "0.2.0", path = "../../core/decoders" }
-aim-diagnostics = { version = "0.2.0", path = "../../core/diagnostics", default-features = false }
-aim-protocols = { version = "0.2.0", path = "../../core/protocols" }
-aim-safety = { version = "0.2.0", path = "../../core/safety" }
-aim-session = { version = "0.2.0", path = "../../core/session" }
-aim-simulator = { version = "0.2.0", path = "../../simulator" }
-aim-tools = { version = "0.2.0", path = "../../core/tools", default-features = false }
-aim-transport = { version = "0.2.0", path = "../../core/transport", default-features = false }
-aim-types = { version = "0.2.0", path = "../../core/types" }
+aim-adapter = { version = "0.3.0", path = "../../core/adapter", default-features = false }
+aim-decoders = { version = "0.3.0", path = "../../core/decoders" }
+aim-diagnostics = { version = "0.3.0", path = "../../core/diagnostics", default-features = false }
+aim-protocols = { version = "0.3.0", path = "../../core/protocols" }
+aim-safety = { version = "0.3.0", path = "../../core/safety" }
+aim-session = { version = "0.3.0", path = "../../core/session" }
+aim-simulator = { version = "0.3.0", path = "../../simulator" }
+aim-tools = { version = "0.3.0", path = "../../core/tools", default-features = false }
+aim-transport = { version = "0.3.0", path = "../../core/transport", default-features = false }
+aim-types = { version = "0.3.0", path = "../../core/types" }
 axum = { version = "0.8.7", features = ["ws"] }
 clap = { version = "4.5.53", features = ["derive"] }
 serde = { version = "1.0.229", features = ["derive"] }

@@ -321,9 +321,44 @@ line between them.
 **Works today, verified on hardware**
 
 - OBD-II services 01–0A and UDS 0x10/0x19/0x22/0x3E over an ELM327-class adapter
+- **11-bit and 29-bit CAN.** Verified on a 2019 Ford F-250 (11-bit) and a 2023
+  Honda Odyssey (29-bit), which are different enough to have caught real bugs
 - Full-bus module sweep, live data, Mode 06, readiness, session comparison
+- **Read-only capability probing** — which identifiers a module holds, which
+  diagnostic sessions it grants, and whether it implements security access
+- **Community signal definitions** from OBDb, matched to the vehicle and
+  labelled with how closely
+- **Factory as-built import**, with the block↔identifier correspondence measured
+  rather than assumed
 - The agent loop against Anthropic, xAI, Ollama or any OpenAI-shaped endpoint
 - The flight recorder, and the evidence link from every number on screen
+
+**Measured on a real vehicle**
+
+Two days of live testing on two vehicles produced the findings this project
+exists to produce, and several of them were bugs in this application rather than
+faults in the cars:
+
+- **It was a Ford-only scanner and nobody knew.** A hardcoded 11-bit broadcast
+  header meant every 29-bit vehicle answered nothing, which is indistinguishable
+  from a vehicle that is not there. On the Odyssey, fixing it turned "every
+  protocol returns NO DATA" into a VIN, two modules, readiness and live data —
+  and auto-detection then succeeded on the *first* probe, because the protocol
+  sweep had only ever been compensating for our own malformed request.
+- **The first configuration mapping measured on a real vehicle.** AutoLock on the
+  F-250: module `72E`, identifier `DE0E`, byte 4, bit 0. Measured by capturing
+  the module, having the owner change the setting from the dash, capturing
+  again, and diffing — then the same in reverse. One bit moved each time, three
+  other body modules showed nothing.
+- **A cheap adapter cannot write.** A 13-byte configuration write comes back `?`
+  from the adapter in 11 ms — it never reaches the vehicle — while a 4-byte one
+  is answered properly by the module. Multi-frame transmit is the limit, and it
+  explains "I can read fine but writing never works" without blaming the car.
+- **Bluetooth pairing creates two COM ports** and only one talks to the adapter.
+  Both look identical in a port list, and picking wrong looks exactly like dead
+  hardware.
+- **Adapter voltage readings are not trustworthy.** One cable reported 28.3 V on
+  a truck whose engine module reported 12.5 V.
 
 **Known gaps, in the order they matter**
 
@@ -339,12 +374,20 @@ line between them.
   from a URL, with a count of how many people have verified it, does not exist.
 - **RAM 2018 and newer** put a Security Gateway between the port and the bus. No
   standards-based tool reaches past it, this one included.
-- **No verified configuration mapping ships.** The write path is built and
-  tested end to end, and every feature in the catalogue has `mapping: null`
-  because this project has measured none. That is a gap rather than a refusal:
-  it closes when somebody measures one and drops in a profile file, with no new
+- **A cheap ELM327 clone cannot perform a configuration write.** The mapping,
+  the open write gate and the write path are all verified; the adapter refuses
+  to transmit a multi-frame request and the vehicle never sees it. STN-based
+  hardware — OBDLink EX or MX+ — is what this needs, and the app should report
+  that before somebody tries rather than after.
+- **One verified configuration mapping ships**, scoped by exact VIN to the truck
+  it was measured on. Every other feature in the catalogue has `mapping: null`
+  because nobody has measured them. That is a gap rather than a refusal: it
+  closes when somebody measures one and drops in a profile file, with no new
   release. Refusals on risk grounds — brakes, keys, firmware — are the other
   kind, and the app says which one it is telling you.
+- **The interface lags the core.** It can find a failing part and not show you
+  where it is, buries past sessions below the fold, and answers in plain text
+  where a button would do. Tracked, and being worked on.
 
 
 ---
@@ -371,6 +414,60 @@ cargo run -p aim-adapter --example probe_port -- COM5    # what is on that port?
 ```
 
 Screenshots above are from the virtual vehicle.
+
+---
+
+## Standing on other people's work
+
+Almost every hard-won thing in this application was learned somewhere first.
+Some of it is a licence obligation to say so; the rest is just true.
+
+**Data this project ships**
+
+- **[OBDb](https://github.com/OBDb)** — a community documenting the diagnostic
+  parameters, scalings and codes that vehicles answer to, across roughly 740
+  makes and models. The bundled signalset comes from there and is used under
+  **CC BY-SA 4.0**; see
+  [`vehicle-profiles/catalog/obdb/ATTRIBUTION.md`](vehicle-profiles/catalog/obdb/ATTRIBUTION.md).
+  It is what lets this app ask a vehicle a question nobody here had to reverse
+  engineer.
+
+**Behaviour learned by reading, and reimplemented independently**
+
+These are GPL and this project is MIT/Apache, so no code was taken from either.
+What was taken is knowledge of how ELM327 adapters and vehicles actually behave
+— facts about hardware, not anybody's expression — and the difference matters
+enough to say plainly.
+
+- **[python-OBD](https://github.com/Ircama/python-OBD)** (Ircama's maintained
+  fork, and [Brendan Whitfield's](https://github.com/brendan-w/python-OBD)
+  original) — checking the socket is powered before sweeping protocols, and a
+  faster way to find an adapter's line speed.
+- **[AndrOBD](https://github.com/fr3ts0n/AndrOBD)** by fr3ts0n — years of field
+  knowledge about what real adapters do when they misbehave: which error strings
+  actually appear, that `NABLETO` is a truncated `UNABLE TO CONNECT`, that a
+  warm start recovers where a full reset is overkill, and that a response
+  timeout is worth learning rather than assuming.
+
+**Ideas and architecture**
+
+- **[odxtools](https://github.com/mercedes-benz/odxtools)** (Mercedes-Benz) —
+  separating a reusable data definition from the parameters that reference it.
+- **[EcuBus-Pro](https://github.com/ecubus/EcuBus-Pro)** — what a serious
+  automotive diagnostic application looks like when protocol, hardware,
+  database and interface are kept apart.
+- **[opendbc](https://github.com/commaai/opendbc)** (comma.ai) — identifying a
+  vehicle from what its ECUs report, rather than asking someone to pick from a
+  list.
+- **[FORScan](https://forscan.org)** and the community around it, whose
+  documentation of Ford as-built configuration is why the block↔identifier
+  correspondence was worth going looking for at all.
+- **[automotive_diag](https://crates.io/crates/automotive_diag)** — a
+  permissively-licensed Rust home for the diagnostic tables this project
+  currently hand-writes.
+
+A fuller audit, including what was rejected and why, is in
+[docs/KNOWLEDGE-ENGINE.md](docs/KNOWLEDGE-ENGINE.md).
 
 ---
 
