@@ -25,4 +25,4 @@ pub mod store;
 
 pub use compare::{compare_sessions, FaultChange, FaultDelta, SessionComparison, SignalDelta};
 pub use schema::{latest_version, Migration, MIGRATIONS};
-pub use store::{measurement_from, SessionStore, SessionSummary};
+pub use store::{measurement_from, SessionStore, SessionSummary, StoredCapture};

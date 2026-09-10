@@ -1592,8 +1592,43 @@ impl DiagnosticService {
             ));
         }
 
+        // Stored, so that this can be the "before" of a comparison made next
+        // week. A capture that lived only in an HTTP response could only ever
+        // be compared with another one taken in the same sitting, which is not
+        // how somebody changes a setting on their own vehicle.
+        let stored_id = match serde_json::to_string(&capture) {
+            Ok(json) => self
+                .store
+                .record_capture(
+                    &self.session.id,
+                    self.session.vehicle_id.as_ref().map(|v| v.as_str()),
+                    &format!("ECU_{module:03X}"),
+                    capture.label.as_deref(),
+                    &capture.taken_at,
+                    &json,
+                )
+                .ok(),
+            Err(_) => None,
+        };
+        if stored_id.is_none() {
+            warnings.push(Warning::caution(
+                "capture_not_stored",
+                "This capture could not be saved, so it will not be available to compare \
+                 against later. It is still returned in full here — keep it if you need it.",
+            ));
+        }
+        if self.session.vehicle_id.is_none() {
+            warnings.push(Warning::info(
+                "capture_not_linked_to_a_vehicle",
+                "No vehicle has been identified in this session, so this capture is saved \
+                 without one and will not be found by a later search for this vehicle's \
+                 captures. Running identify_vehicle first avoids that.",
+            ));
+        }
+
         Ok(Payload {
             data: Some(serde_json::json!({
+                "capture_id": stored_id,
                 "capture": capture,
                 "records_read": records.len(),
                 "hex": records
@@ -1601,10 +1636,52 @@ impl DiagnosticService {
                     .map(|(d, r)| (format!("{d:04X}"), aim_types::hex(r)))
                     .collect::<std::collections::BTreeMap<_, _>>(),
                 "next_step":
-                    "Change the setting once with a tool already known to do it correctly, then \
-                     capture the same identifiers again and compare the two.",
+                    "Change the setting once, using the vehicle's own controls or a tool already \
+                     known to do it correctly. Then capture the same identifiers again and \
+                     compare the two. The comparison reports only the bits that moved.",
             })),
             warnings,
+            ..Default::default()
+        })
+    }
+
+    /// Every capture stored for the vehicle in this session, newest first.
+    ///
+    /// This is what makes the loop usable across days: today's capture finds
+    /// last week's without anybody having kept a JSON blob in a text file.
+    pub fn list_captures(&mut self, initiator: &str) -> ToolResult {
+        let t0 = Instant::now();
+        self.record_invocation("list_captures", initiator, serde_json::json!({}));
+        let outcome = self
+            .authorize(capabilities::READ_FEATURE, initiator, None)
+            .and_then(|_| self.list_captures_inner());
+        self.finish("list_captures", capabilities::READ_FEATURE, t0, outcome)
+    }
+
+    fn list_captures_inner(&mut self) -> AimResult<Payload> {
+        let Some(vehicle_id) = self.session.vehicle_id.clone() else {
+            return Err(AimError::new(
+                ErrorCode::PreconditionFailed,
+                "no vehicle has been identified in this session, so there is nothing to look up \
+                 captures for. Run identify_vehicle first.",
+            ));
+        };
+        let captures = self.store.captures_for_vehicle(vehicle_id.as_str())?;
+        Ok(Payload {
+            data: Some(serde_json::json!({
+                "vehicle_id": vehicle_id.as_str(),
+                "count": captures.len(),
+                "captures": captures
+                    .iter()
+                    .map(|c| serde_json::json!({
+                        "id": c.id,
+                        "module": c.module_key,
+                        "label": c.label,
+                        "taken_at": c.taken_at,
+                        "same_session": c.session_id == self.session.id.as_str(),
+                    }))
+                    .collect::<Vec<_>>(),
+            })),
             ..Default::default()
         })
     }
@@ -2394,10 +2471,8 @@ impl DiagnosticService {
         // fault memory and will not show it without manufacturer security"
         // tells them where they stand.
         for (kind, count) in &refusals {
-            warnings.push(Warning::info(
-                kind.code(),
-                format!("{count} module(s): {}", kind.explain()),
-            ));
+            warnings
+                .push(Warning::info(kind.code(), format!("{count} module(s): {}", kind.explain())));
         }
         warnings.push(Warning::info(
             "uds_scan_scope",

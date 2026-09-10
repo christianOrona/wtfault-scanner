@@ -44,7 +44,12 @@ use std::sync::Arc;
 /// Which ECU a request is addressed to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RequestTarget {
-    /// Broadcast to every emissions-related ECU (11-bit id `0x7DF`).
+    /// Broadcast to every emissions-related ECU.
+    ///
+    /// Carries no address of its own: the broadcast identifier belongs to the
+    /// negotiated protocol (`7DF` on 11-bit CAN, `18DB33F1` on 29-bit, and
+    /// different again on the K-line protocols), so the adapter looks it up
+    /// rather than this enum naming one.
     Functional,
     /// A single ECU, addressed by its request identifier, e.g. `7E0`.
     ///
@@ -64,7 +69,6 @@ impl RequestTarget {
         let id = aim_protocols::CanId::parse_hex(address).ok()?;
         id.obd_response_to_request().map(|req| RequestTarget::Physical(req.to_hex()))
     }
-
 }
 
 /// One fully reassembled response from one ECU.

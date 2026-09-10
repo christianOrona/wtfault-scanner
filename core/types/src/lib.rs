@@ -31,7 +31,7 @@ pub use domain::{
 };
 pub use error::{AimError, AimResult, ErrorCode};
 pub use event::{EventKind, SessionEvent};
-pub use ids::{ConnectionId, DiagnosisId, ModuleId, SessionId, TestRunId, VehicleId};
+pub use ids::{CaptureId, ConnectionId, DiagnosisId, ModuleId, SessionId, TestRunId, VehicleId};
 pub use provenance::{Provenance, SourceKind, VerificationStatus};
 pub use tool::{PermissionLevel, RiskClass, ToolResult, Warning, WarningSeverity};
 pub use value::{DecodedValue, ValidRange, Value};
