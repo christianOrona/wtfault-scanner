@@ -180,3 +180,38 @@ fn a_genuinely_silent_vehicle_still_reports_degraded() {
         "the user should be told every protocol was tried. Caveats: {caveats:?}"
     );
 }
+
+/// A remembered protocol is tried first, which is the whole point: a failing
+/// sweep measured eleven seconds on a real vehicle, most of it spent on
+/// protocols it had no reason to try.
+#[test]
+fn a_remembered_protocol_is_tried_before_the_rest() {
+    // KWP2000 slow init: last in the default order, precisely because its
+    // failures are the slowest. If the hint works, it is reached immediately.
+    let mut adapter = Elm327Adapter::new(Box::new(PickyElm::new(4)), Elm327Config::fast());
+    adapter.prefer_protocol(Some(ObdProtocol::Iso14230KwpSlow));
+    adapter.connect().expect("connect should not error");
+
+    assert_eq!(adapter.protocol(), ObdProtocol::Iso14230KwpSlow);
+    assert!(adapter.state().is_usable());
+}
+
+/// A hint cannot make a protocol work. It only changes the order.
+///
+/// This is the property that makes the optimisation safe: somebody unplugs the
+/// cable and walks to a different car, and the remembered protocol is now
+/// wrong. The sweep must still find the right one.
+#[test]
+fn a_wrong_hint_costs_an_attempt_and_nothing_else() {
+    let mut adapter = Elm327Adapter::new(Box::new(PickyElm::new(6)), Elm327Config::fast());
+    // Deliberately wrong: this vehicle speaks CAN 11/500, not ISO 9141-2.
+    adapter.prefer_protocol(Some(ObdProtocol::Iso9141_2));
+    adapter.connect().expect("connect should not error");
+
+    assert_eq!(
+        adapter.protocol(),
+        ObdProtocol::Iso15765Can11_500,
+        "the sweep must still reach the protocol the vehicle actually speaks"
+    );
+    assert!(adapter.state().is_usable());
+}

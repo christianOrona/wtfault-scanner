@@ -225,6 +225,13 @@ pub trait DiagnosticAdapter: Send {
     fn current_bus(&self) -> VehicleBus {
         VehicleBus::HighSpeed
     }
+
+    /// Hint which protocol worked here last time, so it is tried first.
+    ///
+    /// A hint and nothing more: an adapter that acts on it must still prove the
+    /// protocol works before accepting it. The default ignores it, which is
+    /// correct for any adapter that does not negotiate a protocol at all.
+    fn prefer_protocol(&mut self, _protocol: Option<ObdProtocol>) {}
 }
 
 #[cfg(test)]
