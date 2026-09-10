@@ -157,17 +157,25 @@ fn classify(lines: &[String], terminated: bool) -> ResponseClass {
         return ResponseClass::NoData;
     }
     let upper: Vec<String> = lines.iter().map(|l| l.to_ascii_uppercase()).collect();
-    for l in &upper {
-        if l == "?" {
+    for (raw, l) in upper.iter().zip(lines.iter().map(|l| squash(l))) {
+        // "?" survives no squashing, so it is tested on the original. A line of
+        // nothing but question marks is the adapter saying it did not
+        // understand, however many of them arrived.
+        if !raw.is_empty() && raw.chars().all(|c| c == '?') {
             return ResponseClass::NotUnderstood;
         }
-        if l.contains("UNABLE TO CONNECT") {
+        // `NABLETO` is `UNABLE TO CONNECT` with its leading characters lost in
+        // transit. It is matched because real adapters do deliver truncated
+        // error text, and an unrecognised reply is the worst outcome available:
+        // neither a result nor a diagnosable error. The Bluetooth path is where
+        // characters go missing, and it is the path non-technical users are on.
+        if l.contains("UNABLETOCONNECT") || l.contains("NABLETO") {
             return ResponseClass::UnableToConnect;
         }
-        if l.contains("NO DATA") {
+        if l.contains("NODATA") {
             return ResponseClass::NoData;
         }
-        if l.contains("BUFFER FULL") {
+        if l.contains("BUFFERFULL") {
             return ResponseClass::BufferFull;
         }
         if l.contains("STOPPED") {
@@ -181,15 +189,19 @@ fn classify(lines: &[String], terminated: bool) -> ResponseClass {
         // through to Info, which counts as success - so a protocol sweep would
         // accept a protocol whose bus init had just failed and stop looking.
         // That is how a CAN-only vehicle gets diagnosed as ISO 9141-2.
-        if l.contains("BUS INIT") && l.contains("ERROR") {
+        //
+        // Squashing is what makes the several spellings one condition: we have
+        // seen "BUS INIT: ...ERROR" and "BUS INIT: ERROR" on two vehicles, and
+        // "BUSINIT:BUS" is the same failure with its tail cut off.
+        if l.contains("BUSINIT") && (l.contains("ERR") || l == "BUSINITBUS") {
             return ResponseClass::BusError;
         }
-        if l.contains("BUS BUSY")
-            || l.contains("BUS ERROR")
-            || l.contains("CAN ERROR")
-            || l.contains("FB ERROR")
-            || l.contains("DATA ERROR")
-            || l.contains("<RX ERROR")
+        if l.contains("BUSBUSY")
+            || l.contains("BUSERROR")
+            || l.contains("CANERROR")
+            || l.contains("FBERROR")
+            || l.contains("DATAERROR")
+            || l.contains("RXERROR")
         {
             return ResponseClass::BusError;
         }
@@ -204,6 +216,21 @@ fn classify(lines: &[String], terminated: bool) -> ResponseClass {
         return ResponseClass::Data;
     }
     ResponseClass::Info
+}
+
+/// Uppercase, with everything that is not a letter or digit removed.
+///
+/// Error text from a real adapter does not arrive in the spelling the datasheet
+/// uses. Spacing and punctuation vary between clones and between firmware
+/// versions, and characters get dropped on a marginal Bluetooth link. Squashing
+/// makes `BUS INIT: ...ERROR`, `BUS INIT:ERROR` and `BUSINIT:ERR` one string to
+/// test against instead of three to remember.
+///
+/// This is safe against matching real data by accident: every error token below
+/// contains a letter that is not a hex digit, so no line of hex can squash into
+/// one.
+fn squash(line: &str) -> String {
+    line.chars().filter(char::is_ascii_alphanumeric).map(|c| c.to_ascii_uppercase()).collect()
 }
 
 /// True when a line looks like adapter hex output (`7E8 06 41 00 BE 3F A8 13`).
@@ -230,6 +257,59 @@ mod tests {
 
     fn p(cmd: &str, raw: &str) -> AdapterResponse {
         parse(cmd, raw, true, 10)
+    }
+
+    /// The same failure arrives spelled several ways and must classify once.
+    #[test]
+    fn one_condition_however_it_is_spelled() {
+        for raw in ["BUS INIT: ...ERROR", "BUS INIT: ERROR", "BUSINIT:ERR", "BUS INIT:BUS"] {
+            assert_eq!(
+                p("0100", raw).class,
+                ResponseClass::BusError,
+                "{raw:?} is a failed bus init"
+            );
+        }
+        for raw in ["NO DATA", "NODATA", "no data"] {
+            assert_eq!(p("0100", raw).class, ResponseClass::NoData, "{raw:?}");
+        }
+        for raw in ["BUFFER FULL", "BUFFERFULL"] {
+            assert_eq!(p("0100", raw).class, ResponseClass::BufferFull, "{raw:?}");
+        }
+        for raw in ["CAN ERROR", "CANERROR", "<RX ERROR", "RX ERROR", "DATA ERROR"] {
+            assert_eq!(p("0100", raw).class, ResponseClass::BusError, "{raw:?}");
+        }
+    }
+
+    /// A truncated error is still an error, and this is the one that matters:
+    /// characters go missing on Bluetooth, and an unrecognised reply is neither
+    /// a result nor something anybody can diagnose.
+    #[test]
+    fn an_error_that_lost_its_first_characters_is_still_recognised() {
+        assert_eq!(p("0100", "UNABLE TO CONNECT").class, ResponseClass::UnableToConnect);
+        assert_eq!(p("0100", "NABLE TO CONNECT").class, ResponseClass::UnableToConnect);
+        assert_eq!(p("0100", "NABLETO").class, ResponseClass::UnableToConnect);
+    }
+
+    #[test]
+    fn a_line_of_question_marks_is_the_adapter_not_understanding() {
+        assert_eq!(p("ATFOO", "?").class, ResponseClass::NotUnderstood);
+        assert_eq!(p("ATFOO", "??").class, ResponseClass::NotUnderstood);
+    }
+
+    /// Tolerant matching must not start swallowing data. Every error token
+    /// contains a non-hex letter, so no hex line can squash into one.
+    #[test]
+    fn tolerant_matching_never_reclassifies_real_data() {
+        for raw in [
+            "7E8 06 41 00 BE 3F A8 13",
+            "18 DA F1 10 06 41 00 B7 BC A8 93",
+            "41 0C 1A F8",
+            // Bytes that spell hex-only fragments of error words.
+            "DA DA DE AD BE EF",
+            "FB EE FF CC",
+        ] {
+            assert_eq!(p("0100", raw).class, ResponseClass::Data, "{raw:?} is data");
+        }
     }
 
     #[test]

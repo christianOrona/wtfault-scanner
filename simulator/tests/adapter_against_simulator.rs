@@ -72,6 +72,67 @@ fn a_genuine_adapter_reports_its_vendor_and_earns_fewer_caveats() {
     assert!(!caveats.contains("v2.x"));
 }
 
+/// The response window is learned, and the learning has to stop.
+///
+/// Widening on a miss is what rescues a vehicle that is merely slow. Doing it
+/// on every miss forever would double the cost of every unsupported PID to
+/// re-establish a fact the connect handshake already proved.
+#[test]
+fn an_unsupported_pid_is_not_retried_once_the_window_is_proven() {
+    let (mut adapter, _) = connected(ScenarioId::Healthy);
+    let before = adapter.health();
+
+    // 0100 answered during connect, so the window is known to suit this
+    // vehicle. An unsupported PID is therefore absent, not slow.
+    let err =
+        adapter.request(&ObdRequest::current_data(0xFE), &RequestTarget::Functional).unwrap_err();
+    assert_eq!(err.code, ErrorCode::NoData);
+
+    let after = adapter.health();
+    assert_eq!(
+        after.no_data,
+        before.no_data + 1,
+        "one request, one NO DATA - a proven window must not be re-learned"
+    );
+}
+
+/// An unpowered socket and a powered one with a silent bus look identical —
+/// every protocol fails — and they are completely different problems. Getting
+/// this backwards once sent a user looking for a blown fuse on a vehicle that
+/// turned out to be working perfectly.
+#[test]
+fn an_unpowered_socket_is_named_rather_than_swept() {
+    let mut dead = AdapterPersonality::cheap_clone_v2_1();
+    dead.voltage = 1.2;
+    let transport = SimulatedTransport::with_personality(ScenarioId::BusSilent, dead);
+    let mut adapter = Elm327Adapter::new(Box::new(transport), Elm327Config::fast());
+
+    adapter.connect().unwrap();
+    let caveats = adapter.capabilities().caveats.join(" | ");
+    assert!(caveats.contains("not powered"), "an unpowered socket must say so: {caveats}");
+    // And having said so, it must not then claim the protocols were tried.
+    assert!(
+        !caveats.contains("ATSP1 to ATSP9"),
+        "no protocol can answer through an unpowered socket, so none should be tried: {caveats}"
+    );
+}
+
+/// The other half: powered, and still nothing answered. The voltage belongs in
+/// the message so that this is stated rather than left to be worked out.
+#[test]
+fn a_powered_socket_that_answers_nothing_says_it_was_powered() {
+    let transport = SimulatedTransport::new(ScenarioId::BusSilent);
+    let mut adapter = Elm327Adapter::new(Box::new(transport), Elm327Config::fast());
+    adapter.connect().unwrap();
+
+    let caveats = adapter.capabilities().caveats.join(" | ");
+    assert!(caveats.contains("ATSP1 to ATSP9"), "the sweep should have run: {caveats}");
+    assert!(
+        caveats.contains("not a power problem"),
+        "a powered socket must rule power out explicitly: {caveats}"
+    );
+}
+
 #[test]
 fn a_silent_vehicle_leaves_the_adapter_connected_but_degraded() {
     let transport = SimulatedTransport::new(ScenarioId::BusSilent);
@@ -188,15 +249,44 @@ fn battery_voltage_comes_from_the_adapter_not_from_a_guess() {
     assert_eq!(adapter.health().battery_voltage, Some(v));
 }
 
+/// A fault the adapter can be brought back from is recovered, not reported.
+///
+/// Losing an address in the middle of a 255-address sweep to a transient buffer
+/// overflow is a worse outcome than one extra request. The recovery is bounded
+/// to a single attempt and stays visible in the health counters — a scan that
+/// quietly retried its way to a clean result would be worse than one that
+/// reported the glitch.
 #[test]
-fn injected_adapter_faults_surface_as_distinct_error_codes() {
+fn a_recoverable_adapter_fault_is_recovered_from_and_still_counted() {
+    let (mut adapter, emulator) = connected(ScenarioId::Healthy);
+
+    for fault in [InjectedFault::BufferFull, InjectedFault::Stopped, InjectedFault::BusError] {
+        let before = adapter.health().adapter_errors;
+        emulator.lock().unwrap().inject(fault);
+
+        let messages = adapter
+            .request(&ObdRequest::current_data(0x0C), &RequestTarget::Functional)
+            .unwrap_or_else(|e| panic!("{fault:?} should have been recovered from, got {e:?}"));
+        assert!(!messages.is_empty(), "{fault:?}: recovery must return real data");
+
+        assert!(
+            adapter.health().adapter_errors > before,
+            "{fault:?} was recovered from but not recorded, which hides it"
+        );
+    }
+}
+
+/// A fault that recovery cannot help with still reaches the caller intact,
+/// with the code that says which one it was.
+#[test]
+fn an_unrecoverable_fault_surfaces_as_its_own_error_code() {
     let (mut adapter, emulator) = connected(ScenarioId::Healthy);
 
     for (fault, expected) in [
-        (InjectedFault::BufferFull, ErrorCode::AdapterError),
-        (InjectedFault::Stopped, ErrorCode::AdapterError),
+        // The adapter rejected the command itself. Sending it again unchanged
+        // would be rejected again.
         (InjectedFault::NotUnderstood, ErrorCode::AdapterRejectedCommand),
-        (InjectedFault::BusError, ErrorCode::AdapterError),
+        // Nothing came back at all.
         (InjectedFault::Silence, ErrorCode::TransportTimeout),
     ] {
         emulator.lock().unwrap().inject(fault);
@@ -204,7 +294,9 @@ fn injected_adapter_faults_surface_as_distinct_error_codes() {
             .request(&ObdRequest::current_data(0x0C), &RequestTarget::Functional)
             .unwrap_err();
         assert_eq!(err.code, expected, "wrong code for {fault:?}");
-        // Recovery: the next request works again.
+        assert!(err.capability_state.is_some(), "errors carry capability state");
+
+        // And the link is still usable afterwards.
         assert!(adapter
             .request(&ObdRequest::current_data(0x0C), &RequestTarget::Functional)
             .is_ok());
