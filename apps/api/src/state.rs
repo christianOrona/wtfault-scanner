@@ -184,7 +184,18 @@ impl AppState {
         };
         let port = request.port.clone().or_else(|| config.default_port.clone());
 
-        let adapter = build_adapter(transport_choice, port, scenario, &config)?;
+        let mut adapter = build_adapter(transport_choice, port.clone(), scenario, &config)?;
+
+        // A protocol that answered through this adapter before is tried first.
+        // Only a reordering: if it does not answer, the full sweep runs exactly
+        // as it would have. Worth doing because a failing sweep measured eleven
+        // seconds on a real vehicle, and a succeeding one is not free either.
+        if let Some(p) = port.as_deref() {
+            if let Ok(Some(previous)) = self.store.last_protocol_for_adapter(p) {
+                adapter.prefer_protocol(Some(previous));
+            }
+        }
+
         let store = self.store.clone();
         let decoders = Arc::clone(&self.decoders);
         let label = request.label.clone();

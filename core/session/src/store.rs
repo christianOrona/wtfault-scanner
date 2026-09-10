@@ -463,6 +463,37 @@ impl SessionStore {
         Ok(())
     }
 
+    /// The protocol a module last answered on through this adapter.
+    ///
+    /// Used to reorder the protocol sweep, and for nothing else. A remembered
+    /// protocol is a hint about where to look first, not a fact about the
+    /// vehicle in front of you now - somebody may have unplugged the cable and
+    /// walked to a different car, which is exactly what the sweep is for.
+    ///
+    /// Keyed by adapter rather than by vehicle because the vehicle is not
+    /// identified until after a protocol is working, which makes it useless as
+    /// a key at the moment the answer is needed.
+    pub fn last_protocol_for_adapter(
+        &self,
+        adapter_id: &str,
+    ) -> AimResult<Option<aim_types::ObdProtocol>> {
+        let conn = self.lock()?;
+        let raw: Option<String> = conn
+            .query_row(
+                "SELECT m.protocol
+                 FROM modules m
+                 JOIN connections c ON c.session_id = m.session_id
+                 WHERE c.adapter_id = ?1 AND m.protocol IS NOT NULL AND m.protocol <> 'unknown'
+                 ORDER BY m.discovered_at DESC
+                 LIMIT 1",
+                [adapter_id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(storage)?;
+        Ok(raw.and_then(|s| serde_json::from_value(serde_json::Value::String(s)).ok()))
+    }
+
     /// Connections recorded for a session, oldest first.
     pub fn connections(&self, session_id: &SessionId) -> AimResult<Vec<ConnectionRecord>> {
         let conn = self.lock()?;

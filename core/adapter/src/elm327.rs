@@ -107,6 +107,11 @@ pub struct Elm327Adapter {
     current_header: Option<String>,
     /// Which vehicle bus the adapter is currently switched to.
     current_bus: crate::VehicleBus,
+    /// A protocol known to have worked on this vehicle before, tried first.
+    ///
+    /// Set by the caller from session history. Never treated as established -
+    /// it only changes the order the sweep tries things in.
+    preferred_protocol: Option<ObdProtocol>,
     requests: u64,
     responses: u64,
     timeouts: u64,
@@ -136,6 +141,7 @@ impl Elm327Adapter {
             spaces_enabled: true,
             current_header: None,
             current_bus: crate::VehicleBus::HighSpeed,
+            preferred_protocol: None,
             requests: 0,
             responses: 0,
             timeouts: 0,
@@ -483,8 +489,22 @@ impl Elm327Adapter {
         // 3: ISO 9141-2. 5: KWP fast. 4: KWP slow, last because of its init.
         const ORDER: [u8; 9] = [6, 7, 8, 9, 3, 5, 1, 2, 4];
 
+        // A protocol that worked on this vehicle before goes first. Measured on
+        // a real truck: a failing sweep spent eleven seconds trying all nine on
+        // a vehicle already known to be CAN, including two 2.8-second bus-init
+        // attempts on protocols it had no reason to try.
+        //
+        // Remembered is not verified. If it does not answer, the full sweep
+        // runs exactly as before rather than concluding the vehicle is silent.
+        let order: Vec<u8> = match self.preferred_protocol.and_then(|p| p.elm_id()) {
+            Some(first) => std::iter::once(first)
+                .chain(ORDER.iter().copied().filter(|&id| id != first))
+                .collect(),
+            None => ORDER.to_vec(),
+        };
+
         let probe = ObdRequest::current_data(0x00);
-        for id in ORDER {
+        for id in order {
             // A failure to even set the protocol is a broken adapter, not a
             // wrong guess, so it stops the sweep rather than being skipped.
             self.configure(&format!("ATSP{id}"), "protocol sweep")?;
@@ -812,6 +832,13 @@ impl DiagnosticAdapter for Elm327Adapter {
             // Best effort: tell the adapter to drop the bus politely. A device
             // that refuses is not worth failing a disconnect over.
             let _ = self.send_raw("ATPC", self.config.at_timeout);
+            // And reset it, so whatever opens this device next finds it in its
+            // power-on state rather than wearing this session's configuration -
+            // headers on, a protocol pinned by the sweep, programmable
+            // parameters changed. That "whatever" includes a phone app, another
+            // scan tool, or this app after a reconnect, none of which asked to
+            // inherit our settings.
+            let _ = self.send_raw("ATZ", self.config.reset_timeout);
         }
         let r = self.transport.close();
         self.current_header = None;
@@ -922,6 +949,10 @@ impl DiagnosticAdapter for Elm327Adapter {
 
     fn current_bus(&self) -> crate::VehicleBus {
         self.current_bus
+    }
+
+    fn prefer_protocol(&mut self, protocol: Option<ObdProtocol>) {
+        self.set_preferred(protocol);
     }
 }
 
@@ -1179,6 +1210,35 @@ pub fn assemble_headerless(lines: &[String]) -> AimResult<Vec<EcuMessage>> {
     Ok(vec![EcuMessage { address: String::from("unknown"), payload, raw_lines: used }])
 }
 
+/// Release the port even when nobody called `disconnect`.
+///
+/// The transport already frees its handle when it drops - that is Rust doing
+/// its job - so this is not about leaking the port within a process. It is
+/// about the window being closed, or a panic unwinding, and the device being
+/// left holding a protocol and a set of headers from a session that is over.
+///
+/// Deliberately silent and bounded. A drop that blocks on a slow adapter turns
+/// closing the window into a hang, and a drop that panics while unwinding
+/// aborts the process, so every failure here is swallowed on purpose.
+impl Drop for Elm327Adapter {
+    fn drop(&mut self) {
+        if self.transport.is_open() {
+            let _ = self.send_raw("ATPC", Duration::from_millis(200));
+            let _ = self.transport.close();
+        }
+    }
+}
+
+impl Elm327Adapter {
+    /// Internal setter; the trait method delegates here.
+    ///
+    /// Only reorders the sweep. A wrong hint costs one extra attempt; it
+    /// cannot cause a protocol to be reported as working when it is not,
+    /// because the sweep still requires actual data before accepting one.
+    fn set_preferred(&mut self, protocol: Option<ObdProtocol>) {
+        self.preferred_protocol = protocol.filter(|p| p.elm_id().is_some());
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
