@@ -213,3 +213,76 @@ fn an_agent_cannot_clear_codes_even_though_a_person_can() {
         "the refusal must be recorded"
     );
 }
+
+// ------------------------------------------------- adversarial model output
+//
+// These assert on the property rather than on a list of names, so a tool added
+// later is covered without anybody remembering this file exists.
+
+/// No tool a model is offered can carry raw bus data.
+///
+/// This is the structural half of "the model never generates arbitrary CAN or
+/// UDS": not a check that refuses such a request, but a set of schemas with
+/// nowhere to express one.
+///
+/// The property is about *payloads*, not about every parameter that sounds
+/// low-level. `read_freeze_frame` takes a frame number, which is a bounded
+/// index into something the vehicle already stored - it selects a record and
+/// cannot become bus content. What must not exist is a parameter a model can
+/// fill with bytes.
+#[test]
+fn no_tool_offered_to_a_model_accepts_raw_bus_data() {
+    let registry = aim_tools::ToolRegistry::phase1();
+    for tool in registry.enabled() {
+        let props = tool.parameters["properties"].as_object().expect("object schema");
+        for (name, spec) in props {
+            assert!(
+                !["bytes", "pdu", "raw", "data", "payload", "can_id", "header", "did"]
+                    .contains(&name.as_str()),
+                "{} exposes a payload parameter {name:?}",
+                tool.name
+            );
+            // An integer parameter must be bounded. An unbounded one is an
+            // address in waiting.
+            if spec["type"] == "integer" {
+                assert!(
+                    spec.get("minimum").is_some() && spec.get("maximum").is_some(),
+                    "{}.{name} is an unbounded integer: {spec}",
+                    tool.name
+                );
+            }
+        }
+    }
+}
+
+/// Every schema is closed, so an unexpected argument is rejected rather than
+/// ignored. An ignored argument is how a model learns a field exists.
+#[test]
+fn every_offered_schema_refuses_unexpected_arguments() {
+    for tool in aim_tools::ToolRegistry::phase1().enabled() {
+        assert_eq!(
+            tool.parameters["additionalProperties"], false,
+            "{} accepts unknown arguments",
+            tool.name
+        );
+    }
+}
+
+/// A tool that does not exist is refused as unknown, not attempted.
+#[test]
+fn a_tool_that_does_not_exist_is_unknown_rather_than_best_effort() {
+    let registry = aim_tools::ToolRegistry::phase1();
+    for invented in ["write_can_frame", "send_uds", "program_module", "clear_everything"] {
+        assert!(registry.get(invented).is_none(), "{invented} should not exist");
+    }
+}
+
+/// Destructive operations stay out of the offered set whatever the build's
+/// write ceiling is, and stay *listed* so a refusal can be specific.
+#[test]
+fn destructive_tools_are_listed_but_never_offered() {
+    let registry = aim_tools::ToolRegistry::phase1();
+    let offered: Vec<&str> = registry.enabled().iter().map(|t| t.name.as_str()).collect();
+    assert!(!offered.contains(&"clear_dtcs"), "{offered:?}");
+    assert!(registry.get("clear_dtcs").is_some(), "it must still be describable");
+}
