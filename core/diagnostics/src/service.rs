@@ -127,6 +127,21 @@ fn scan_addresses(protocol: aim_types::ObdProtocol) -> Vec<String> {
     }
 }
 
+/// The second way of asking a module whether it is there.
+///
+/// `TesterPresent` is the obvious probe and not every module answers it.
+/// Measured on a 2019 F-250: the engine controller ignores `0x3E` at `7E0` and
+/// answers `0x10 0x01` at the same address, so a sweep that only knows the
+/// first concludes the truck has no modules at all — while `read_pid` on that
+/// very module returns engine speed.
+///
+/// Requesting the *default* session is the safe half of a service that can do
+/// more: it asks a module to be in the state it is already in. The programming
+/// session is never requested anywhere in this build.
+fn fallback_probe() -> Vec<u8> {
+    aim_protocols::UdsRequest::diagnostic_session_control(0x01).to_bytes()
+}
+
 /// Whether a request identifier falls in the legislated emissions block.
 ///
 /// Defined for 11-bit addressing as `0x7E0..=0x7E7`. ISO 15765-4 gives 29-bit
@@ -2361,24 +2376,62 @@ impl DiagnosticService {
         // 11-bit identifiers on a 29-bit vehicle reaches nothing and reports it
         // as an empty vehicle.
         let addresses = scan_addresses(self.adapter.protocol());
-        for addr in &addresses {
-            let target = RequestTarget::Physical(addr.clone());
-            let replies = match self.adapter.request_pdu(&probe, &target, budget.probe) {
-                Ok(r) => r,
-                // A link that has genuinely fallen over should stop the sweep
-                // rather than produce 240 identical failures.
-                Err(e) if e.code == ErrorCode::TransportDisconnected => return Err(e),
-                Err(_) => continue,
-            };
-            for m in replies {
-                found.push((addr.clone(), m.address.clone()));
+
+        // Calibrate the deadline against a module already known to be there.
+        //
+        // The discovery budget is derived from measured OBD-II throughput, and
+        // a UDS request is not an OBD-II request. Measured on a 2019 F-250: the
+        // engine controller answers a PID in 22 ms and did not answer session
+        // control inside the 90 ms that produced, so a sweep at that deadline
+        // reported a truck with no modules while `read_pid` on one of them was
+        // returning engine speed.
+        //
+        // Asking a known module how long it actually takes turns that from a
+        // constant somebody has to tune into a measurement.
+        let (probe_budget, calibrated_with) = self.calibrate_probe_budget(budget.probe);
+        if let Some(ms) = calibrated_with {
+            warnings.push(Warning::info(
+                "discovery_deadline_measured",
+                format!(
+                    "A module known to be present needed {ms} ms to answer a discovery probe, so \
+                     the sweep waits that long at each address. This vehicle's modules are \
+                     slower to answer diagnostic requests than to answer emissions PIDs."
+                ),
+            ));
+        }
+
+        for (attempt, probe) in [(0usize, probe.clone()), (1, fallback_probe())].into_iter() {
+            for addr in &addresses {
+                let target = RequestTarget::Physical(addr.clone());
+                let replies = match self.adapter.request_pdu(&probe, &target, probe_budget) {
+                    Ok(r) => r,
+                    // A link that has genuinely fallen over should stop the
+                    // sweep rather than produce 240 identical failures.
+                    Err(e) if e.code == ErrorCode::TransportDisconnected => return Err(e),
+                    Err(_) => continue,
+                };
+                for m in replies {
+                    found.push((addr.clone(), m.address.clone()));
+                }
+            }
+            if !found.is_empty() {
+                if attempt == 1 {
+                    warnings.push(Warning::info(
+                        "discovery_used_the_fallback_probe",
+                        "No module answered TesterPresent, so discovery asked again with \
+                         DiagnosticSessionControl. Both are standard ways to ask a module \
+                         whether it is there, and modules differ in which they answer.",
+                    ));
+                }
+                break;
             }
         }
 
         if found.is_empty() {
             return Err(AimError::no_data(
-                "no module answered on any diagnostic address; the vehicle may be \
-                 asleep, or this adapter may not reach the bus the modules are on",
+                "no module answered on any diagnostic address, to either of the two standard \
+                 ways of asking; the vehicle may be asleep, or this adapter may not reach the \
+                 bus the modules are on",
             ));
         }
 
@@ -2680,6 +2733,65 @@ impl DiagnosticService {
         )
     }
 
+    /// Find a deadline a module that is definitely there can actually meet.
+    ///
+    /// Tries the derived budget first, then progressively longer ones, against
+    /// a module already discovered in this session. Returns the deadline to
+    /// sweep with, and how long the module needed when that was longer than the
+    /// derived budget.
+    ///
+    /// Falls back to the derived budget when there is nothing to calibrate
+    /// against or nothing answers: an uncalibrated sweep is still worth running,
+    /// and a slow sweep of the whole range on a vehicle that will not answer
+    /// anything is worse than a quick one.
+    fn calibrate_probe_budget(&mut self, derived: Duration) -> (Duration, Option<u128>) {
+        let Some(known) = self.store.modules(&self.session.id).ok().and_then(|m| m.into_iter().next())
+        else {
+            return (derived, None);
+        };
+        let Some(target) = RequestTarget::from_response_address(&known.address) else {
+            return (derived, None);
+        };
+
+        // Deliberately does not try `derived`. That number comes from measured
+        // OBD-II throughput, and a UDS request is not an OBD-II request:
+        // measured on a 2019 F-250, the engine controller answered a PID in
+        // 22 ms and needed far longer for session control. Worse, `derived` sat
+        // right on the edge — the module beat it once, the sweep was calibrated
+        // to it, and the next scan of the same truck found nothing. A deadline
+        // that works one time in two is worse than one that is simply too long.
+        //
+        // Capped at a second: past that the sweep costs more time than the
+        // information is worth, and something else is wrong.
+        const CANDIDATES: [Duration; 3] = [
+            Duration::from_millis(250),
+            Duration::from_millis(600),
+            Duration::from_millis(1000),
+        ];
+        // Twice in a row, because a single answer inside a deadline does not
+        // establish that the deadline is enough.
+        const CONSECUTIVE: usize = 2;
+
+        for probe in [aim_protocols::UdsRequest::tester_present(false).to_bytes(), fallback_probe()]
+        {
+            for budget in CANDIDATES {
+                let consistent = (0..CONSECUTIVE).all(|_| {
+                    self.adapter
+                        .request_pdu(&probe, &target, budget)
+                        .map(|r| !r.is_empty())
+                        .unwrap_or(false)
+                });
+                if consistent {
+                    return (budget, Some(budget.as_millis()));
+                }
+            }
+        }
+        // Nothing answered consistently at any deadline. Sweep at the longest
+        // tried rather than at `derived`: we have just watched a module that is
+        // definitely present fail to meet the shorter ones.
+        (CANDIDATES[CANDIDATES.len() - 1], None)
+    }
+
     /// Community signal definitions that might apply to this vehicle.
     ///
     /// Touches no vehicle: this is a lookup.
@@ -2969,11 +3081,27 @@ impl DiagnosticService {
     ///
     /// Returned only when every byte is printable, so a part number is shown as
     /// a part number and a bitfield is not dressed up as mojibake.
+    /// Trailing NULs are padding, not content.
+    ///
+    /// Measured on a 2019 F-250: every identification record is NUL-padded to a
+    /// fixed width, so requiring every byte to be printable hid the text in all
+    /// of them — including `F190`, which is the VIN sitting in plain ASCII
+    /// behind nine zero bytes.
     fn printable_ascii(bytes: &[u8]) -> Option<String> {
-        if bytes.is_empty() || !bytes.iter().all(|b| (0x20..0x7F).contains(b)) {
+        // All NULs, or empty. Either way there is no text here.
+        let last = bytes.iter().rposition(|b| *b != 0x00)?;
+        let trimmed: &[u8] = &bytes[..=last];
+        // A single leading non-printable byte is common in these records: some
+        // hold a one-byte format or version marker before the text. It is
+        // skipped rather than allowed to hide the rest.
+        let body = match trimmed.first() {
+            Some(b) if !(0x20..0x7F).contains(b) && trimmed.len() > 1 => &trimmed[1..],
+            _ => trimmed,
+        };
+        if body.is_empty() || !body.iter().all(|b| (0x20..0x7F).contains(b)) {
             return None;
         }
-        Some(String::from_utf8_lossy(bytes).trim().to_string())
+        Some(String::from_utf8_lossy(body).trim().to_string())
     }
 
     fn decode_uds_dtcs(&self, payload: &[u8], module_key: &str) -> DtcReadOutcome {
