@@ -19,6 +19,7 @@ fn module(session: &SessionId, key: &str, address: &str) -> Module {
         module_key: key.to_string(),
         name: format!("OBD module at {address}"),
         address: address.to_string(),
+        request_address: None,
         protocol: ObdProtocol::Iso15765Can11_500,
         identity: ModuleIdentity::default(),
         software_version: None,
@@ -423,4 +424,31 @@ fn timestamps_survive_a_round_trip_exactly() {
     let event = &s.events_since(&session.id, 0, 1).unwrap()[0];
     let text = event.timestamp.to_rfc3339();
     assert_eq!(Timestamp::parse_rfc3339(&text).unwrap(), event.timestamp);
+}
+
+/// The address a module *listens* on survives a round trip.
+///
+/// `address` is where a module answered, and outside the legislated block there
+/// is no formula relating the two. A full scan learns both halves by
+/// construction; discarding the half it sent to meant body and chassis modules
+/// could be discovered and then never spoken to again.
+#[test]
+fn a_modules_request_address_is_remembered() {
+    let store = SessionStore::open_in_memory().unwrap();
+    let session = store.create_session(None).unwrap();
+
+    // A body module, outside the legislated block: 72B answers, 723 listens.
+    let mut body = module(&session.id, "ECU_72B", "72B");
+    body.request_address = Some(String::from("723"));
+    store.upsert_module(&body).unwrap();
+
+    // And one recorded without it, which is a normal state for rows written by
+    // an earlier build.
+    store.upsert_module(&module(&session.id, "ECU_7E8", "7E8")).unwrap();
+
+    let saved = store.modules(&session.id).unwrap();
+    let found = saved.iter().find(|m| m.module_key == "ECU_72B").expect("body module");
+    assert_eq!(found.request_address.as_deref(), Some("723"));
+    let legacy = saved.iter().find(|m| m.module_key == "ECU_7E8").expect("engine module");
+    assert_eq!(legacy.request_address, None, "not knowing is a fact, not a default");
 }

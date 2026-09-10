@@ -25,10 +25,11 @@ pub struct Migration {
 }
 
 /// Every migration, in order. Append only.
-pub const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "initial core data model",
-    sql: r#"
+pub const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "initial core data model",
+        sql: r#"
 -- ---------------------------------------------------------------- sessions
 -- A session is one connection lifecycle and everything read during it.
 CREATE TABLE sessions (
@@ -182,7 +183,57 @@ BEGIN
     SELECT RAISE(ABORT, 'session_events is append-only');
 END;
 "#,
-}];
+    },
+    Migration {
+        version: 2,
+        name: "persist configuration captures across sessions",
+        sql: r#"
+-- -------------------------------------------------------- config_captures
+-- A module's configuration at one moment, kept so that a baseline taken
+-- today can be compared with one taken next week.
+--
+-- Keyed on the vehicle rather than only the session, deliberately: the whole
+-- point is to capture, let somebody change a setting with the vehicle's own
+-- controls, and come back later. A capture that died with its session could
+-- only ever diff against itself.
+--
+-- module_key is text, not a number. An 11-bit module is addressed as 7E0 and
+-- a 29-bit one as 18DA10F1, and a numeric column silently cannot hold the
+-- second.
+CREATE TABLE config_captures (
+    id          TEXT PRIMARY KEY,
+    session_id  TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    -- Null until the vehicle has been identified; the capture is still
+    -- recorded, because refusing to save one is worse than saving one that
+    -- has to be matched up by hand later.
+    vehicle_id  TEXT,
+    module_key  TEXT NOT NULL,
+    label       TEXT,
+    taken_at    TEXT NOT NULL,
+    -- The ConfigCapture as JSON, exactly as the module returned it.
+    capture     TEXT NOT NULL
+);
+CREATE INDEX config_captures_by_vehicle ON config_captures (vehicle_id, taken_at);
+CREATE INDEX config_captures_by_session ON config_captures (session_id);
+"#,
+    },
+    Migration {
+        version: 3,
+        name: "remember the address a module listens on",
+        sql: r#"
+-- `address` is where a module answered. That is not where to send it
+-- anything: `7E8` answers for `7E0`, and outside the legislated block there is
+-- no formula at all. A full scan learns both halves by construction - it sends
+-- to an address and records who answered - and used to discard the half it
+-- sent to, so body and chassis modules could be discovered and then never
+-- spoken to again.
+--
+-- Nullable, because modules recorded by earlier builds do not have it and a
+-- missing value is a fact ("we do not know") rather than a broken row.
+ALTER TABLE modules ADD COLUMN request_address TEXT;
+"#,
+    },
+];
 
 /// Bring `conn` up to the latest schema version, returning that version.
 pub fn migrate(conn: &mut Connection) -> AimResult<i64> {

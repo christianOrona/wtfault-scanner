@@ -40,6 +40,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/features/{id}", get(read_feature))
         .route("/api/v1/config/capture", post(capture_configuration))
         .route("/api/v1/config/diff", post(diff_captures))
+        .route("/api/v1/config/captures", get(list_captures))
+        .route("/api/v1/catalog/signals", get(catalog_signals))
+        .route("/api/v1/catalog/signals/{signal}", post(read_catalog_signal))
+        .route("/api/v1/modules/{key}/write-gate", post(probe_write_gate))
         .route("/api/v1/features/{id}/preview", post(preview_feature_change))
         .route("/api/v1/features/{id}/apply", post(apply_feature_change))
         .route("/api/v1/tools", get(tools))
@@ -57,6 +61,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/modules/{key}/dtcs", get(module_dtcs))
         .route("/api/v1/modules/{key}/signals", get(module_signals))
         .route("/api/v1/modules/{key}/monitor-tests", get(module_monitor_tests))
+        .route("/api/v1/modules/{key}/capabilities", get(module_capabilities))
         .route("/api/v1/modules/{key}/read", post(module_read))
         .route("/api/v1/dtcs/clear", post(clear_dtcs))
         .route("/api/v1/readiness", get(readiness))
@@ -427,6 +432,14 @@ async fn module_signals(
     Ok(Json(state.with_service(move |s| s.read_supported_pids(&key, "user:api")).await?))
 }
 
+/// Measure what one module supports. Reads only.
+async fn module_capabilities(
+    State(state): State<AppState>,
+    Path(key): Path<String>,
+) -> ApiResult<Json<ToolResult>> {
+    Ok(Json(state.with_service(move |s| s.probe_module_capabilities(&key, "user:api")).await?))
+}
+
 async fn module_monitor_tests(
     State(state): State<AppState>,
     Path(key): Path<String>,
@@ -760,7 +773,7 @@ async fn update_apply() -> ApiResult<Json<Value>> {
 #[derive(Debug, Deserialize)]
 struct CaptureBody {
     /// Module diagnostic request address, e.g. 1830 for 0x726.
-    module: u16,
+    module: String,
     /// Data identifiers to read.
     identifiers: Vec<u16>,
     #[serde(default)]
@@ -777,16 +790,69 @@ async fn capture_configuration(
     Ok(Json(
         state
             .with_service(move |s| {
-                s.capture_configuration(body.module, &body.identifiers, body.label, "user:api")
+                s.capture_configuration(&body.module, &body.identifiers, body.label, "user:api")
             })
             .await?,
     ))
 }
 
+/// Find out whether a module accepts writes, without writing anything.
+///
+/// Issues `WriteDataByIdentifier` to an identifier verified absent on that
+/// module immediately before, so there is nowhere for it to land. The refusal
+/// is the measurement. A person confirms this; an agent may never initiate it.
+async fn probe_write_gate(
+    State(state): State<AppState>,
+    Path(key): Path<String>,
+    Json(body): Json<ClearBody>,
+) -> ApiResult<Json<ToolResult>> {
+    Ok(Json(
+        state
+            .with_service(move |s| {
+                s.probe_write_gate(&key, "user:api", Some(body.confirmation.as_str()))
+            })
+            .await?,
+    ))
+}
+
+/// Community signal definitions that might apply to this vehicle.
+///
+/// A lookup: this touches no vehicle. Everything it returns is somebody else's
+/// recorded claim, and an empty answer is the common case.
+async fn catalog_signals(State(state): State<AppState>) -> ApiResult<Json<ToolResult>> {
+    Ok(Json(state.with_service(|s| s.list_catalog_signals("user:api")).await?))
+}
+
+/// Ask the vehicle one community-defined signal and report what it answered.
+///
+/// `POST` rather than `GET` because it puts a request on the bus, even though
+/// that request is a read.
+async fn read_catalog_signal(
+    State(state): State<AppState>,
+    Path(signal): Path<String>,
+) -> ApiResult<Json<ToolResult>> {
+    Ok(Json(state.with_service(move |s| s.read_catalog_signal(&signal, "user:api")).await?))
+}
+
+/// Captures already stored for this vehicle, newest first.
+///
+/// The index that makes a baseline findable later, rather than something the
+/// caller had to have kept a copy of.
+async fn list_captures(State(state): State<AppState>) -> ApiResult<Json<ToolResult>> {
+    Ok(Json(state.with_service(|s| s.list_captures("user:api")).await?))
+}
+
 #[derive(Debug, Deserialize)]
 struct DiffBody {
-    before: aim_diagnostics::capture::ConfigCapture,
-    after: aim_diagnostics::capture::ConfigCapture,
+    /// The earlier capture, inline.
+    before: Option<aim_diagnostics::capture::ConfigCapture>,
+    /// The later capture, inline.
+    after: Option<aim_diagnostics::capture::ConfigCapture>,
+    /// The earlier capture, by stored id. The usual way once a baseline has
+    /// been taken on an earlier day.
+    before_id: Option<String>,
+    /// The later capture, by stored id.
+    after_id: Option<String>,
     /// Whether the later capture is the one with the setting enabled. Stated by
     /// whoever flipped the switch, because the bytes do not say.
     #[serde(default)]
@@ -795,13 +861,48 @@ struct DiffBody {
 
 /// Compare two captures and, when exactly one byte moved, propose the mapping.
 ///
-/// Pure computation: this touches no vehicle, which is why it is not a tool
-/// call and needs no session.
-async fn diff_captures(Json(body): Json<DiffBody>) -> Json<Value> {
-    let d = aim_diagnostics::capture::diff(&body.before, &body.after);
-    let proposal =
-        d.is_unambiguous().then(|| d.changes[0].as_mapping(body.before.module, body.after_is_on));
-    Json(json!({
+/// Captures may be given inline or by stored id. The id form is what makes the
+/// loop work across days: take a baseline, change the setting with the
+/// vehicle's own controls whenever that happens, capture again, then compare —
+/// without anybody having kept a JSON blob in a text file in between.
+///
+/// The comparison itself touches no vehicle.
+async fn diff_captures(
+    State(state): State<AppState>,
+    Json(body): Json<DiffBody>,
+) -> ApiResult<Json<Value>> {
+    fn resolve(
+        state: &AppState,
+        inline: Option<aim_diagnostics::capture::ConfigCapture>,
+        id: Option<String>,
+        which: &str,
+    ) -> ApiResult<aim_diagnostics::capture::ConfigCapture> {
+        if let Some(c) = inline {
+            return Ok(c);
+        }
+        let Some(id) = id else {
+            return Err(aim_types::AimError::new(
+                aim_types::ErrorCode::BadRequest,
+                format!("the {which} capture must be given either inline or as {which}_id"),
+            )
+            .into());
+        };
+        let stored = state.store.capture(&id)?;
+        serde_json::from_value(stored.capture).map_err(|e| {
+            aim_types::AimError::new(
+                aim_types::ErrorCode::StorageError,
+                format!("the stored {which} capture could not be read back: {e}"),
+            )
+            .into()
+        })
+    }
+
+    let before = resolve(&state, body.before, body.before_id, "before")?;
+    let after = resolve(&state, body.after, body.after_id, "after")?;
+    let after_is_on = body.after_is_on;
+    let d = aim_diagnostics::capture::diff(&before, &after);
+    let proposal = d.is_unambiguous().then(|| d.changes[0].as_mapping(&before.module, after_is_on));
+    Ok(Json(json!({
         "diff": d,
         "comparable": d.is_comparable(),
         "unambiguous": d.is_unambiguous(),
@@ -819,5 +920,5 @@ async fn diff_captures(Json(body): Json<DiffBody>) -> Json<Value> {
             "More than one byte moved, so which one holds this setting is not established. \
              Repeat the capture changing only the one setting."
         },
-    }))
+    })))
 }

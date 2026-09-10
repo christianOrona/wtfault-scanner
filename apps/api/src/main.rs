@@ -66,6 +66,14 @@ struct Args {
     #[arg(long, value_name = "PATH")]
     settings: Option<String>,
 
+    /// Vehicle profiles and community signal definitions to load.
+    ///
+    /// The desktop app reads these from the user data directory. This server
+    /// did not read them at all, which made it silently less capable than the
+    /// app it serves — and made the difference invisible while testing.
+    #[arg(long, value_name = "PATH")]
+    profiles: Option<String>,
+
     /// List the simulator scenarios and exit.
     #[arg(long)]
     list_scenarios: bool,
@@ -123,7 +131,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(path) => SessionStore::open(path)?,
         None => SessionStore::open_in_memory()?,
     };
-    let decoders = DecoderSet::generic_obd()?;
+    let decoders = match &args.profiles {
+        Some(dir) => DecoderSet::with_profiles(std::path::Path::new(dir))?,
+        None => DecoderSet::generic_obd()?,
+    };
 
     let addr = SocketAddr::from(([127, 0, 0, 1], args.port));
     let config = ServerConfig {

@@ -11,6 +11,8 @@
 //! the vehicle only ever sees one conversation at a time.
 
 use crate::error::{ApiError, ApiResult};
+#[cfg(feature = "serial")]
+use aim_adapter::identify_transport;
 use aim_adapter::{DiagnosticAdapter, Elm327Adapter, Elm327Config};
 use aim_decoders::DecoderSet;
 use aim_diagnostics::DiagnosticService;
@@ -184,7 +186,12 @@ impl AppState {
         };
         let port = request.port.clone().or_else(|| config.default_port.clone());
 
-        let mut adapter = build_adapter(transport_choice, port.clone(), scenario, &config)?;
+        // Both hints come from history and neither is trusted: a wrong one costs
+        // one attempt and falls through to the full search.
+        let known_baud =
+            port.as_deref().and_then(|p| self.store.last_baud_for_adapter(p).ok().flatten());
+        let mut adapter =
+            build_adapter(transport_choice, port.clone(), scenario, &config, known_baud)?;
 
         // A protocol that answered through this adapter before is tried first.
         // Only a reordering: if it does not answer, the full sweep runs exactly
@@ -239,6 +246,7 @@ fn build_adapter(
     port: Option<String>,
     scenario: ScenarioId,
     config: &ServerConfig,
+    known_baud: Option<u32>,
 ) -> ApiResult<Box<dyn DiagnosticAdapter>> {
     match choice {
         TransportChoice::Simulator => {
@@ -253,7 +261,7 @@ fn build_adapter(
                     "a serial connection needs a port name; GET /api/v1/adapters/ports lists them",
                 )
             })?;
-            build_serial_adapter(&port)
+            build_serial_adapter(&port, known_baud)
         }
     }
 }
@@ -266,26 +274,70 @@ fn build_adapter(
 /// answers, which surfaces as `adapter_init_failed: ATZ was answered with
 /// timeout` and looks exactly like a broken adapter.
 #[cfg(feature = "serial")]
-fn build_serial_adapter(port: &str) -> ApiResult<Box<dyn DiagnosticAdapter>> {
+fn build_serial_adapter(
+    port: &str,
+    known_baud: Option<u32>,
+) -> ApiResult<Box<dyn DiagnosticAdapter>> {
     use aim_adapter::probe::find_baud;
     use aim_transport::serial::{SerialConfig, SerialTransport};
     use std::time::Duration;
 
-    let kind = aim_transport::list_ports()
+    let port_kind = aim_transport::list_ports()
         .into_iter()
         .find(|p| p.name == port)
-        .map(|p| p.kind.transport_kind())
-        .unwrap_or(aim_types::TransportKind::Usb);
+        .map(|p| p.kind)
+        .unwrap_or(aim_transport::PortKind::Unknown);
+    let kind = port_kind.transport_kind();
 
     let mut config = SerialConfig::for_port(port, kind);
-    // Bluetooth ports ignore baud, so there is nothing to find. For a wired
-    // cable, a speed that answers is worth the few seconds it takes to find; if
-    // none does, the configured default stands so the failure the caller sees
-    // is the adapter's own rather than a guess of ours.
-    if kind != aim_types::TransportKind::Bluetooth {
-        if let Ok((_, Some(baud))) = find_baud(port, Duration::from_millis(1_200)) {
-            tracing::info!(port, baud, "serial adapter answered at this line speed");
-            config = config.with_baud(baud);
+
+    // Sweep only a port positively identified as a wired cable.
+    //
+    // This used to sweep anything that was not *known* to be Bluetooth, and
+    // `Unknown` is the common case: on Windows the serialport crate reports a
+    // paired Bluetooth SPP port as `Unknown` rather than `BluetoothPort`, so
+    // every Bluetooth adapter took the wired path. The sweep opens and closes
+    // the port six times in a row, and each cycle raises and drops the RFCOMM
+    // link - which is exactly the "it connects, then it disconnects" a person
+    // sees in the Windows Bluetooth panel, and it leaves the link in a state
+    // where the next open reports "the device is not connected".
+    //
+    // A wrong guess in this direction is cheap: an unrecognised wired cable at
+    // a non-default speed simply fails to answer, and the remembered-baud path
+    // plus an explicit reconnect still find it. A wrong guess the other way
+    // breaks Bluetooth entirely.
+    let positively_wired =
+        matches!(port_kind, aim_transport::PortKind::Usb | aim_transport::PortKind::Native);
+    if positively_wired {
+        // A speed this cable answered at before is tried on its own first.
+        //
+        // Measured: the sweep costs up to 1.2 seconds per candidate across six
+        // of them, and a cable running at 500000 - fourth in the list - pays
+        // three dead waits on every single connect for an answer that has not
+        // changed since the last one. It is also invisible in the flight
+        // recorder, because it happens before the recorder exists, which is why
+        // an eight-second connect looked like 1.4 seconds of adapter traffic.
+        let confirmed = known_baud.and_then(|b| {
+            let mut t = SerialTransport::new(SerialConfig::for_port(port, kind).with_baud(b));
+            match identify_transport(&mut t, Duration::from_millis(1_200)) {
+                Ok(id) if id.responded && id.elm327_compatible => Some(b),
+                // Remembered is not current. A different cable on the same port
+                // answers at a different speed, so a failed reuse falls through
+                // to the full sweep rather than concluding anything.
+                _ => None,
+            }
+        });
+        match confirmed {
+            Some(b) => {
+                tracing::info!(port, baud = b, "reused the line speed this cable answered at");
+                config = config.with_baud(b);
+            }
+            None => {
+                if let Ok((_, Some(baud))) = find_baud(port, Duration::from_millis(1_200)) {
+                    tracing::info!(port, baud, "serial adapter answered at this line speed");
+                    config = config.with_baud(baud);
+                }
+            }
         }
     }
 
@@ -294,7 +346,10 @@ fn build_serial_adapter(port: &str) -> ApiResult<Box<dyn DiagnosticAdapter>> {
 }
 
 #[cfg(not(feature = "serial"))]
-fn build_serial_adapter(port: &str) -> ApiResult<Box<dyn DiagnosticAdapter>> {
+fn build_serial_adapter(
+    port: &str,
+    _known_baud: Option<u32>,
+) -> ApiResult<Box<dyn DiagnosticAdapter>> {
     Err(ApiError::new(AimError::new(
         ErrorCode::TransportUnsupported,
         format!("this build has no serial support compiled in; cannot open {port}"),

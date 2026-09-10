@@ -97,6 +97,38 @@ impl ObdProtocol {
         })
     }
 
+    /// The broadcast ("functional") request header for this protocol.
+    ///
+    /// Every OBD-II protocol addresses a broadcast request differently, and a
+    /// header from the wrong family is not a near miss — the request goes out
+    /// malformed and no module answers, which is indistinguishable from a
+    /// vehicle that is not there.
+    ///
+    /// Measured on a 29-bit vehicle: with the 11-bit `7DF` forced, every CAN
+    /// protocol returned `NO DATA`; with the protocol's own header, two modules
+    /// answered `0100` immediately. An 11-bit-only assumption is why a scanner
+    /// appears to work on one make and fail on another.
+    ///
+    /// `None` for [`ObdProtocol::Unknown`]: with no protocol established there
+    /// is no correct answer, and the adapter's own default is better than a
+    /// guess.
+    pub fn functional_header(&self) -> Option<&'static str> {
+        Some(match self {
+            ObdProtocol::Unknown => return None,
+            // ISO 15765-4: 0x7DF broadcasts to every emissions module.
+            ObdProtocol::Iso15765Can11_500 | ObdProtocol::Iso15765Can11_250 => "7DF",
+            // The 29-bit form of the same broadcast: priority 0x18, target
+            // 0x33 (functional), source 0xF1 (external test equipment).
+            ObdProtocol::Iso15765Can29_500 | ObdProtocol::Iso15765Can29_250 => "18DB33F1",
+            // J1850: priority/type 0x61, target 0x6A (functional), source 0xF1.
+            ObdProtocol::J1850Pwm | ObdProtocol::J1850Vpw => "616AF1",
+            // ISO 9141-2 and ISO 14230-4 share the K-line format 0x68 0x6A 0xF1.
+            ObdProtocol::Iso9141_2
+            | ObdProtocol::Iso14230KwpSlow
+            | ObdProtocol::Iso14230KwpFast => "686AF1",
+        })
+    }
+
     /// True for the ISO 15765 (CAN) family, where ISO-TP framing applies.
     pub fn is_can(&self) -> bool {
         matches!(
@@ -163,6 +195,14 @@ pub struct AdapterCapabilities {
     pub model: String,
     /// Firmware / identification banner, when the device reported one.
     pub firmware: Option<String>,
+    /// Line speed this device was found to answer at, for a wired port.
+    ///
+    /// Recorded so the next connect can try it first. Finding it costs a sweep
+    /// of six candidate speeds at up to 1.2 seconds each, and the answer does
+    /// not change between connects on the same cable. `None` for Bluetooth,
+    /// where the virtual port ignores baud entirely.
+    #[serde(default)]
+    pub baud: Option<u32>,
     /// Capability caveats. A cheap clone accumulates these instead of silently
     /// pretending to be a genuine ELM327 v1.5.
     pub caveats: Vec<String>,
@@ -218,6 +258,7 @@ impl AdapterCapabilities {
         AdapterCapabilities {
             transport,
             elm327_compatible: false,
+            baud: None,
             can_11_bit: false,
             can_29_bit: false,
             iso_tp: false,

@@ -241,6 +241,117 @@ impl NegativeResponseCode {
                 | NegativeResponseCode::ResponsePending
         )
     }
+
+    /// What this refusal means for the person holding the scanner.
+    ///
+    /// The standard name is not the useful part. "requestOutOfRange" and
+    /// "securityAccessDenied" both read as failure, but one says the thing does
+    /// not exist and the other says it exists and is locked — and those are
+    /// different facts about somebody's vehicle. Reporting the code without the
+    /// distinction is why a truck that refused a write went uninvestigated: the
+    /// module had already said which of the two it was.
+    pub fn refusal(&self) -> RefusalKind {
+        use NegativeResponseCode::*;
+        match self {
+            SecurityAccessDenied | InvalidKey | ExceedNumberOfAttempts => {
+                RefusalKind::SecurityRequired
+            }
+            RequestOutOfRange | SubFunctionNotSupported | ServiceNotSupported => {
+                RefusalKind::NotPresent
+            }
+            SubFunctionNotSupportedInActiveSession | ServiceNotSupportedInActiveSession => {
+                RefusalKind::WrongSession
+            }
+            ConditionsNotCorrect | RequestSequenceError => RefusalKind::VehicleConditions,
+            BusyRepeatRequest | ResponsePending | RequiredTimeDelayNotExpired => RefusalKind::Busy,
+            IncorrectMessageLengthOrInvalidFormat | ResponseTooLong => {
+                RefusalKind::OurRequestWasWrong
+            }
+            GeneralReject | GeneralProgrammingFailure | Other(_) => RefusalKind::Unexplained,
+        }
+    }
+}
+
+/// Why a module refused, in terms of what to do about it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RefusalKind {
+    /// The module wants a manufacturer seed/key exchange first.
+    SecurityRequired,
+    /// What was asked for does not exist on this module.
+    NotPresent,
+    /// It exists, but not in the diagnostic session currently open.
+    WrongSession,
+    /// The vehicle is not in a state where this is allowed.
+    VehicleConditions,
+    /// The module is busy or still working on it.
+    Busy,
+    /// The request was malformed. This one is our fault, not the vehicle's.
+    OurRequestWasWrong,
+    /// Refused without saying why.
+    Unexplained,
+}
+
+impl RefusalKind {
+    /// A stable code an interface can branch on.
+    pub fn code(&self) -> &'static str {
+        use RefusalKind::*;
+        match self {
+            SecurityRequired => "module_refused_security_required",
+            NotPresent => "module_refused_not_present",
+            WrongSession => "module_refused_wrong_session",
+            VehicleConditions => "module_refused_vehicle_conditions",
+            Busy => "module_refused_busy",
+            OurRequestWasWrong => "module_refused_malformed_request",
+            Unexplained => "module_refused_without_saying_why",
+        }
+    }
+
+    /// What this means and what can be done, in plain language.
+    ///
+    /// Written to close the question rather than to encourage a retry that
+    /// cannot work. A locked module is not a puzzle the user can solve by
+    /// trying again, and saying otherwise wastes their evening.
+    pub fn explain(&self) -> &'static str {
+        use RefusalKind::*;
+        match self {
+            SecurityRequired => {
+                "The module has this, but will not allow it without a manufacturer seed/key \
+                 exchange. That algorithm is specific to the carmaker and this build does not \
+                 have it, so this is a wall rather than something to retry."
+            }
+            NotPresent => {
+                "The module answered, and says it does not have what was asked for. This is a \
+                 real answer about your vehicle, not a failure to communicate."
+            }
+            WrongSession => {
+                "The module has this, but not in the diagnostic session that is currently open. \
+                 Opening an extended session and asking again is the next step."
+            }
+            VehicleConditions => {
+                "The module refused because of the state the vehicle is in - commonly engine \
+                 running, road speed above zero, or battery voltage. Changing that condition and \
+                 asking again is the next step."
+            }
+            Busy => {
+                "The module is busy or still working on the request. Waiting and asking again is \
+                 the right response, and is done automatically where it is safe to."
+            }
+            OurRequestWasWrong => {
+                "The module rejected the shape of the request itself. That is a defect in this \
+                 application rather than anything about your vehicle - please report it."
+            }
+            Unexplained => {
+                "The module refused without giving a reason the standard defines. Nothing can be \
+                 concluded from this beyond the fact that it refused."
+            }
+        }
+    }
+
+    /// Whether asking again, unchanged, could plausibly succeed.
+    pub fn worth_retrying(&self) -> bool {
+        matches!(self, RefusalKind::Busy)
+    }
 }
 
 /// A UDS request PDU.
@@ -613,6 +724,56 @@ mod dtc_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The two refusals that look identical to a user and mean opposite things.
+    ///
+    /// `securityAccessDenied` says the module *has* this and will not allow it.
+    /// `requestOutOfRange` says it does not have it. Reporting both as "the
+    /// request failed" is what left a real truck's refused write uninvestigated.
+    #[test]
+    fn locked_and_absent_are_not_the_same_refusal() {
+        assert_eq!(
+            NegativeResponseCode::SecurityAccessDenied.refusal(),
+            RefusalKind::SecurityRequired
+        );
+        assert_eq!(NegativeResponseCode::RequestOutOfRange.refusal(), RefusalKind::NotPresent);
+        assert_ne!(
+            NegativeResponseCode::SecurityAccessDenied.refusal().code(),
+            NegativeResponseCode::RequestOutOfRange.refusal().code()
+        );
+    }
+
+    /// A session-scoped refusal is recoverable; a locked one is not, and the
+    /// guidance must not imply otherwise.
+    #[test]
+    fn only_a_busy_module_is_worth_asking_again_unchanged() {
+        assert!(RefusalKind::Busy.worth_retrying());
+        for kind in [
+            RefusalKind::SecurityRequired,
+            RefusalKind::NotPresent,
+            RefusalKind::WrongSession,
+            RefusalKind::VehicleConditions,
+            RefusalKind::OurRequestWasWrong,
+            RefusalKind::Unexplained,
+        ] {
+            assert!(!kind.worth_retrying(), "{kind:?} must not invite a blind retry");
+        }
+        // A wall is described as a wall.
+        assert!(RefusalKind::SecurityRequired.explain().contains("wall"));
+        // A malformed request is owned rather than blamed on the vehicle.
+        assert!(RefusalKind::OurRequestWasWrong.explain().contains("this application"));
+    }
+
+    /// Every code classifies, including ones the standard leaves to the maker.
+    #[test]
+    fn every_negative_response_code_has_a_consequence() {
+        for byte in 0x00..=0xFFu8 {
+            let nrc = NegativeResponseCode::from_byte(byte);
+            let kind = nrc.refusal();
+            assert!(!kind.code().is_empty());
+            assert!(!kind.explain().is_empty(), "no guidance for {byte:02X}");
+        }
+    }
 
     #[test]
     fn service_ids_round_trip_including_unknown_ones() {

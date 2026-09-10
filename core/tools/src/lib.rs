@@ -103,6 +103,26 @@ fn no_args() -> Value {
     json!({ "type": "object", "properties": {}, "additionalProperties": false })
 }
 
+/// The one argument a catalogue read takes: which signal.
+///
+/// Deliberately not a module, an address or a raw command. The model picks a
+/// signal that `list_catalog_signals` already offered for this vehicle, and the
+/// service resolves what to send — there is no parameter here through which an
+/// arbitrary request could reach the bus.
+fn signal_arg() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "signal": {
+                "type": "string",
+                "description": "Signal id from list_catalog_signals, e.g. \"F150_ODO\"."
+            }
+        },
+        "required": ["signal"],
+        "additionalProperties": false
+    })
+}
+
 fn module_arg(required: bool) -> Value {
     let mut schema = json!({
         "type": "object",
@@ -199,6 +219,54 @@ impl ToolRegistry {
                 "Find every control module on the vehicle and read its stored faults. This \n                 reaches far beyond the emissions system that `read_dtcs` covers - brakes, \n                 airbag, body, transmission - and is the only way to see a fault in a module \n                 the legislated services cannot address. Slower than `read_dtcs` because it \n                 sweeps the whole diagnostic address range, so run it once, early, rather \n                 than repeatedly. Each fault says whether it is failing right now or merely \n                 stored from an earlier drive; those mean very different things.",
                 "Every module that answered, with its address and its faults, each carrying \n                 status and a description when this build has one.",
                 no_args(),
+            ),
+            ToolSchema::new(
+                "list_catalog_signals",
+                capabilities::LIST_CATALOG_SIGNALS,
+                PermissionLevel::L0,
+                "List the community-recorded signals that might apply to this vehicle - things \
+                 beyond the standard emissions PIDs, like transmission temperature or odometer, \
+                 which manufacturers define themselves. Use this when the user asks for a value \
+                 `read_live_data` does not cover, instead of guessing at an identifier. Touches \
+                 no vehicle. Every entry is somebody else's recorded claim, not a measurement, \
+                 and entries marked `related_model` were recorded on a DIFFERENT model by the \
+                 same maker - say so when you offer one.",
+                "Candidate signals with the module and command that would fetch each, which \
+                 catalogue it came from, and how closely that catalogue matches this vehicle. \
+                 Empty is a normal and common answer.",
+                no_args(),
+            ),
+            ToolSchema::new(
+                "read_catalog_signal",
+                capabilities::READ_CATALOG_SIGNAL,
+                PermissionLevel::L0,
+                "Ask the vehicle one signal from `list_catalog_signals` and report what it \
+                 answers. This is a read, and it is the way to find out whether a community \
+                 definition actually describes this vehicle: if the identifier is not there, the \
+                 module says so and that is a real result worth reporting. When a value does \
+                 come back, the bytes are measured but their meaning is not - present it as a \
+                 reading to sanity-check, never as something the vehicle reported. Do not repeat \
+                 a definition that came back out of its own stated range.",
+                "The decoded value with its unit, the raw bytes, which catalogue defined it, and \
+                 whether it fell outside the range the definition itself states. Always \
+                 unverified.",
+                signal_arg(),
+            ),
+            ToolSchema::new(
+                "probe_module_capabilities",
+                capabilities::PROBE_MODULE_CAPABILITIES,
+                PermissionLevel::L0,
+                "Ask one module what it actually supports, instead of guessing. Reports which \
+                 data identifiers exist and their contents, which diagnostic sessions it \
+                 grants, and whether it implements security access at all. Use this when a \
+                 request was refused and you need to know why, or before proposing anything \
+                 that depends on what a module can do. Reads only: it writes nothing, sends no \
+                 security key, and never requests a programming session.",
+                "Per-module: the identifiers that answered with their bytes and any readable \
+                 text, which sessions were granted or refused and for what stated reason, and \
+                 whether security access is implemented. Identifiers that do not exist are \
+                 absent rather than listed as empty.",
+                module_arg(true),
             ),
             ToolSchema::new(
                 "list_vehicle_features",
@@ -513,6 +581,7 @@ pub fn execute(
     }
 
     let module = call.arguments.get("module").and_then(Value::as_str);
+    let signal = call.arguments.get("signal").and_then(Value::as_str);
     let initiator = call.initiator.as_str();
 
     match call.tool.as_str() {
@@ -523,6 +592,11 @@ pub fn execute(
         "read_supported_pids" => service.read_supported_pids(module.unwrap_or_default(), initiator),
         "read_monitor_tests" => service.read_monitor_tests(module.unwrap_or_default(), initiator),
         "scan_all_modules" => service.scan_all_modules(initiator),
+        "list_catalog_signals" => service.list_catalog_signals(initiator),
+        "read_catalog_signal" => service.read_catalog_signal(signal.unwrap_or_default(), initiator),
+        "probe_module_capabilities" => {
+            service.probe_module_capabilities(module.unwrap_or_default(), initiator)
+        }
         "list_vehicle_features" => service.list_features(initiator),
         "preview_configuration_change" => {
             // The model supplies a feature id and a value. Nothing else it

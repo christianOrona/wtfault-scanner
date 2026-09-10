@@ -112,6 +112,18 @@ pub struct Elm327Adapter {
     /// Set by the caller from session history. Never treated as established -
     /// it only changes the order the sweep tries things in.
     preferred_protocol: Option<ObdProtocol>,
+    /// How long the adapter is currently told to wait for a vehicle, in ms.
+    ///
+    /// Written to the device with `ATST`. Learned rather than fixed: `NO DATA`
+    /// is the most common reply from a vehicle that is in fact present, and a
+    /// window that is too short turns a slow module into an absent one.
+    response_window_ms: u32,
+    /// The shortest window at which a request has actually succeeded.
+    ///
+    /// The window eases back toward this after a success, so one slow module
+    /// does not permanently slow down every request afterwards. `None` until
+    /// something has worked.
+    proven_window_ms: Option<u32>,
     requests: u64,
     responses: u64,
     timeouts: u64,
@@ -142,6 +154,8 @@ impl Elm327Adapter {
             current_header: None,
             current_bus: crate::VehicleBus::HighSpeed,
             preferred_protocol: None,
+            response_window_ms: RESPONSE_WINDOW_DEFAULT_MS,
+            proven_window_ms: None,
             requests: 0,
             responses: 0,
             timeouts: 0,
@@ -430,20 +444,34 @@ impl Elm327Adapter {
         //
         // The second is a hardware fact and is reported as one, rather than as
         // something the app has not got round to.
-        if !self.caps.multiple_can_buses {
-            let probe = self.send_raw("ATPB 01 05", self.config.at_timeout)?;
-            self.caps.multiple_can_buses = probe.class.is_success();
-        }
+        // Only STN hardware, which said so when asked, is recorded as able to
+        // reach a second bus.
+        //
+        // There used to be an `ATPB` probe here for everything else. It was
+        // wrong twice over. It wrote programmable protocol parameters into a
+        // device on every single connect, to establish a capability nothing in
+        // this app uses yet - the second bus is detected and never selected.
+        // And it proved less than it appeared to: an ELM327 answering `OK` to a
+        // parameter write has said the command parsed, not that a second bus
+        // exists or that the cable reaches pins 3 and 11.
+        //
+        // So the question is left open rather than answered badly. When
+        // something actually selects a second bus, it can probe then, on a
+        // vehicle, where the answer means something.
         if self.caps.multiple_can_buses {
             self.caps.add_caveat(
-                "this adapter can be switched to a second CAN bus (125 kbit/s). Whether anything \
-                 answers there also depends on the cable being wired to pins 3 and 11, which no \
-                 adapter can report",
+                "this adapter reports being able to reach a second CAN bus (125 kbit/s). Whether \
+                 anything answers there also depends on the cable being wired to pins 3 and 11, \
+                 which no adapter can report",
             );
         } else {
             self.caps.add_caveat(
-                "single CAN bus: this adapter did not accept the commands needed to change bus \
-                 speed, so only the high-speed bus is reachable with it",
+                "second CAN bus not established by software: this device did not identify as one \
+                 that can switch buses on command. That is not the same as being unable to reach \
+                 one - some cables carry a physical HS-CAN/MS-CAN switch, which no adapter can \
+                 report and no software can detect or move. If yours has one, the bus you are on \
+                 is whichever way the switch is set. Nothing in this build selects a second bus \
+                 yet, so it costs you nothing today",
             );
         }
 
@@ -508,7 +536,10 @@ impl Elm327Adapter {
             // A failure to even set the protocol is a broken adapter, not a
             // wrong guess, so it stops the sweep rather than being skipped.
             self.configure(&format!("ATSP{id}"), "protocol sweep")?;
-            self.set_header(&RequestTarget::Functional)?;
+            // Each candidate is asked in its own addressing scheme. Carrying
+            // one protocol's header into the next is what makes a sweep report
+            // that a vehicle answered nothing when it would have answered.
+            self.apply_functional_header(ObdProtocol::from_elm_id(id))?;
 
             let r = self.send_raw(&probe.to_elm_command(), self.config.request_timeout)?;
             // Only actual data proves a protocol. `is_success()` also admits
@@ -526,7 +557,12 @@ impl Elm327Adapter {
                 tracing::info!(protocol = %found.label(), "protocol sweep succeeded");
                 return Ok(Some(r));
             }
-            tracing::debug!(atsp = id, class = r.class.as_str(), "protocol did not answer");
+            tracing::debug!(
+                atsp = id,
+                class = r.class.as_str(),
+                lines = ?r.lines,
+                "protocol did not answer"
+            );
         }
 
         // Leave the adapter as we found it so a later retry starts clean.
@@ -544,6 +580,7 @@ impl Elm327Adapter {
         let probe = ObdRequest::current_data(0x00);
         self.set_header(&RequestTarget::Functional)?;
         let r = self.send_raw(&probe.to_elm_command(), self.config.request_timeout)?;
+        tracing::debug!(class = r.class.as_str(), lines = ?r.lines, "ATSP0 auto-detect probe");
 
         // Automatic detection failing is not the same as the vehicle being
         // silent, and a cheap clone is bad enough at `ATSP0` that treating it
@@ -561,14 +598,49 @@ impl Elm327Adapter {
         let r = if r.class.is_success() {
             r
         } else {
+            // Before spending nine protocol attempts on a socket that cannot
+            // answer, ask whether it is powered at all. An unpowered socket and
+            // a powered one with a silent bus produce identical symptoms —
+            // every protocol failing — and they are completely different
+            // problems. Getting this backwards once sent a user looking for a
+            // blown fuse on a vehicle that was working perfectly.
+            if let Some(v) = self.battery_voltage {
+                if v < SOCKET_POWERED_VOLTS {
+                    self.caps.add_caveat(format!(
+                        "the diagnostic socket is reading {v:.1} V, so it is not powered. No \
+                         protocol can answer through an unpowered socket, and none were tried. \
+                         Check the ignition is on and the socket's fuse before anything else."
+                    ));
+                    return Ok(false);
+                }
+            }
             match self.sweep_protocols()? {
                 Some(answer) => answer,
+                // Everything failed at the default window. Before concluding
+                // the vehicle is silent, give it the longest window we allow
+                // and ask once more on automatic detection. A vehicle that is
+                // merely slow answers here, and the cost of being wrong is one
+                // request rather than a person being told their car is dead.
+                None if self.widen_to_ceiling() => {
+                    self.configure("ATSP0", "retry auto-detect with the widest window")?;
+                    let retry =
+                        self.send_raw(&probe.to_elm_command(), self.config.request_timeout)?;
+                    if retry.class == ResponseClass::Data {
+                        self.caps.add_caveat(format!(
+                            "this vehicle answered only after the response window was widened to \
+                             {} ms. It is slower to reply than most, which is worth knowing if \
+                             readings seem intermittent",
+                            self.response_window_ms
+                        ));
+                        self.record_window_success();
+                        retry
+                    } else {
+                        self.no_answer_caveat(r.class.as_str());
+                        return Ok(false);
+                    }
+                }
                 None => {
-                    self.caps.add_caveat(format!(
-                        "vehicle did not answer service 01 PID 00 during connect ({}), and no \
-                         protocol from ATSP1 to ATSP9 answered either",
-                        r.class.as_str()
-                    ));
+                    self.no_answer_caveat(r.class.as_str());
                     return Ok(false);
                 }
             }
@@ -587,6 +659,11 @@ impl Elm327Adapter {
         // capability rather than an assumption.
         self.caps.supports_transmit = true;
 
+        // It also proves the response window is long enough for this vehicle,
+        // which is what stops every later `NO DATA` being retried to re-learn
+        // something already established.
+        self.record_window_success();
+
         let dpn = self.send_raw("ATDPN", self.config.at_timeout)?;
         self.protocol = dpn
             .lines
@@ -602,6 +679,13 @@ impl Elm327Adapter {
                 self.protocol.label()
             ));
         }
+
+        // Now that the protocol is known, put its broadcast header in place
+        // while still connecting. Leaving it until the first request would make
+        // that one request carry an extra command, and the failure of an `ATSH`
+        // would then surface as a failure of whatever the caller happened to
+        // ask for first.
+        self.apply_functional_header(self.protocol)?;
 
         // Throughput is measured, not declared: the round trips we just made
         // are the only honest evidence available at connect time.
@@ -646,13 +730,77 @@ impl Elm327Adapter {
         }
     }
 
+    /// Set the broadcast header belonging to `protocol`, whatever the adapter
+    /// is currently negotiated to.
+    ///
+    /// Used by the sweep, where the protocol under test is not yet the
+    /// connection's protocol.
+    /// Write a request header to the adapter, in the form that adapter accepts.
+    ///
+    /// A 29-bit header is four bytes, and the ELM327 does not take all four in
+    /// one command: the leading priority byte goes to `ATCP` and the remaining
+    /// three to `ATSH`. The one-command form is documented for v1.3 and later,
+    /// but that is a claim about firmware and this is a market full of clones —
+    /// measured on a device whose banner reads `ELM327 v1.5`, `ATSH18DB33F1`
+    /// came back as an error while the split form worked. Splitting always is
+    /// correct on every version, so there is nothing to detect and nothing to
+    /// fall back from.
+    ///
+    /// Returns whether the adapter accepted it.
+    fn send_header(&mut self, header: &str) -> AimResult<bool> {
+        if header.len() == 8 {
+            let (priority, rest) = header.split_at(2);
+            let cp = self.send_with_recovery(&format!("ATCP{priority}"), self.config.at_timeout)?;
+            if !cp.class.is_success() {
+                return Ok(false);
+            }
+            let sh = self.send_with_recovery(&format!("ATSH{rest}"), self.config.at_timeout)?;
+            return Ok(sh.class.is_success());
+        }
+        let r = self.send_with_recovery(&format!("ATSH{header}"), self.config.at_timeout)?;
+        Ok(r.class.is_success())
+    }
+
+    fn apply_functional_header(&mut self, protocol: ObdProtocol) -> AimResult<()> {
+        let Some(header) = protocol.functional_header() else {
+            return Ok(());
+        };
+        if self.current_header.as_deref() == Some(header) {
+            return Ok(());
+        }
+        if self.send_header(header)? {
+            self.current_header = Some(String::from(header));
+        } else {
+            // An adapter that refuses a header for a protocol it has just been
+            // set to is telling us it cannot speak that protocol. That is a
+            // reason to move on to the next candidate, not to abandon the
+            // sweep, so the header is forgotten rather than the error raised.
+            self.current_header = None;
+        }
+        Ok(())
+    }
+
+    /// Point the adapter at a broadcast or a single module.
+    ///
+    /// A functional (broadcast) header is a property of the *protocol*, not of
+    /// the request, so it is looked up from the negotiated protocol rather than
+    /// hardcoded. Forcing the 11-bit `7DF` onto a 29-bit vehicle sends a
+    /// malformed request that no module answers.
     fn set_header(&mut self, target: &RequestTarget) -> AimResult<()> {
-        let header = target.header();
+        let header = match target {
+            RequestTarget::Functional => match self.protocol.functional_header() {
+                Some(h) => String::from(h),
+                // No protocol established yet, so there is no right header to
+                // set. The adapter's own per-protocol default is correct and a
+                // guess is not, so leave it alone.
+                None => return Ok(()),
+            },
+            RequestTarget::Physical(h) => h.clone(),
+        };
         if self.current_header.as_deref() == Some(header.as_str()) {
             return Ok(());
         }
-        let r = self.send_raw(&format!("ATSH{header}"), self.config.at_timeout)?;
-        if !r.class.is_success() {
+        if !self.send_header(&header)? {
             return Err(AimError::new(
                 ErrorCode::AdapterRejectedCommand,
                 format!("adapter refused to set request header {header}"),
@@ -719,13 +867,230 @@ impl Elm327Adapter {
         command: &str,
         timeout: Duration,
     ) -> AimResult<AdapterResponse> {
-        match self.send_raw(command, timeout) {
-            Ok(r) => Ok(r),
+        let reply = match self.send_raw(command, timeout) {
+            Ok(r) => r,
             Err(e) if is_link_fault(&e) => {
                 self.reconnect()?;
-                self.send_raw(command, timeout)
+                self.send_raw(command, timeout)?
             }
-            Err(e) => Err(e),
+            Err(e) => return Err(e),
+        };
+
+        // Adapter commands are answered by the adapter itself and never by a
+        // vehicle, so the response window has nothing to do with them. They can
+        // still hit a glitch that is worth recovering from, which is why this
+        // is a guard on the timing arms rather than an early return.
+        let vehicle_traffic = !is_at_command(command);
+
+        match reply.class {
+            ResponseClass::Data if vehicle_traffic => {
+                self.record_window_success();
+                Ok(reply)
+            }
+            // `NO DATA` is the most common reply from a vehicle that is in fact
+            // present. It can mean nothing is there; it can equally mean we
+            // stopped listening too early. Asking once more with a longer
+            // window is what separates the two.
+            ResponseClass::NoData | ResponseClass::Timeout if vehicle_traffic => {
+                // Only while the window is still unproven. Once something on
+                // this vehicle has answered at the current window, the window
+                // is known to be long enough for this vehicle, and a later
+                // `NO DATA` means there is nothing there - retrying it would
+                // double the cost of every unsupported PID to re-learn a fact
+                // already established.
+                //
+                // Not during a discovery sweep either. Silence at 200 of 240
+                // addresses is the expected result there, and retrying each one
+                // would double the sweep while dragging the window to its
+                // ceiling. The caller's own budget says which case this is: a
+                // probe budget is far too small to hold a widened window, a
+                // read budget comfortably holds one.
+                let widened = Duration::from_millis(u64::from(self.widened_window_ms()));
+                if self.proven_window_ms.is_some()
+                    || widened >= timeout
+                    || !self.widen_response_window()
+                {
+                    return Ok(reply);
+                }
+                let again = self.send_raw(command, timeout)?;
+                if again.class == ResponseClass::Data {
+                    tracing::debug!(
+                        window_ms = self.response_window_ms,
+                        command,
+                        "answered only after the response window was widened"
+                    );
+                    self.record_window_success();
+                }
+                Ok(again)
+            }
+            // The adapter lost its footing rather than the vehicle answering.
+            // These are recoverable, and losing an address in the middle of a
+            // 255-address sweep to a transient buffer overflow is a worse
+            // outcome than one extra request.
+            ResponseClass::BufferFull | ResponseClass::Stopped => {
+                if self.recover_adapter("ATWS", command) {
+                    return self.send_raw(command, timeout);
+                }
+                Ok(reply)
+            }
+            // The protocol itself came unstuck. Closing and reopening it is
+            // what AndrOBD does here and it is the difference between a scan
+            // that survives a glitch and one that ends on it.
+            ResponseClass::BusError => {
+                if self.recover_adapter("ATPC", command) {
+                    return self.send_raw(command, timeout);
+                }
+                Ok(reply)
+            }
+            _ => Ok(reply),
+        }
+    }
+
+    /// Put the adapter back in a usable state after a recoverable glitch.
+    ///
+    /// `ATWS` is a warm start: it clears the device without the full reset and
+    /// reconfiguration `ATZ` costs, which matters because `ATZ` would discard
+    /// the echo, header and spacing settings this session depends on.
+    /// `ATPC` closes the current protocol so the next request reopens it.
+    ///
+    /// Returns whether a retry is worth making. Bounded to one attempt per
+    /// request, and recorded rather than hidden: a scan that quietly retried
+    /// its way to a clean result would be worse than one that reported the
+    /// glitch, so the recovery is always announced to the flight recorder by
+    /// virtue of going through `send_raw`.
+    fn recover_adapter(&mut self, command: &str, failed: &str) -> bool {
+        // A bus error in reply to an `AT` command is the adapter describing the
+        // bus, not the adapter failing, so closing the protocol and asking
+        // again would say nothing new. A buffer overflow or an interrupted
+        // exchange is a genuine glitch whatever provoked it, including a header
+        // command — and losing a whole request because a transient fault landed
+        // on its `ATSH` is exactly the fragility this exists to remove.
+        if command == "ATPC" && is_at_command(failed) {
+            return false;
+        }
+        tracing::debug!(recovery = command, after = failed, "recovering the adapter");
+        let recovered =
+            self.send_raw(command, self.config.at_timeout).map(|r| r.class.is_success());
+        match recovered {
+            Ok(true) => {
+                // A warm start really does return the device to its power-on
+                // settings: echo back on, headers off, spaces off. Retrying
+                // without restoring them produces a reply nothing downstream
+                // can parse, which is a worse failure than the one being
+                // recovered from.
+                if command == "ATWS" {
+                    self.restore_working_configuration();
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Re-apply the settings a reset clears, after a warm start.
+    ///
+    /// Only the ones everything downstream depends on. Failures are recorded
+    /// in the observer by `send_raw` and otherwise ignored: this runs while
+    /// already recovering from a fault, and a second failure here should leave
+    /// the original error to be reported rather than replace it.
+    fn restore_working_configuration(&mut self) {
+        let _ = self.send_raw("ATE0", self.config.at_timeout);
+        let _ = self.send_raw("ATL0", self.config.at_timeout);
+        let spaces = if self.spaces_enabled { "ATS1" } else { "ATS0" };
+        let _ = self.send_raw(spaces, self.config.at_timeout);
+        if self.headers_enabled {
+            let _ = self.send_raw("ATH1", self.config.at_timeout);
+        }
+        // The protocol survives a warm start but the request header does not.
+        self.current_header = None;
+        let _ = self.apply_response_window();
+    }
+
+    /// Record that nothing answered, saying what was ruled out along the way.
+    ///
+    /// The voltage is included so that "powered, and still nothing answered" is
+    /// stated rather than left for somebody to work out — the two failures look
+    /// identical from outside and have nothing else in common.
+    fn no_answer_caveat(&mut self, class: &str) {
+        let power = match self.battery_voltage {
+            Some(v) => format!(
+                ". The socket is powered ({v:.1} V by the adapter's own uncalibrated \
+                 measurement), so this is not a power problem"
+            ),
+            None => String::from(
+                ". This adapter could not report socket voltage, so whether the socket is \
+                 powered was not established",
+            ),
+        };
+        self.caps.add_caveat(format!(
+            "vehicle did not answer service 01 PID 00 during connect ({class}), and no protocol \
+             from ATSP1 to ATSP9 answered either, including a final attempt with the response \
+             window widened to {} ms{power}",
+            self.response_window_ms
+        ));
+    }
+
+    /// Open the response window as far as it goes, for one last attempt.
+    ///
+    /// Returns false when it was already there, so the caller does not repeat
+    /// an attempt that has effectively already been made.
+    fn widen_to_ceiling(&mut self) -> bool {
+        if self.response_window_ms >= RESPONSE_WINDOW_MAX_MS {
+            return false;
+        }
+        self.response_window_ms = RESPONSE_WINDOW_MAX_MS;
+        self.apply_response_window()
+    }
+
+    /// What the window would become if widened. Does not change anything.
+    fn widened_window_ms(&self) -> u32 {
+        (self.response_window_ms * 2).min(RESPONSE_WINDOW_MAX_MS)
+    }
+
+    /// Give the vehicle longer to answer. Returns whether anything moved.
+    fn widen_response_window(&mut self) -> bool {
+        let next = self.widened_window_ms();
+        if next == self.response_window_ms {
+            return false;
+        }
+        self.response_window_ms = next;
+        self.apply_response_window()
+    }
+
+    /// Record that the current window worked, and ease back toward the
+    /// shortest one that has.
+    ///
+    /// Without the easing, one slow module would leave every later request
+    /// waiting for a delay only that module needed.
+    fn record_window_success(&mut self) {
+        let proven = self
+            .proven_window_ms
+            .map_or(self.response_window_ms, |p| p.min(self.response_window_ms));
+        self.proven_window_ms = Some(proven);
+        if self.response_window_ms > proven {
+            // A quarter of the gap at a time rather than straight back down:
+            // snapping to the proven value on every success would oscillate
+            // against a module that is only sometimes slow.
+            let gap = self.response_window_ms - proven;
+            let next = (self.response_window_ms - gap.div_ceil(4)).max(proven);
+            if next != self.response_window_ms {
+                self.response_window_ms = next;
+                self.apply_response_window();
+            }
+        }
+    }
+
+    /// Write the current window to the device with `ATST`.
+    ///
+    /// `ATST` counts in units of 4 ms, so the value sent is the window divided
+    /// by four. Returns whether the device accepted it; a device that refuses
+    /// keeps whatever window it had, and the learned value simply stops being
+    /// applied rather than the request failing.
+    fn apply_response_window(&mut self) -> bool {
+        let counts = (self.response_window_ms / ATST_RESOLUTION_MS).clamp(1, 255);
+        match self.send_raw(&format!("ATST{counts:02X}"), self.config.at_timeout) {
+            Ok(r) => r.class.is_success(),
+            Err(_) => false,
         }
     }
 
@@ -780,6 +1145,7 @@ impl DiagnosticAdapter for Elm327Adapter {
     fn connect(&mut self) -> AimResult<()> {
         self.set_state(ConnectionState::Connecting);
         self.caps = AdapterCapabilities::unknown(self.transport.kind());
+        self.caps.baud = self.transport.baud();
 
         if let Err(e) = self.transport.open() {
             self.set_state(ConnectionState::Failed { code: e.code, detail: e.message.clone() });
@@ -969,6 +1335,41 @@ impl DiagnosticAdapter for Elm327Adapter {
 /// even this range is the adapter being wrong, not the vehicle being unusual.
 const PLAUSIBLE_SYSTEM_VOLTS: std::ops::RangeInclusive<f64> = 9.0..=32.0;
 
+/// True for a command addressed to the adapter rather than to the vehicle.
+///
+/// `AT` is the ELM327's own prefix and `ST` is the STN extension set. Anything
+/// else is hex going out on the bus.
+fn is_at_command(command: &str) -> bool {
+    let c = command.trim_start();
+    c.len() >= 2 && (c[..2].eq_ignore_ascii_case("AT") || c[..2].eq_ignore_ascii_case("ST"))
+}
+
+/// Where the learned response window starts, in milliseconds.
+///
+/// The ELM327's own power-on default is roughly this, and it is enough for a
+/// healthy module on CAN.
+const RESPONSE_WINDOW_DEFAULT_MS: u32 = 200;
+
+/// The longest the adapter is ever told to wait for one reply.
+///
+/// A real ceiling, not a suggestion. Widening until something answers would
+/// turn every genuine `NO DATA` into a slow `NO DATA`, and a protocol that only
+/// ever answers here is marginal rather than working.
+const RESPONSE_WINDOW_MAX_MS: u32 = 1000;
+
+/// `ATST` counts in units of 4 ms.
+const ATST_RESOLUTION_MS: u32 = 4;
+
+/// Below this, the diagnostic socket is not powered and no protocol can answer.
+///
+/// Deliberately far under any working system voltage rather than near it. This
+/// is a floor test for "is there power here at all", not a battery-health
+/// judgement: adapter voltage readings are uncalibrated — one cable reported
+/// 28.3 V on a healthy 14 V system — so the only thing they can carry safely is
+/// the difference between a live socket and a dead one. Six volts is the
+/// threshold python-OBD settled on for the same purpose.
+const SOCKET_POWERED_VOLTS: f64 = 6.0;
+
 const THROUGHPUT_CEILING: f64 = 100.0;
 
 /// The same bound for confirmed STN-series firmware.
@@ -1020,10 +1421,34 @@ fn split_header_line(
 ) -> AimResult<(String, Vec<u8>)> {
     let trimmed = line.trim();
     if spaces && trimmed.contains(' ') {
-        let mut parts = trimmed.split_whitespace();
-        let header = parts.next().unwrap_or_default().to_string();
+        let parts: Vec<&str> = trimmed.split_whitespace().collect();
+        // With spaces on, an 11-bit header arrives as a single three-digit
+        // token (`7E8 06 41 ...`) but a 29-bit one arrives as four separate
+        // byte tokens (`18 DA F1 10 06 41 ...`). Taking the first token either
+        // way reads `18` as the whole identifier and rejects the line.
+        //
+        // With no protocol established, the width of the first token says
+        // which it is: three hex digits can only be an 11-bit identifier.
+        let header_tokens = if protocol.is_can() {
+            if protocol.is_29_bit() {
+                4
+            } else {
+                1
+            }
+        } else if parts.first().is_some_and(|t| t.len() == 3) {
+            1
+        } else {
+            4
+        };
+        if parts.len() <= header_tokens {
+            return Err(AimError::new(
+                ErrorCode::ProtocolMalformedResponse,
+                format!("adapter line {trimmed:?} is too short to contain a header and data"),
+            ));
+        }
+        let header = parts[..header_tokens].concat();
         let mut data = Vec::new();
-        for p in parts {
+        for p in &parts[header_tokens..] {
             data.push(u8::from_str_radix(p, 16).map_err(|e| {
                 AimError::new(
                     ErrorCode::ProtocolMalformedResponse,

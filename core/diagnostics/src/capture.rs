@@ -35,7 +35,10 @@ use std::collections::BTreeMap;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConfigCapture {
     /// Diagnostic request address of the module this came from.
-    pub module: u16,
+    ///
+    /// A string, so a 29-bit module (`18DA10F1`) is expressible. It was a
+    /// `u16`, which silently truncated one.
+    pub module: String,
     /// Records by data identifier, exactly as the module returned them.
     pub records: BTreeMap<u16, Vec<u8>>,
     /// When it was taken, ISO 8601.
@@ -67,14 +70,14 @@ impl ByteChange {
     /// `after_is_on` is taken from whoever flipped the switch, because the
     /// bytes do not say which state is the enabled one and guessing it writes
     /// the setting backwards on every vehicle that ever uses the mapping.
-    pub fn as_mapping(&self, module: u16, after_is_on: bool) -> Mapping {
+    pub fn as_mapping(&self, module: &str, after_is_on: bool) -> Mapping {
         let (on, off) = if after_is_on {
             (self.after & self.changed_mask, self.before & self.changed_mask)
         } else {
             (self.before & self.changed_mask, self.after & self.changed_mask)
         };
         Mapping::DataIdentifierBits {
-            module,
+            module: module.to_string(),
             did: self.did,
             byte: self.byte,
             mask: self.changed_mask,
@@ -157,9 +160,9 @@ pub fn diff(before: &ConfigCapture, after: &ConfigCapture) -> CaptureDiff {
 mod tests {
     use super::*;
 
-    fn capture(module: u16, records: &[(u16, &[u8])]) -> ConfigCapture {
+    fn capture(module: &str, records: &[(u16, &[u8])]) -> ConfigCapture {
         ConfigCapture {
-            module,
+            module: module.to_string(),
             records: records.iter().map(|(d, r)| (*d, r.to_vec())).collect(),
             taken_at: "2026-09-09T00:00:00Z".into(),
             label: None,
@@ -168,8 +171,8 @@ mod tests {
 
     #[test]
     fn one_bit_moving_is_found_and_isolated_to_that_bit() {
-        let before = capture(0x726, &[(0xDE01, &[0x00, 0b0000_0000])]);
-        let after = capture(0x726, &[(0xDE01, &[0x00, 0b0000_0100])]);
+        let before = capture("726", &[(0xDE01, &[0x00, 0b0000_0000])]);
+        let after = capture("726", &[(0xDE01, &[0x00, 0b0000_0100])]);
 
         let d = diff(&before, &after);
         assert!(d.is_unambiguous());
@@ -183,13 +186,13 @@ mod tests {
 
     #[test]
     fn the_proposed_mapping_carries_only_the_bits_that_moved() {
-        let before = capture(0x726, &[(0xDE01, &[0xFF, 0b1010_0000])]);
-        let after = capture(0x726, &[(0xDE01, &[0xFF, 0b1010_0100])]);
+        let before = capture("726", &[(0xDE01, &[0xFF, 0b1010_0000])]);
+        let after = capture("726", &[(0xDE01, &[0xFF, 0b1010_0100])]);
 
         let d = diff(&before, &after);
-        match d.changes[0].as_mapping(0x726, true) {
+        match d.changes[0].as_mapping("726", true) {
             Mapping::DataIdentifierBits { module, did, byte, mask, on, off } => {
-                assert_eq!((module, did, byte), (0x726, 0xDE01, 1));
+                assert_eq!((module.as_str(), did, byte), ("726", 0xDE01, 1));
                 assert_eq!(mask, 0b0000_0100);
                 assert_eq!(on, 0b0000_0100, "after was the enabled state");
                 assert_eq!(off, 0b0000_0000);
@@ -202,11 +205,11 @@ mod tests {
     /// setting the wrong way round on every vehicle that ever uses the mapping.
     #[test]
     fn the_enabled_state_is_stated_rather_than_inferred() {
-        let before = capture(0x726, &[(0xDE01, &[0b0000_0100])]);
-        let after = capture(0x726, &[(0xDE01, &[0b0000_0000])]);
+        let before = capture("726", &[(0xDE01, &[0b0000_0100])]);
+        let after = capture("726", &[(0xDE01, &[0b0000_0000])]);
         let d = diff(&before, &after);
 
-        match d.changes[0].as_mapping(0x726, false) {
+        match d.changes[0].as_mapping("726", false) {
             Mapping::DataIdentifierBits { on, off, .. } => {
                 assert_eq!(on, 0b0000_0100, "before was the enabled state");
                 assert_eq!(off, 0b0000_0000);
@@ -217,8 +220,8 @@ mod tests {
 
     #[test]
     fn several_bytes_moving_is_reported_but_not_unambiguous() {
-        let before = capture(0x726, &[(0xDE01, &[0x00, 0x00])]);
-        let after = capture(0x726, &[(0xDE01, &[0x01, 0x02])]);
+        let before = capture("726", &[(0xDE01, &[0x00, 0x00])]);
+        let after = capture("726", &[(0xDE01, &[0x01, 0x02])]);
         let d = diff(&before, &after);
         assert!(d.is_comparable());
         assert!(!d.is_unambiguous(), "two bytes moved; a mapping would be a guess");
@@ -228,8 +231,8 @@ mod tests {
     /// Two captures of different shapes are not two states of one thing.
     #[test]
     fn a_length_change_makes_the_captures_incomparable() {
-        let before = capture(0x726, &[(0xDE01, &[0x00, 0x00])]);
-        let after = capture(0x726, &[(0xDE01, &[0x00, 0x00, 0x00])]);
+        let before = capture("726", &[(0xDE01, &[0x00, 0x00])]);
+        let after = capture("726", &[(0xDE01, &[0x00, 0x00, 0x00])]);
         let d = diff(&before, &after);
         assert!(!d.is_comparable());
         assert_eq!(d.length_mismatches, vec![0xDE01]);
@@ -238,8 +241,8 @@ mod tests {
 
     #[test]
     fn identifiers_present_in_only_one_capture_are_reported() {
-        let before = capture(0x726, &[(0xDE01, &[0x00]), (0xDE02, &[0x00])]);
-        let after = capture(0x726, &[(0xDE01, &[0x00]), (0xDE03, &[0x00])]);
+        let before = capture("726", &[(0xDE01, &[0x00]), (0xDE02, &[0x00])]);
+        let after = capture("726", &[(0xDE01, &[0x00]), (0xDE03, &[0x00])]);
         let d = diff(&before, &after);
         assert!(!d.is_comparable());
         assert_eq!(d.only_in_before, vec![0xDE02]);
@@ -248,7 +251,7 @@ mod tests {
 
     #[test]
     fn identical_captures_produce_no_changes() {
-        let c = capture(0x726, &[(0xDE01, &[0x12, 0x34])]);
+        let c = capture("726", &[(0xDE01, &[0x12, 0x34])]);
         let d = diff(&c, &c);
         assert!(d.is_comparable());
         assert!(d.changes.is_empty());

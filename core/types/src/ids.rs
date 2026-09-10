@@ -75,6 +75,9 @@ id_type!(
 id_type!(
     /// An agent-produced diagnosis record.
     DiagnosisId, "dia");
+id_type!(
+    /// One stored snapshot of a module's configuration.
+    CaptureId, "cap");
 
 #[cfg(test)]
 mod tests {

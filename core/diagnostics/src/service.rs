@@ -65,6 +65,14 @@ pub mod capabilities {
     pub const READ_MONITOR_TESTS: &str = "obd2.read_monitor_tests";
     /// Discover every module on the bus and read its fault memory.
     pub const SCAN_ALL_MODULES: &str = "obd2.scan_all_modules";
+    /// Find out whether a module accepts writes, without writing anything.
+    pub const PROBE_WRITE_GATE: &str = "config.probe_write_gate";
+    /// Measure what one module supports, without writing to it.
+    pub const PROBE_MODULE_CAPABILITIES: &str = "obd2.probe_module_capabilities";
+    /// List community signal definitions that might apply to this vehicle.
+    pub const LIST_CATALOG_SIGNALS: &str = "obd2.list_catalog_signals";
+    /// Ask the vehicle one community-defined signal and report what it says.
+    pub const READ_CATALOG_SIGNAL: &str = "obd2.read_catalog_signal";
     /// List configurable features applicable to this vehicle.
     pub const LIST_FEATURES: &str = "config.list_features";
     /// Read one feature's current setting from the vehicle. L0.
@@ -90,16 +98,124 @@ pub mod capabilities {
 ///
 /// Swept exhaustively rather than from a per-manufacturer list, because a list
 /// is a guess about a vehicle and a sweep is a measurement of one.
+const UDS_SCAN_RANGE: std::ops::RangeInclusive<u16> = 0x700..=0x7EF;
+
 /// Consecutive timeouts before a signal stops being asked for.
 ///
 /// Three, because two can be coincidence on a busy bus and four is another
 /// twenty-four seconds of somebody waiting.
 const SIGNAL_TIMEOUT_STRIKES: usize = 3;
 
-const UDS_SCAN_RANGE: std::ops::RangeInclusive<u16> = 0x700..=0x7EF;
+/// The diagnostic request identifiers a full-vehicle scan sweeps, written in
+/// the addressing the negotiated protocol actually uses.
+///
+/// An 11-bit vehicle is swept over [`UDS_SCAN_RANGE`]. A 29-bit vehicle
+/// addresses modules as `18DA<target>F1`, and sweeping 11-bit identifiers there
+/// reaches nothing at all — which the scan then reports as a vehicle with no
+/// modules, rather than as a scan that asked the wrong question. Measured on a
+/// 2023 Odyssey, whose two modules sat at `18DAF110` and `18DAF11E` while the
+/// 11-bit sweep found nothing in sixty seconds.
+fn scan_addresses(protocol: aim_types::ObdProtocol) -> Vec<String> {
+    if protocol.is_29_bit() {
+        // 0x33 is the functional target, not a module.
+        (0x00..=0xFF_u16)
+            .filter(|target| *target != 0x33)
+            .map(|target| format!("18DA{target:02X}F1"))
+            .collect()
+    } else {
+        // 0x7DF is the functional broadcast and is not a module: probing it
+        // produces a reply from every emissions ECU at once.
+        UDS_SCAN_RANGE.filter(|addr| *addr != 0x7DF).map(|addr| format!("{addr:03X}")).collect()
+    }
+}
+
+/// The second way of asking a module whether it is there.
+///
+/// `TesterPresent` is the obvious probe and not every module answers it.
+/// Measured on a 2019 F-250: the engine controller ignores `0x3E` at `7E0` and
+/// answers `0x10 0x01` at the same address, so a sweep that only knows the
+/// first concludes the truck has no modules at all — while `read_pid` on that
+/// very module returns engine speed.
+///
+/// Requesting the *default* session is the safe half of a service that can do
+/// more: it asks a module to be in the state it is already in. The programming
+/// session is never requested anywhere in this build.
+fn fallback_probe() -> Vec<u8> {
+    aim_protocols::UdsRequest::diagnostic_session_control(0x01).to_bytes()
+}
+
+/// Whether a request identifier falls in the legislated emissions block.
+///
+/// Defined for 11-bit addressing as `0x7E0..=0x7E7`. ISO 15765-4 gives 29-bit
+/// addressing no equivalent contiguous block, so rather than invent one the
+/// question is left unanswered there.
+fn in_legislated_range(request_addr: &str) -> serde_json::Value {
+    if request_addr.len() != 3 {
+        return serde_json::Value::Null;
+    }
+    match u16::from_str_radix(request_addr, 16) {
+        Ok(addr) => serde_json::json!((0x7E0..=0x7E7).contains(&addr)),
+        Err(_) => serde_json::Value::Null,
+    }
+}
 
 const FREEZE_FRAME_PIDS: [u8; 14] =
     [0x03, 0x04, 0x05, 0x0B, 0x0C, 0x0D, 0x0F, 0x10, 0x11, 0x1F, 0x21, 0x2F, 0x33, 0x42];
+
+/// What one UDS exchange produced, kept as three distinct outcomes.
+///
+/// "Refused" and "no answer" are different facts and must not collapse into
+/// each other: a refusal means the module is there and said no, and carries a
+/// reason worth showing.
+enum UdsOutcome {
+    Positive(Vec<u8>),
+    Refused(aim_protocols::NegativeResponseCode),
+    NoAnswer(String),
+}
+
+impl UdsOutcome {
+    fn is_positive(&self) -> bool {
+        matches!(self, UdsOutcome::Positive(_))
+    }
+
+    /// The stable refusal code, when the module gave a reason.
+    fn refusal_code(&self) -> Option<&'static str> {
+        match self {
+            UdsOutcome::Refused(nrc) => Some(nrc.refusal().code()),
+            _ => None,
+        }
+    }
+
+    /// What happened, in language meant for a person.
+    fn detail(&self) -> Option<String> {
+        match self {
+            UdsOutcome::Positive(_) => None,
+            UdsOutcome::Refused(nrc) => Some(nrc.refusal().explain().to_string()),
+            UdsOutcome::NoAnswer(why) => Some(why.clone()),
+        }
+    }
+}
+
+/// What reading one module's fault memory produced.
+///
+/// Carries *why* a module declined rather than only that it did. A module that
+/// answers `securityAccessDenied` has said it has fault memory and will not show
+/// it; one that answers `serviceNotSupported` has said it does not keep any.
+/// Collapsing both to "did not answer" throws away the difference.
+#[derive(Debug, Default)]
+struct DtcReadOutcome {
+    dtcs: Vec<serde_json::Value>,
+    /// Human-readable note, when something other than a clean read happened.
+    note: Option<String>,
+    /// The refusal, classified, when the module gave a reason.
+    refusal: Option<aim_protocols::RefusalKind>,
+}
+
+impl DtcReadOutcome {
+    fn refused(note: String, refusal: Option<aim_protocols::RefusalKind>) -> DtcReadOutcome {
+        DtcReadOutcome { dtcs: Vec::new(), note: Some(note), refusal }
+    }
+}
 
 /// What one operation produced, before it is wrapped in the §7 envelope.
 #[derive(Debug, Default)]
@@ -404,8 +520,10 @@ impl DiagnosticService {
         module: &Module,
         request: &ObdRequest,
     ) -> AimResult<(EcuMessage, Option<i64>)> {
-        let target = RequestTarget::from_response_address(&module.address)
-            .unwrap_or(RequestTarget::Functional);
+        // Falls back to a broadcast rather than failing: this path filters the
+        // answers by address anyway, so a module whose request address is
+        // unknown is still reachable, just less efficiently.
+        let target = Self::request_target(module).unwrap_or(RequestTarget::Functional);
         let messages = self.request(request, &target)?;
         let evidence = self.recorder.last_response_event();
         messages
@@ -442,6 +560,31 @@ impl DiagnosticService {
                 ))
             },
         )
+    }
+
+    /// Where to send this module something.
+    ///
+    /// [`Module::address`] is where it *answered*, which is not the same place.
+    /// Prefers the address discovery actually sent to, falls back to the
+    /// standard derivation for the legislated block, and refuses rather than
+    /// guessing when neither is available — sending a request to a response
+    /// address reaches nothing, and looks exactly like a module that is not
+    /// there.
+    fn request_target(module: &Module) -> AimResult<RequestTarget> {
+        if let Some(addr) = &module.request_address {
+            return Ok(RequestTarget::Physical(addr.clone()));
+        }
+        RequestTarget::from_response_address(&module.address).ok_or_else(|| {
+            AimError::new(
+                ErrorCode::PreconditionFailed,
+                format!(
+                    "the address {} listens on is not known. It answered on {}, and outside the \
+                     legislated block there is no way to derive one from the other - run a full \
+                     scan, which learns both.",
+                    module.module_key, module.address
+                ),
+            )
+        })
     }
 
     fn require_usable(&self) -> AimResult<()> {
@@ -737,6 +880,15 @@ impl DiagnosticService {
                 id: aim_types::ModuleId::new(),
                 session_id: self.session.id.clone(),
                 module_key: key.clone(),
+                // Derivable here: this came from a functional broadcast, and
+                // the legislated block is the one place response and request
+                // addresses are related by the standard.
+                request_address: RequestTarget::from_response_address(&message.address).and_then(
+                    |t| match t {
+                        RequestTarget::Physical(a) => Some(a),
+                        RequestTarget::Functional => None,
+                    },
+                ),
                 // Named by address until the module tells us otherwise. Which
                 // module sits at which OBD address is vehicle-specific, and
                 // guessing would be an invention.
@@ -1353,7 +1505,7 @@ impl DiagnosticService {
             });
         };
 
-        let addr = RequestTarget::Physical(format!("{:03X}", target.module));
+        let addr = RequestTarget::Physical(target.module.clone());
         let request = aim_protocols::UdsRequest::read_data_by_identifier(target.did).to_bytes();
         let record = self.read_did(&request, &addr, Duration::from_millis(2000), target.did)?;
         let state = target.current(&record);
@@ -1382,7 +1534,7 @@ impl DiagnosticService {
                 "known": true,
                 "readable": true,
                 "state": state,
-                "module": format!("{:03X}", target.module),
+                "module": target.module,
                 "did": format!("{:04X}", target.did),
                 "record": aim_types::hex(&record),
                 "owning_modules": modules,
@@ -1411,7 +1563,7 @@ impl DiagnosticService {
     /// Read-only. L0, and the assistant may use it.
     pub fn capture_configuration(
         &mut self,
-        module: u16,
+        module: &str,
         dids: &[u16],
         label: Option<String>,
         initiator: &str,
@@ -1420,7 +1572,7 @@ impl DiagnosticService {
         self.record_invocation(
             "capture_configuration",
             initiator,
-            serde_json::json!({ "module": format!("{module:03X}"), "identifiers": dids.len() }),
+            serde_json::json!({ "module": module, "identifiers": dids.len() }),
         );
         let outcome = self
             .authorize(capabilities::READ_FEATURE, initiator, None)
@@ -1430,7 +1582,7 @@ impl DiagnosticService {
 
     fn capture_inner(
         &mut self,
-        module: u16,
+        module: &str,
         dids: &[u16],
         label: Option<String>,
     ) -> AimResult<Payload> {
@@ -1450,7 +1602,7 @@ impl DiagnosticService {
             ));
         }
 
-        let addr = RequestTarget::Physical(format!("{module:03X}"));
+        let addr = RequestTarget::Physical(module.to_string());
         let request_budget = Duration::from_millis(2000);
         let mut records = std::collections::BTreeMap::new();
         let mut missing = Vec::new();
@@ -1471,7 +1623,7 @@ impl DiagnosticService {
             return Err(AimError::new(
                 ErrorCode::NoData,
                 format!(
-                    "the module at {module:03X} returned none of the {} identifiers asked for. \
+                    "the module at {module} returned none of the {} identifiers asked for. \
                      Either it holds no configuration, or it keeps it somewhere else.",
                     dids.len()
                 ),
@@ -1479,7 +1631,7 @@ impl DiagnosticService {
         }
 
         let capture = crate::capture::ConfigCapture {
-            module,
+            module: module.to_string(),
             records: records.clone(),
             taken_at: aim_types::now().0.to_string(),
             label,
@@ -1497,8 +1649,43 @@ impl DiagnosticService {
             ));
         }
 
+        // Stored, so that this can be the "before" of a comparison made next
+        // week. A capture that lived only in an HTTP response could only ever
+        // be compared with another one taken in the same sitting, which is not
+        // how somebody changes a setting on their own vehicle.
+        let stored_id = match serde_json::to_string(&capture) {
+            Ok(json) => self
+                .store
+                .record_capture(
+                    &self.session.id,
+                    self.session.vehicle_id.as_ref().map(|v| v.as_str()),
+                    &format!("ECU_{module}"),
+                    capture.label.as_deref(),
+                    &capture.taken_at,
+                    &json,
+                )
+                .ok(),
+            Err(_) => None,
+        };
+        if stored_id.is_none() {
+            warnings.push(Warning::caution(
+                "capture_not_stored",
+                "This capture could not be saved, so it will not be available to compare \
+                 against later. It is still returned in full here — keep it if you need it.",
+            ));
+        }
+        if self.session.vehicle_id.is_none() {
+            warnings.push(Warning::info(
+                "capture_not_linked_to_a_vehicle",
+                "No vehicle has been identified in this session, so this capture is saved \
+                 without one and will not be found by a later search for this vehicle's \
+                 captures. Running identify_vehicle first avoids that.",
+            ));
+        }
+
         Ok(Payload {
             data: Some(serde_json::json!({
+                "capture_id": stored_id,
                 "capture": capture,
                 "records_read": records.len(),
                 "hex": records
@@ -1506,10 +1693,52 @@ impl DiagnosticService {
                     .map(|(d, r)| (format!("{d:04X}"), aim_types::hex(r)))
                     .collect::<std::collections::BTreeMap<_, _>>(),
                 "next_step":
-                    "Change the setting once with a tool already known to do it correctly, then \
-                     capture the same identifiers again and compare the two.",
+                    "Change the setting once, using the vehicle's own controls or a tool already \
+                     known to do it correctly. Then capture the same identifiers again and \
+                     compare the two. The comparison reports only the bits that moved.",
             })),
             warnings,
+            ..Default::default()
+        })
+    }
+
+    /// Every capture stored for the vehicle in this session, newest first.
+    ///
+    /// This is what makes the loop usable across days: today's capture finds
+    /// last week's without anybody having kept a JSON blob in a text file.
+    pub fn list_captures(&mut self, initiator: &str) -> ToolResult {
+        let t0 = Instant::now();
+        self.record_invocation("list_captures", initiator, serde_json::json!({}));
+        let outcome = self
+            .authorize(capabilities::READ_FEATURE, initiator, None)
+            .and_then(|_| self.list_captures_inner());
+        self.finish("list_captures", capabilities::READ_FEATURE, t0, outcome)
+    }
+
+    fn list_captures_inner(&mut self) -> AimResult<Payload> {
+        let Some(vehicle_id) = self.session.vehicle_id.clone() else {
+            return Err(AimError::new(
+                ErrorCode::PreconditionFailed,
+                "no vehicle has been identified in this session, so there is nothing to look up \
+                 captures for. Run identify_vehicle first.",
+            ));
+        };
+        let captures = self.store.captures_for_vehicle(vehicle_id.as_str())?;
+        Ok(Payload {
+            data: Some(serde_json::json!({
+                "vehicle_id": vehicle_id.as_str(),
+                "count": captures.len(),
+                "captures": captures
+                    .iter()
+                    .map(|c| serde_json::json!({
+                        "id": c.id,
+                        "module": c.module_key,
+                        "label": c.label,
+                        "taken_at": c.taken_at,
+                        "same_session": c.session_id == self.session.id.as_str(),
+                    }))
+                    .collect::<Vec<_>>(),
+            })),
             ..Default::default()
         })
     }
@@ -1593,7 +1822,7 @@ impl DiagnosticService {
             (target, feature.verification)
         };
         let want_on = matches!(desired, crate::config::DesiredValue::On);
-        let addr = RequestTarget::Physical(format!("{:03X}", target.module));
+        let addr = RequestTarget::Physical(target.module.clone());
         let budget = Duration::from_millis(2000);
 
         // 3. An extended session. Most modules refuse writes in the default
@@ -1671,7 +1900,7 @@ impl DiagnosticService {
                 "feature_id": feature_id,
                 "changed": verified,
                 "verified": verified,
-                "module": format!("{:03X}", target.module),
+                "module": target.module,
                 "did": format!("{:04X}", target.did),
                 "before": aim_types::hex(&before),
                 "after": aim_types::hex(&verify),
@@ -1823,7 +2052,7 @@ impl DiagnosticService {
                     if info.description.is_none() {
                         warnings.push(Warning::caution(
                             "dtc_not_in_catalog",
-                            format!("{code} has no description in the generic SAE catalog"),
+                            Self::unknown_dtc_next_steps(&code, &module.module_key, &info),
                         ));
                     }
                     self.store.record_dtc(&DtcRecord {
@@ -2181,30 +2410,88 @@ impl DiagnosticService {
         let mut warnings = Vec::new();
         let probe = aim_protocols::UdsRequest::tester_present(false).to_bytes();
 
-        // The 11-bit diagnostic range. 0x7DF is the functional broadcast and is
-        // skipped: it is not a module, and probing it produces a reply from
-        // every emissions ECU at once.
-        for addr in UDS_SCAN_RANGE {
-            if addr == 0x7DF {
-                continue;
+        // Addressed the way this vehicle is actually addressed. Sweeping
+        // 11-bit identifiers on a 29-bit vehicle reaches nothing and reports it
+        // as an empty vehicle.
+        let addresses = scan_addresses(self.adapter.protocol());
+
+        // Calibrate the deadline against a module already known to be there.
+        //
+        // The discovery budget is derived from measured OBD-II throughput, and
+        // a UDS request is not an OBD-II request. Measured on a 2019 F-250: the
+        // engine controller answers a PID in 22 ms and did not answer session
+        // control inside the 90 ms that produced, so a sweep at that deadline
+        // reported a truck with no modules while `read_pid` on one of them was
+        // returning engine speed.
+        //
+        // Asking a known module how long it actually takes turns that from a
+        // constant somebody has to tune into a measurement.
+        let (probe_budget, calibrated_with) = self.calibrate_probe_budget();
+        if let Some(ms) = calibrated_with {
+            warnings.push(Warning::info(
+                "discovery_deadline_measured",
+                format!(
+                    "A module known to be present needed {ms} ms to answer a discovery probe, so \
+                     the sweep waits that long at each address. This vehicle's modules are \
+                     slower to answer diagnostic requests than to answer emissions PIDs."
+                ),
+            ));
+        }
+
+        for (attempt, probe) in [(0usize, probe.clone()), (1, fallback_probe())].into_iter() {
+            let mut answered = 0usize;
+            let mut errored = 0usize;
+            let mut silent = 0usize;
+            for addr in &addresses {
+                let target = RequestTarget::Physical(addr.clone());
+                let replies = match self.adapter.request_pdu(&probe, &target, probe_budget) {
+                    Ok(r) => r,
+                    // A link that has genuinely fallen over should stop the
+                    // sweep rather than produce 240 identical failures.
+                    Err(e) if e.code == ErrorCode::TransportDisconnected => return Err(e),
+                    Err(_) => {
+                        errored += 1;
+                        continue;
+                    }
+                };
+                if replies.is_empty() {
+                    silent += 1;
+                }
+                for m in replies {
+                    answered += 1;
+                    found.push((addr.clone(), m.address.clone()));
+                }
             }
-            let target = RequestTarget::Physical(format!("{addr:03X}"));
-            let replies = match self.adapter.request_pdu(&probe, &target, budget.probe) {
-                Ok(r) => r,
-                // A link that has genuinely fallen over should stop the sweep
-                // rather than produce 240 identical failures.
-                Err(e) if e.code == ErrorCode::TransportDisconnected => return Err(e),
-                Err(_) => continue,
-            };
-            for m in replies {
-                found.push((addr, m.address.clone()));
+            // A sweep that finds nothing is the failure worth diagnosing, and
+            // "nothing answered" and "everything errored" are different
+            // failures that look identical from outside.
+            tracing::info!(
+                sweep = attempt,
+                probe = ?probe,
+                budget_ms = probe_budget.as_millis(),
+                answered,
+                silent,
+                errored,
+                "discovery sweep finished"
+            );
+            if !found.is_empty() {
+                if attempt == 1 {
+                    warnings.push(Warning::info(
+                        "discovery_used_the_fallback_probe",
+                        "No module answered TesterPresent, so discovery asked again with \
+                         DiagnosticSessionControl. Both are standard ways to ask a module \
+                         whether it is there, and modules differ in which they answer.",
+                    ));
+                }
+                break;
             }
         }
 
         if found.is_empty() {
             return Err(AimError::no_data(
-                "no module answered on any diagnostic address; the vehicle may be \
-                 asleep, or this adapter may not reach the bus the modules are on",
+                "no module answered on any diagnostic address, to either of the two standard \
+                 ways of asking; the vehicle may be asleep, or this adapter may not reach the \
+                 bus the modules are on",
             ));
         }
 
@@ -2213,20 +2500,31 @@ impl DiagnosticService {
         let mut modules = Vec::new();
         let mut total_faults = 0usize;
         let mut refused = 0usize;
+        // Counted by reason, so the scan can say what kind of wall it hit
+        // rather than how many times it hit something.
+        let mut refusals: std::collections::BTreeMap<aim_protocols::RefusalKind, usize> =
+            std::collections::BTreeMap::new();
 
         for (request_addr, response_addr) in &found {
-            let target = RequestTarget::Physical(format!("{request_addr:03X}"));
+            let target = RequestTarget::Physical(request_addr.clone());
             let reply = self.adapter.request_pdu(&dtc_request, &target, budget.read);
 
-            let (dtcs, note) = match reply {
+            let outcome = match reply {
                 Ok(messages) => match messages.into_iter().find(|m| &m.address == response_addr) {
-                    Some(m) => self.decode_uds_dtcs(&m.payload),
-                    None => (Vec::new(), Some("did not answer the fault request".to_string())),
+                    Some(m) => self.decode_uds_dtcs(&m.payload, &format!("ECU_{response_addr}")),
+                    None => DtcReadOutcome::refused(
+                        String::from("did not answer the fault request"),
+                        None,
+                    ),
                 },
-                Err(e) => (Vec::new(), Some(e.message.clone())),
+                Err(e) => DtcReadOutcome::refused(e.message.clone(), None),
             };
+            let DtcReadOutcome { dtcs, note, refusal } = outcome;
             if note.is_some() {
                 refused += 1;
+            }
+            if let Some(kind) = refusal {
+                *refusals.entry(kind).or_insert(0usize) += 1;
             }
             total_faults += dtcs.len();
             let fault_count = dtcs.len();
@@ -2242,6 +2540,11 @@ impl DiagnosticService {
                 id: aim_types::ModuleId::new(),
                 session_id: self.session.id.clone(),
                 module_key: key.clone(),
+                // Learned by construction: the scan sent to this address and
+                // this module answered. Outside the legislated block there is
+                // no formula relating the two, so this is the only way to
+                // know where to send anything later.
+                request_address: Some(request_addr.clone()),
                 // Described, never named. See below.
                 name: format!("Module at {response_addr}"),
                 address: response_addr.clone(),
@@ -2262,10 +2565,10 @@ impl DiagnosticService {
             // ABS controller because it usually is on some vehicles is exactly
             // the invention this project refuses.
             modules.push(serde_json::json!({
-                "request_address": format!("{request_addr:03X}"),
+                "request_address": request_addr,
                 "address": response_addr,
                 "name": format!("Module at {response_addr}"),
-                "in_legislated_range": (0x7E0..=0x7E7).contains(request_addr),
+                "in_legislated_range": in_legislated_range(request_addr),
                 "faults": dtcs,
                 "fault_count": fault_count,
                 "note": note,
@@ -2284,6 +2587,15 @@ impl DiagnosticService {
                 ),
             ));
         }
+
+        // One warning per distinct reason, carrying what it means. A count of
+        // refusals tells a user nothing they can act on; "four modules have
+        // fault memory and will not show it without manufacturer security"
+        // tells them where they stand.
+        for (kind, count) in &refusals {
+            warnings
+                .push(Warning::info(kind.code(), format!("{count} module(s): {}", kind.explain())));
+        }
         warnings.push(Warning::info(
             "uds_scan_scope",
             "This reads every module that answers on the standard diagnostic addresses, not \
@@ -2296,7 +2608,7 @@ impl DiagnosticService {
                 "modules": modules,
                 "module_count": modules.len(),
                 "fault_count": total_faults,
-                "addresses_probed": UDS_SCAN_RANGE.count(),
+                "addresses_probed": addresses.len(),
             })),
             warnings,
             evidence: self.recorder.last_response_event(),
@@ -2309,23 +2621,770 @@ impl DiagnosticService {
     /// Returns the note separately so a module that answered something other
     /// than a positive response is reported as such rather than as "no faults",
     /// which are very different things to a person deciding whether to worry.
-    fn decode_uds_dtcs(&self, payload: &[u8]) -> (Vec<serde_json::Value>, Option<String>) {
+    /// Measure what one module supports. Reads only.
+    pub fn probe_module_capabilities(&mut self, module_key: &str, initiator: &str) -> ToolResult {
+        let t0 = Instant::now();
+        self.record_invocation(
+            "probe_module_capabilities",
+            initiator,
+            serde_json::json!({ "module": module_key }),
+        );
+        let outcome = self
+            .authorize(capabilities::PROBE_MODULE_CAPABILITIES, initiator, None)
+            .and_then(|_| self.probe_capabilities_inner(module_key));
+        self.finish(
+            "probe_module_capabilities",
+            capabilities::PROBE_MODULE_CAPABILITIES,
+            t0,
+            outcome,
+        )
+    }
+
+    /// Ask a module what it has, rather than reasoning about what it probably
+    /// has.
+    ///
+    /// Everything here is a read. The result is a map of this module's actual
+    /// surface — which identifiers exist, which sessions it grants, whether it
+    /// implements security at all — measured on the vehicle in front of us.
+    ///
+    /// The programming session (0x02) is deliberately never requested. Entering
+    /// it can stop a module behaving normally until it is power-cycled, and
+    /// nothing in this build needs it. "We did not ask" is a better answer than
+    /// a stalled module in somebody's driveway.
+    fn probe_capabilities_inner(&mut self, module_key: &str) -> AimResult<Payload> {
+        self.require_usable()?;
+        let module = self.module_by_key(module_key)?;
+        // Modules are recorded by the address they answered on; a request goes
+        // to the matching request address.
+        let addr = Self::request_target(&module)?;
+        let budget = Duration::from_millis(1500);
+        let mut warnings = Vec::new();
+
+        // 1. Which sessions this module grants.
+        let mut sessions = Vec::new();
+        for (id, name) in [(0x01u8, "default"), (0x03u8, "extended")] {
+            let request = aim_protocols::UdsRequest::diagnostic_session_control(id).to_bytes();
+            let granted = match self.adapter.request_pdu(&request, &addr, budget) {
+                Ok(replies) => Self::first_uds_outcome(&replies),
+                Err(e) => UdsOutcome::NoAnswer(e.message),
+            };
+            sessions.push(serde_json::json!({
+                "session": name,
+                "sub_function": format!("{id:02X}"),
+                "granted": granted.is_positive(),
+                "refused_because": granted.refusal_code(),
+                "detail": granted.detail(),
+            }));
+        }
+
+        // 2. Whether security is implemented at all.
+        //
+        // Requesting a seed changes nothing — the module either offers one or
+        // says it will not. This does not attempt a key, and this build has no
+        // manufacturer key algorithm to attempt one with. What it establishes
+        // is whether `securityAccessDenied` elsewhere is a real lock on this
+        // module or a red herring.
+        let seed_request = aim_protocols::UdsRequest::security_access_request_seed(0x01).to_bytes();
+        let seed = match self.adapter.request_pdu(&seed_request, &addr, budget) {
+            Ok(replies) => Self::first_uds_outcome(&replies),
+            Err(e) => UdsOutcome::NoAnswer(e.message),
+        };
+        let security = serde_json::json!({
+            "implements_security_access": seed.is_positive(),
+            "refused_because": seed.refusal_code(),
+            "detail": seed.detail(),
+            "note": "A seed was requested and nothing was sent back. This build has no \
+                     manufacturer key algorithm and does not attempt one.",
+        });
+
+        // 3. The identification block.
+        let mut identifiers = Vec::new();
+        let mut strikes = 0usize;
+        for did in 0xF180..=0xF1FFu16 {
+            let request = aim_protocols::UdsRequest::read_data_by_identifier(did).to_bytes();
+            let outcome = match self.adapter.request_pdu(&request, &addr, budget) {
+                Ok(replies) => {
+                    strikes = 0;
+                    Self::first_uds_outcome(&replies)
+                }
+                Err(e) => {
+                    strikes += 1;
+                    UdsOutcome::NoAnswer(e.message)
+                }
+            };
+            // A module that has stopped answering is not a module full of
+            // absent identifiers, and asking it another 100 times says nothing.
+            if strikes >= SIGNAL_TIMEOUT_STRIKES {
+                warnings.push(Warning::info(
+                    "identifier_sweep_stopped_early",
+                    format!(
+                        "Stopped at {did:04X}: the module went quiet for \
+                         {SIGNAL_TIMEOUT_STRIKES} consecutive requests. What is listed was \
+                         measured; what is missing was not asked."
+                    ),
+                ));
+                break;
+            }
+            if let UdsOutcome::Positive(payload) = &outcome {
+                // 0x62, echoed DID, then the record.
+                let record = payload.get(3..).unwrap_or(&[]);
+                identifiers.push(serde_json::json!({
+                    "did": format!("{did:04X}"),
+                    "length": record.len(),
+                    "bytes": record.iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(" "),
+                    "text": Self::printable_ascii(record),
+                }));
+            }
+        }
+
+        // Leave the module as it was found. An extended session lapses on its
+        // own, but waiting for a timeout is not the same as putting it back.
+        let restore = aim_protocols::UdsRequest::diagnostic_session_control(0x01).to_bytes();
+        let _ = self.adapter.request_pdu(&restore, &addr, budget);
+
+        warnings.push(Warning::info(
+            "probe_is_read_only",
+            "Nothing was written. Sessions were opened and closed, a security seed was \
+             requested and discarded, and identifiers were read.",
+        ));
+
+        Ok(Payload {
+            data: Some(serde_json::json!({
+                "module": module_key,
+                "address": module.address,
+                "sessions": sessions,
+                "security": security,
+                "identifiers": identifiers,
+                "identifier_count": identifiers.len(),
+                "identifiers_probed": "F180-F1FF",
+            })),
+            warnings,
+            evidence: self.recorder.last_response_event(),
+            ..Default::default()
+        })
+    }
+
+    /// Turn an uncatalogued code into the next thing that can be measured.
+    ///
+    /// "No description for U0284" ends a session. Working out the undocumented
+    /// parts is the whole point of this application, so stopping at the edge of
+    /// the catalogue is a strange place to stop.
+    ///
+    /// Every suggestion here is something this build can actually do and that
+    /// produces a *measurement*. None of them is a guess at what the code
+    /// means: a manufacturer-specific code has no generic meaning, and the
+    /// structural decoding below is all that can be said without inventing one.
+    fn unknown_dtc_next_steps(
+        code: &str,
+        module_key: &str,
+        info: &aim_decoders::DtcInfo,
+    ) -> String {
+        let origin = if info.is_generic {
+            "It is a generic code, so it should have a standard meaning; this build's catalogue \
+             simply does not carry it."
+        } else {
+            "It is manufacturer-specific, which means no generic catalogue defines it. Its \
+             meaning comes from the carmaker, and this build will not guess one."
+        };
+        format!(
+            "{code} has no description in the generic SAE catalog. What is known structurally: \
+             {}. {origin} What can be measured next: read the freeze frame from {module_key} to \
+             see the conditions recorded when it set; run probe_module_capabilities on \
+             {module_key} to see what that module can be asked; and compare against a capture \
+             from when the vehicle was behaving, which shows what changed rather than what the \
+             code is called.",
+            info.structural_summary
+        )
+    }
+
+    /// Find a deadline a module that is definitely there can actually meet.
+    ///
+    /// Tries progressively longer deadlines against
+    /// a module already discovered in this session. Returns the deadline to
+    /// sweep with, and how long the module needed when that was longer than the
+    /// derived budget.
+    ///
+    /// Falls back to the derived budget when there is nothing to calibrate
+    /// against or nothing answers: an uncalibrated sweep is still worth running,
+    /// and a slow sweep of the whole range on a vehicle that will not answer
+    /// anything is worse than a quick one.
+    fn calibrate_probe_budget(&mut self) -> (Duration, Option<u128>) {
+        // Every module we could address, not merely the first one recorded.
+        //
+        // Taking the first was a bug with a nasty shape: a successful scan adds
+        // body and chassis modules to the session, `from_response_address` only
+        // derives a request address for the legislated block, and so the first
+        // module in the list became one it could not address. Calibration then
+        // bailed, the sweep ran at the uncalibrated deadline, and found nothing.
+        // The first successful scan poisoned every scan after it — which is
+        // exactly the "worked once and never again" this was reported as.
+        let known: Vec<(String, RequestTarget)> = self
+            .store
+            .modules(&self.session.id)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|m| Self::request_target(&m).ok().map(|t| (m.module_key.clone(), t)))
+            .collect();
+        if known.is_empty() {
+            // Nothing to calibrate against - a full scan run before anything
+            // else. Still not `derived`: that figure is measured OBD-II
+            // throughput, and this sweep speaks UDS. 88 ms of it found nothing
+            // on a truck that answers at 250 ms.
+            return (CANDIDATES[0], None);
+        }
+
+        // Deliberately does not try `derived`. That number comes from measured
+        // OBD-II throughput, and a UDS request is not an OBD-II request:
+        // measured on a 2019 F-250, the engine controller answered a PID in
+        // 22 ms and needed far longer for session control. Worse, `derived` sat
+        // right on the edge — the module beat it once, the sweep was calibrated
+        // to it, and the next scan of the same truck found nothing. A deadline
+        // that works one time in two is worse than one that is simply too long.
+        //
+        // Capped at a second: past that the sweep costs more time than the
+        // information is worth, and something else is wrong.
+        const CANDIDATES: [Duration; 3] =
+            [Duration::from_millis(250), Duration::from_millis(600), Duration::from_millis(1000)];
+        // Twice in a row, because a single answer inside a deadline does not
+        // establish that the deadline is enough.
+        const CONSECUTIVE: usize = 2;
+
+        for probe in [aim_protocols::UdsRequest::tester_present(false).to_bytes(), fallback_probe()]
+        {
+            for budget in CANDIDATES {
+                // Any known module answering consistently is enough. Modules
+                // differ in which probe they answer and how fast, so requiring
+                // one particular module to cooperate makes calibration fail for
+                // reasons that have nothing to do with the deadline.
+                for (module_key, target) in &known {
+                    let consistent = (0..CONSECUTIVE).all(|_| {
+                        self.adapter
+                            .request_pdu(&probe, target, budget)
+                            .map(|r| !r.is_empty())
+                            .unwrap_or(false)
+                    });
+                    tracing::info!(
+                        against = %module_key,
+                        budget_ms = budget.as_millis(),
+                        consistent,
+                        "calibrating the discovery deadline"
+                    );
+                    if consistent {
+                        return (budget, Some(budget.as_millis()));
+                    }
+                }
+            }
+        }
+        tracing::warn!(
+            candidates = known.len(),
+            "no deadline produced a consistent answer from any module known to be present"
+        );
+        // Nothing answered consistently at any deadline. Sweep at the longest
+        // tried rather than at `derived`: we have just watched a module that is
+        // definitely present fail to meet the shorter ones.
+        (CANDIDATES[CANDIDATES.len() - 1], None)
+    }
+
+    /// Find out whether a module accepts writes, without writing anything.
+    ///
+    /// The question this answers cannot be answered by reading: a module that
+    /// refuses `SecurityAccess` may still accept `WriteDataByIdentifier` in the
+    /// extended session, and the only thing that knows is the module.
+    ///
+    /// So it is asked to write to an identifier **it has already said it does
+    /// not have**, and the refusal is read:
+    ///
+    /// * `requestOutOfRange` — the write was processed and rejected for the
+    ///   identifier. Writes are open here.
+    /// * `securityAccessDenied` — security is checked first. Writes are locked.
+    ///
+    /// # Why nothing can land
+    ///
+    /// The identifier is verified absent immediately before, in this session,
+    /// on this module. If the read succeeds — if the identifier turns out to
+    /// exist — this refuses rather than writing to it. That check is the whole
+    /// safety argument and it is why this cannot be folded into a helper that
+    /// takes a caller-supplied identifier.
+    pub fn probe_write_gate(
+        &mut self,
+        module_key: &str,
+        initiator: &str,
+        confirmation: Option<&str>,
+    ) -> ToolResult {
+        let t0 = Instant::now();
+        self.record_invocation(
+            "probe_write_gate",
+            initiator,
+            serde_json::json!({ "module": module_key, "confirmed": confirmation.is_some() }),
+        );
+        let outcome = self
+            .authorize(capabilities::PROBE_WRITE_GATE, initiator, confirmation)
+            .and_then(|_| self.probe_write_gate_inner(module_key));
+        self.finish("probe_write_gate", capabilities::PROBE_WRITE_GATE, t0, outcome)
+    }
+
+    fn probe_write_gate_inner(&mut self, module_key: &str) -> AimResult<Payload> {
+        self.require_usable()?;
+        let module = self.module_by_key(module_key)?;
+        let addr = Self::request_target(&module)?;
+        let budget = Duration::from_millis(1500);
+
+        // Reserved by ISO 14229 and not used by any manufacturer for storage.
+        // Chosen so that even a module that lies about not having it has
+        // nothing meaningful behind it.
+        const ABSENT_DID: u16 = 0xF1FE;
+
+        // 1. Establish, now, that this module does not have it.
+        let read = aim_protocols::UdsRequest::read_data_by_identifier(ABSENT_DID).to_bytes();
+        let read_outcome =
+            Self::first_uds_outcome(&self.adapter.request_pdu(&read, &addr, budget)?);
+        if read_outcome.is_positive() {
+            return Err(AimError::new(
+                ErrorCode::PreconditionFailed,
+                format!(
+                    "{module_key} answered data identifier {ABSENT_DID:04X}, so it holds \
+                     something. This probe only writes where nothing can land, and will not \
+                     write here."
+                ),
+            ));
+        }
+
+        // 2. Put the module in the most capable session it will grant, because
+        //    otherwise this measures the wrong thing. Most modules refuse
+        //    writes in the default session as a matter of course, so probing
+        //    there produces `wrong_session` whatever the module's real policy
+        //    is - a foregone conclusion dressed up as a finding.
+        let extended = aim_protocols::UdsRequest::diagnostic_session_control(0x03).to_bytes();
+        let session_opened = match self.adapter.request_pdu(&extended, &addr, budget) {
+            Ok(replies) => Self::first_uds_outcome(&replies).is_positive(),
+            Err(_) => false,
+        };
+
+        // 3. Ask it to write there. It cannot succeed, and the refusal is the
+        //    measurement.
+        let write =
+            aim_protocols::UdsRequest::write_data_by_identifier(ABSENT_DID, &[0x00]).to_bytes();
+        let write_outcome =
+            Self::first_uds_outcome(&self.adapter.request_pdu(&write, &addr, budget)?);
+
+        // A positive response would mean the module accepted a write to an
+        // identifier it had just denied having. Nothing was aimed anywhere real,
+        // but the module is not behaving as described and that has to be said.
+        if write_outcome.is_positive() {
+            return Ok(Payload {
+                data: Some(serde_json::json!({
+                    "module": module_key,
+                    "writes_accepted": true,
+                    "conclusive": false,
+                })),
+                warnings: vec![Warning::caution(
+                    "module_accepted_a_write_it_should_have_refused",
+                    format!(
+                        "{module_key} said it does not have identifier {ABSENT_DID:04X} and then \
+                         accepted a write to it. Nothing was aimed at anything real, but this \
+                         module does not answer the standard the way the standard describes, and \
+                         nothing it says about writes should be relied on."
+                    ),
+                )],
+                evidence: self.recorder.last_response_event(),
+                ..Default::default()
+            });
+        }
+
+        let refusal = match &write_outcome {
+            UdsOutcome::Refused(nrc) => Some(nrc.refusal()),
+            _ => None,
+        };
+        let writes_open = matches!(refusal, Some(aim_protocols::RefusalKind::NotPresent));
+
+        let verdict = match refusal {
+            Some(aim_protocols::RefusalKind::NotPresent) => {
+                "This module processed the write and refused it because the identifier does not \
+                 exist - not because of security. Writes are open here in the session that is \
+                 currently available, so a measured mapping could be applied to this module."
+            }
+            Some(aim_protocols::RefusalKind::SecurityRequired) => {
+                "This module checked security before anything else. Writes are locked behind a \
+                 seed/key exchange this build does not have, and cannot be reached from here."
+            }
+            Some(aim_protocols::RefusalKind::WrongSession) => {
+                "This module will not take writes in the sessions it grants us. It may accept \
+                 them in the programming session, which this build never requests."
+            }
+            Some(_) => {
+                "This module refused for a reason that does not settle the question either way."
+            }
+            None => {
+                "This module did not answer the write request at all, which settles nothing. It \
+                 may not implement the service."
+            }
+        };
+
+        Ok(Payload {
+            data: Some(serde_json::json!({
+                "module": module_key,
+                "address_written_to": match &addr {
+                    RequestTarget::Physical(a) => a.clone(),
+                    RequestTarget::Functional => String::from("broadcast"),
+                },
+                "identifier_used": format!("{ABSENT_DID:04X}"),
+                "identifier_confirmed_absent": true,
+                "extended_session_opened": session_opened,
+                "writes_accepted": false,
+                "writes_open_without_security": writes_open,
+                "refused_because": refusal.map(|r| r.code()),
+                "verdict": verdict,
+            })),
+            warnings: vec![Warning::info(
+                "nothing_was_written",
+                format!(
+                    "The identifier {ABSENT_DID:04X} was confirmed absent on this module \
+                     immediately before, so the write had nowhere to land. What was measured is \
+                     the refusal, not a change."
+                ),
+            )],
+            evidence: self.recorder.last_response_event(),
+            ..Default::default()
+        })
+    }
+
+    /// Community signal definitions that might apply to this vehicle.
+    ///
+    /// Touches no vehicle: this is a lookup.
+    pub fn list_catalog_signals(&mut self, initiator: &str) -> ToolResult {
+        let t0 = Instant::now();
+        self.record_invocation("list_catalog_signals", initiator, serde_json::json!({}));
+        let outcome = self
+            .authorize(capabilities::LIST_CATALOG_SIGNALS, initiator, None)
+            .and_then(|_| self.list_catalog_inner());
+        self.finish("list_catalog_signals", capabilities::LIST_CATALOG_SIGNALS, t0, outcome)
+    }
+
+    fn list_catalog_inner(&mut self) -> AimResult<Payload> {
+        let vehicle = self.vehicle().cloned();
+        let (make, model, year) = match &vehicle {
+            Some(v) => (v.make.clone(), v.model.clone(), v.year),
+            None => (None, None, None),
+        };
+
+        let candidates = self.decoders.catalog.candidates(make.as_deref(), model.as_deref(), year);
+        let mut warnings = Vec::new();
+
+        if make.is_none() {
+            warnings.push(Warning::info(
+                "vehicle_not_identified",
+                "No manufacturer is known for this vehicle, so no community definitions can be \
+                 matched to it. Run identify_vehicle first.",
+            ));
+        } else if candidates.is_empty() {
+            warnings.push(Warning::info(
+                "no_community_definitions",
+                format!(
+                    "This build has no community signal definitions for {}. That is the normal \
+                     case: the catalogue covers a few hundred vehicles and many entries are \
+                     still empty. Nothing is wrong with your vehicle or your adapter.",
+                    make.as_deref().unwrap_or("this make")
+                ),
+            ));
+        }
+        if year.is_none() && !candidates.is_empty() {
+            warnings.push(Warning::caution(
+                "model_year_unknown",
+                "The model year is not known, so definitions scoped to particular years are \
+                 being withheld. That is usually most of them - of 116 definitions recorded for \
+                 one vehicle, only 7 carried no year range.",
+            ));
+        }
+
+        let related = candidates
+            .iter()
+            .filter(|c| c.relevance == aim_decoders::catalog::Relevance::RelatedModel)
+            .count();
+        if related > 0 {
+            warnings.push(Warning::caution(
+                "definitions_from_another_model",
+                format!(
+                    "{related} of these come from a DIFFERENT model by the same manufacturer. \
+                     {}",
+                    aim_decoders::catalog::Relevance::RelatedModel.explain()
+                ),
+            ));
+        }
+
+        let signals: Vec<serde_json::Value> = candidates
+            .iter()
+            .flat_map(|c| {
+                c.command.signals.iter().map(move |s| {
+                    serde_json::json!({
+                        "signal_id": s.id,
+                        "name": s.name,
+                        "group": s.path,
+                        "unit": s.fmt.unit,
+                        "suggested_metric": s.suggested_metric,
+                        "module": c.command.hdr,
+                        "asks": c.command.describe(),
+                        "from_catalog": c.source_key,
+                        "relevance": c.relevance.as_str(),
+                        // Said on every entry rather than once at the top,
+                        // because these get read one at a time.
+                        "verification": "unverified",
+                    })
+                })
+            })
+            .collect();
+
+        Ok(Payload {
+            data: Some(serde_json::json!({
+                "make": make,
+                "model": model,
+                "year": year,
+                "count": signals.len(),
+                "signals": signals,
+                "note":
+                    "These are community-recorded claims about what this vehicle answers, not \
+                     measurements and not a standard. Reading one is safe - it is a read, and a \
+                     module that does not have the identifier says so. What comes back is a \
+                     reading to check, never a fact about your vehicle.",
+            })),
+            warnings,
+            ..Default::default()
+        })
+    }
+
+    /// Ask the vehicle one community-defined signal.
+    pub fn read_catalog_signal(&mut self, signal_id: &str, initiator: &str) -> ToolResult {
+        let t0 = Instant::now();
+        self.record_invocation(
+            "read_catalog_signal",
+            initiator,
+            serde_json::json!({ "signal": signal_id }),
+        );
+        let outcome = self
+            .authorize(capabilities::READ_CATALOG_SIGNAL, initiator, None)
+            .and_then(|_| self.read_catalog_inner(signal_id));
+        self.finish("read_catalog_signal", capabilities::READ_CATALOG_SIGNAL, t0, outcome)
+    }
+
+    fn read_catalog_inner(&mut self, signal_id: &str) -> AimResult<Payload> {
+        self.require_usable()?;
+        let vehicle = self.vehicle().cloned();
+        let (make, model, year) = match &vehicle {
+            Some(v) => (v.make.clone(), v.model.clone(), v.year),
+            None => (None, None, None),
+        };
+
+        // Resolved and copied out before touching the adapter, so nothing holds
+        // a borrow of the decoder set across the request.
+        let found =
+            self.decoders
+                .catalog
+                .candidates(make.as_deref(), model.as_deref(), year)
+                .into_iter()
+                .find_map(|c| {
+                    c.command.signals.iter().find(|s| s.id == signal_id).map(|s| {
+                        (c.command.clone(), s.clone(), c.relevance, c.source_key.to_string())
+                    })
+                });
+        let Some((command, signal, relevance, source_key)) = found else {
+            return Err(AimError::not_found(format!(
+                "no community definition {signal_id:?} applies to this vehicle. \
+                 list_catalog_signals shows the ones that do."
+            )));
+        };
+
+        let Some(request) = command.request_bytes() else {
+            return Err(AimError::new(
+                ErrorCode::PreconditionFailed,
+                format!("the catalogue entry for {signal_id:?} is malformed and cannot be sent"),
+            ));
+        };
+
+        let target = RequestTarget::Physical(command.hdr.clone());
+        let budget = self.adapter.capabilities().discovery_budget().read;
+        let replies = self.adapter.request_pdu(&request, &target, budget)?;
+
+        // A positive response echoes the service with 0x40 added, then the
+        // parameter. Anything else is not an answer to this question.
+        let expected_service = request[0].wrapping_add(0x40);
+        let echo_len = request.len();
+        let answer = replies.iter().find(|m| {
+            m.payload.first() == Some(&expected_service)
+                && m.payload.len() > echo_len
+                && m.payload[1..echo_len] == request[1..]
+        });
+
+        let Some(answer) = answer else {
+            // Say which of the two it was. A module that refused has told us
+            // something; a module that said nothing has not.
+            let refusal =
+                replies.iter().find_map(|m| match aim_protocols::UdsResponse::parse(&m.payload) {
+                    Ok(aim_protocols::UdsResponse::Negative { nrc, .. }) => Some(nrc.refusal()),
+                    _ => None,
+                });
+            let detail = match refusal {
+                Some(kind) => format!(" The module refused: {}", kind.explain()),
+                None => String::new(),
+            };
+            return Ok(Payload {
+                data: Some(serde_json::json!({
+                    "signal_id": signal_id,
+                    "answered": false,
+                    "from_catalog": source_key,
+                    "relevance": relevance.as_str(),
+                    "refused_because": refusal.map(|r| r.code()),
+                })),
+                warnings: vec![Warning::info(
+                    "definition_did_not_apply",
+                    format!(
+                        "The module at {} did not answer service {}.{detail} That is a real \
+                         result rather than a failure: it is evidence this definition does not \
+                         describe this vehicle.",
+                        command.hdr,
+                        command
+                            .cmd
+                            .iter()
+                            .next()
+                            .map(|(s, p)| format!("{s} parameter {p}"))
+                            .unwrap_or_else(|| String::from("?")),
+                    ),
+                )],
+                evidence: self.recorder.last_response_event(),
+                ..Default::default()
+            });
+        };
+
+        let data = &answer.payload[echo_len..];
+        let Some(reading) = signal.decode(data, 0) else {
+            return Ok(Payload {
+                data: Some(serde_json::json!({
+                    "signal_id": signal_id,
+                    "answered": true,
+                    "decoded": false,
+                    "bytes": aim_types::hex(data),
+                })),
+                warnings: vec![Warning::caution(
+                    "definition_does_not_fit_the_reply",
+                    format!(
+                        "The module answered with {} bytes, which is too few for this \
+                         definition. The definition describes a different vehicle, or a \
+                         different model year of this one.",
+                        data.len()
+                    ),
+                )],
+                evidence: self.recorder.last_response_event(),
+                ..Default::default()
+            });
+        };
+
+        let mut warnings = vec![Warning::caution(
+            "reading_from_a_community_definition",
+            format!(
+                "The bytes are measured; what they mean is not. {} This value should be treated \
+                 as a reading to check - does it look plausible for this vehicle right now? - \
+                 rather than as something the vehicle reported.",
+                relevance.explain()
+            ),
+        )];
+        if reading.out_of_stated_range {
+            warnings.push(Warning::caution(
+                "outside_the_definitions_own_range",
+                format!(
+                    "{} decoded to {:.3}, which is outside the range the definition itself \
+                     states. The definition and this vehicle disagree, so this number should \
+                     not be used.",
+                    signal.name, reading.value
+                ),
+            ));
+        }
+
+        Ok(Payload {
+            data: Some(serde_json::json!({
+                "signal_id": reading.id,
+                "name": reading.name,
+                "answered": true,
+                "decoded": true,
+                "value": reading.value,
+                "unit": reading.unit,
+                "label": reading.label,
+                "out_of_stated_range": reading.out_of_stated_range,
+                "bytes": aim_types::hex(data),
+                "module": answer.address,
+                "from_catalog": source_key,
+                "relevance": relevance.as_str(),
+                "source": "profile_data",
+                "verification": "unverified",
+            })),
+            warnings,
+            evidence: self.recorder.last_response_event(),
+            ..Default::default()
+        })
+    }
+
+    /// Classify the first usable UDS reply in a batch.
+    fn first_uds_outcome(replies: &[aim_adapter::EcuMessage]) -> UdsOutcome {
+        use aim_protocols::UdsResponse;
+        for m in replies {
+            match UdsResponse::parse(&m.payload) {
+                Ok(UdsResponse::Positive { .. }) => return UdsOutcome::Positive(m.payload.clone()),
+                Ok(UdsResponse::Negative { nrc, .. }) => return UdsOutcome::Refused(nrc),
+                Err(_) => continue,
+            }
+        }
+        UdsOutcome::NoAnswer(String::from("no parsable response"))
+    }
+
+    /// The printable run of a record, when it plainly is text.
+    ///
+    /// Returned only when every byte is printable, so a part number is shown as
+    /// a part number and a bitfield is not dressed up as mojibake.
+    /// Trailing NULs are padding, not content.
+    ///
+    /// Measured on a 2019 F-250: every identification record is NUL-padded to a
+    /// fixed width, so requiring every byte to be printable hid the text in all
+    /// of them — including `F190`, which is the VIN sitting in plain ASCII
+    /// behind nine zero bytes.
+    fn printable_ascii(bytes: &[u8]) -> Option<String> {
+        // All NULs, or empty. Either way there is no text here.
+        let last = bytes.iter().rposition(|b| *b != 0x00)?;
+        let trimmed: &[u8] = &bytes[..=last];
+        // A single leading non-printable byte is common in these records: some
+        // hold a one-byte format or version marker before the text. It is
+        // skipped rather than allowed to hide the rest.
+        let body = match trimmed.first() {
+            Some(b) if !(0x20..0x7F).contains(b) && trimmed.len() > 1 => &trimmed[1..],
+            _ => trimmed,
+        };
+        if body.is_empty() || !body.iter().all(|b| (0x20..0x7F).contains(b)) {
+            return None;
+        }
+        Some(String::from_utf8_lossy(body).trim().to_string())
+    }
+
+    fn decode_uds_dtcs(&self, payload: &[u8], module_key: &str) -> DtcReadOutcome {
         use aim_protocols::UdsResponse;
         let parsed = match UdsResponse::parse(payload) {
             Ok(p) => p,
-            Err(e) => return (Vec::new(), Some(e.message)),
+            Err(e) => return DtcReadOutcome::refused(e.message, None),
         };
         let data = match &parsed {
             UdsResponse::Positive { data, .. } => data.clone(),
+            // The refusal reason is kept, not flattened to "declined". A module
+            // that says securityAccessDenied has told us it *has* fault memory
+            // and will not show it, which is a different fact from one that says
+            // the service does not exist.
             UdsResponse::Negative { nrc, .. } => {
-                return (Vec::new(), Some(format!("declined: {}", nrc.description())))
+                return DtcReadOutcome::refused(
+                    format!("declined: {}", nrc.description()),
+                    Some(nrc.refusal()),
+                )
             }
         };
         // Skip the echoed sub-function byte before the availability mask.
         let body = data.split_first().map(|(_, rest)| rest).unwrap_or(&[]);
         let dtcs = aim_protocols::decode_dtc_by_status_mask(body);
-        (
-            dtcs.iter()
+        DtcReadOutcome {
+            dtcs: dtcs
+                .iter()
                 .map(|d| {
                     // Looked up on the two-byte base code, because that is what
                     // the catalogue is keyed on. A code with no entry keeps its
@@ -2340,6 +3399,15 @@ impl DiagnosticService {
                         "base_code": d.base_code,
                         "description": info.as_ref().and_then(|i| i.description.clone()),
                         "structural_summary": info.as_ref().map(|i| i.structural_summary.clone()),
+                        // An uncatalogued code carries what can be done about
+                        // it rather than ending the trail. This is the case
+                        // that matters most here: a body or chassis code from
+                        // a module nobody legislated is exactly where this
+                        // build is most likely to have nothing to say.
+                        "next_steps": info
+                            .as_ref()
+                            .filter(|i| i.description.is_none())
+                            .map(|i| Self::unknown_dtc_next_steps(&d.code, module_key, i)),
                         "is_generic": info.as_ref().map(|i| i.is_generic),
                         "status": d.status,
                         "status_summary": d.status_summary(),
@@ -2349,8 +3417,9 @@ impl DiagnosticService {
                     })
                 })
                 .collect(),
-            None,
-        )
+            note: None,
+            refusal: None,
+        }
     }
 
     /// Emissions readiness from every module that keeps it.
@@ -2591,8 +3660,7 @@ impl DiagnosticService {
         let target = match module_key {
             Some(k) => {
                 let module = self.module_by_key(k)?;
-                RequestTarget::from_response_address(&module.address)
-                    .unwrap_or(RequestTarget::Functional)
+                Self::request_target(&module).unwrap_or(RequestTarget::Functional)
             }
             None => RequestTarget::Functional,
         };
@@ -2612,6 +3680,77 @@ impl DiagnosticService {
 mod tests {
     use super::*;
     use aim_safety::CapabilityRegistry;
+
+    /// A full scan must ask in the addressing the vehicle answers in.
+    ///
+    /// Measured on a 2023 Odyssey: its modules sit at `18DAF110` and
+    /// `18DAF11E`, and the 11-bit sweep spent sixty seconds finding nothing
+    /// before reporting the vehicle had no modules at all.
+    #[test]
+    fn a_full_scan_addresses_a_29_bit_vehicle_in_29_bit() {
+        let addrs = scan_addresses(aim_types::ObdProtocol::Iso15765Can29_500);
+        // The engine and transmission controllers on the vehicle this was
+        // measured against, addressed for a request rather than a response.
+        assert!(addrs.contains(&String::from("18DA10F1")), "the engine controller is unreachable");
+        assert!(addrs.contains(&String::from("18DA1EF1")));
+        // The functional target is a broadcast, not a module.
+        assert!(!addrs.contains(&String::from("18DA33F1")));
+        assert_eq!(addrs.len(), 255);
+
+        // An 11-bit vehicle keeps the range it had.
+        let eleven = scan_addresses(aim_types::ObdProtocol::Iso15765Can11_500);
+        assert!(eleven.contains(&String::from("7E0")));
+        assert!(!eleven.contains(&String::from("7DF")), "the broadcast id is not a module");
+        assert_eq!(eleven.len(), UDS_SCAN_RANGE.count() - 1);
+
+        // Nothing 11-bit leaks into the 29-bit sweep or the reverse.
+        assert!(addrs.iter().all(|a| a.len() == 8));
+        assert!(eleven.iter().all(|a| a.len() == 3));
+    }
+
+    /// A record is shown as text only when it plainly is text, so a part number
+    /// reads as one and a bitfield is not dressed up as mojibake.
+    #[test]
+    fn only_printable_records_are_offered_as_text() {
+        assert_eq!(
+            DiagnosticService::printable_ascii(b"37805-5MR-C120"),
+            Some(String::from("37805-5MR-C120"))
+        );
+        assert_eq!(DiagnosticService::printable_ascii(&[0x01, 0xFF, 0x00]), None);
+        // One unprintable byte is enough: a record is text or it is not.
+        assert_eq!(DiagnosticService::printable_ascii(b"AB\x00CD"), None);
+        assert_eq!(DiagnosticService::printable_ascii(&[]), None);
+    }
+
+    /// A refusal and a silence are different facts and must not merge.
+    #[test]
+    fn a_refusal_carries_its_reason_and_a_silence_does_not_pretend_to() {
+        use aim_protocols::NegativeResponseCode;
+
+        let locked = UdsOutcome::Refused(NegativeResponseCode::SecurityAccessDenied);
+        assert!(!locked.is_positive());
+        assert_eq!(locked.refusal_code(), Some("module_refused_security_required"));
+        assert!(locked.detail().is_some_and(|d| d.contains("seed/key")));
+
+        let absent = UdsOutcome::Refused(NegativeResponseCode::RequestOutOfRange);
+        assert_eq!(absent.refusal_code(), Some("module_refused_not_present"));
+
+        // Silence gives no reason, and none is invented for it.
+        let quiet = UdsOutcome::NoAnswer(String::from("timed out"));
+        assert_eq!(quiet.refusal_code(), None);
+
+        assert!(UdsOutcome::Positive(vec![0x62]).is_positive());
+        assert_eq!(UdsOutcome::Positive(vec![0x62]).detail(), None);
+    }
+
+    /// The legislated block is an 11-bit concept; 29-bit gets no invented one.
+    #[test]
+    fn the_legislated_range_is_left_unstated_where_it_is_undefined() {
+        assert_eq!(in_legislated_range("7E0"), serde_json::json!(true));
+        assert_eq!(in_legislated_range("7E7"), serde_json::json!(true));
+        assert_eq!(in_legislated_range("760"), serde_json::json!(false));
+        assert_eq!(in_legislated_range("18DA10F1"), serde_json::Value::Null);
+    }
 
     /// Every capability id this service uses must exist in the registry.
     /// A typo here would mean an operation is refused as "unknown" at runtime

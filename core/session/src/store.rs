@@ -44,6 +44,29 @@ pub struct SessionSummary {
     pub measurement_count: i64,
 }
 
+/// One stored configuration capture, with the context needed to compare it.
+///
+/// The capture itself is kept as the JSON the module produced rather than
+/// re-modelled here: this crate stores it and hands it back, and the meaning of
+/// the bytes belongs to whoever took them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredCapture {
+    /// Identifier, `cap_...`.
+    pub id: String,
+    /// Session it was taken in.
+    pub session_id: String,
+    /// Vehicle it came from, when one had been identified.
+    pub vehicle_id: Option<String>,
+    /// Module key, e.g. `ECU_7E0` or `ECU_18DAF110`.
+    pub module_key: String,
+    /// Free-text note so a person can tell "before" from "after" later.
+    pub label: Option<String>,
+    /// When it was taken, ISO 8601.
+    pub taken_at: String,
+    /// The capture, verbatim.
+    pub capture: serde_json::Value,
+}
+
 /// Local diagnostic history.
 #[derive(Clone)]
 pub struct SessionStore {
@@ -494,6 +517,91 @@ impl SessionStore {
         Ok(raw.and_then(|s| serde_json::from_value(serde_json::Value::String(s)).ok()))
     }
 
+    /// The line speed this adapter was last found answering at.
+    ///
+    /// Recorded inside the connection capabilities, so no new table is needed.
+    /// `None` for Bluetooth, where the virtual port ignores baud, and for a port
+    /// nothing has connected to yet.
+    pub fn last_baud_for_adapter(&self, adapter_id: &str) -> AimResult<Option<u32>> {
+        let conn = self.lock()?;
+        let raw: Option<String> = conn
+            .query_row(
+                "SELECT capabilities FROM connections
+                 WHERE adapter_id = ?1
+                 ORDER BY connected_at DESC
+                 LIMIT 1",
+                [adapter_id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(storage)?;
+        Ok(raw
+            .and_then(|s| serde_json::from_str::<aim_types::AdapterCapabilities>(&s).ok())
+            .and_then(|c| c.baud))
+    }
+
+    /// Store one configuration capture, returning its id.
+    ///
+    /// Kept beyond the session it was taken in, because the point of a capture
+    /// is to compare it with one taken after somebody changed something — and
+    /// that may be a week later, through the vehicle's own controls, with the
+    /// laptop shut in between.
+    pub fn record_capture(
+        &self,
+        session_id: &SessionId,
+        vehicle_id: Option<&str>,
+        module_key: &str,
+        label: Option<&str>,
+        taken_at: &str,
+        capture_json: &str,
+    ) -> AimResult<String> {
+        let id = aim_types::CaptureId::new().to_string();
+        let conn = self.lock()?;
+        conn.execute(
+            "INSERT INTO config_captures
+                 (id, session_id, vehicle_id, module_key, label, taken_at, capture)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![id, session_id.as_str(), vehicle_id, module_key, label, taken_at, capture_json],
+        )
+        .map_err(storage)?;
+        Ok(id)
+    }
+
+    /// One stored capture, by id.
+    pub fn capture(&self, id: &str) -> AimResult<StoredCapture> {
+        let conn = self.lock()?;
+        conn.query_row(
+            "SELECT id, session_id, vehicle_id, module_key, label, taken_at, capture
+             FROM config_captures WHERE id = ?1",
+            params![id],
+            row_to_capture,
+        )
+        .optional()
+        .map_err(storage)?
+        .transpose()?
+        .ok_or_else(|| AimError::not_found(format!("no capture {id:?}")))
+    }
+
+    /// Captures for a vehicle, newest first.
+    ///
+    /// Scoped by vehicle rather than by session so that today's "after" can
+    /// find last week's "before".
+    pub fn captures_for_vehicle(&self, vehicle_id: &str) -> AimResult<Vec<StoredCapture>> {
+        let conn = self.lock()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, session_id, vehicle_id, module_key, label, taken_at, capture
+                 FROM config_captures WHERE vehicle_id = ?1 ORDER BY taken_at DESC",
+            )
+            .map_err(storage)?;
+        let rows = stmt.query_map(params![vehicle_id], row_to_capture).map_err(storage)?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(storage)??);
+        }
+        Ok(out)
+    }
+
     /// Connections recorded for a session, oldest first.
     pub fn connections(&self, session_id: &SessionId) -> AimResult<Vec<ConnectionRecord>> {
         let conn = self.lock()?;
@@ -520,7 +628,7 @@ impl SessionStore {
         let existing: Option<Module> = conn
             .query_row(
                 "SELECT id, session_id, module_key, name, address, protocol, identity,
-                        software_version, discovered_at
+                        software_version, discovered_at, request_address
                  FROM modules WHERE session_id = ?1 AND module_key = ?2",
                 params![m.session_id.as_str(), m.module_key],
                 row_to_module,
@@ -532,7 +640,7 @@ impl SessionStore {
         if let Some(prev) = existing {
             conn.execute(
                 "UPDATE modules SET name = ?3, address = ?4, protocol = ?5, identity = ?6,
-                                    software_version = ?7
+                                    software_version = ?7, request_address = ?8
                  WHERE session_id = ?1 AND module_key = ?2",
                 params![
                     m.session_id.as_str(),
@@ -542,6 +650,7 @@ impl SessionStore {
                     enum_str(&m.protocol)?,
                     json_str(&m.identity)?,
                     m.software_version,
+                    m.request_address,
                 ],
             )
             .map_err(storage)?;
@@ -550,8 +659,8 @@ impl SessionStore {
 
         conn.execute(
             "INSERT INTO modules (id, session_id, module_key, name, address, protocol, identity,
-                                  software_version, discovered_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                                  software_version, discovered_at, request_address)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 m.id.as_str(),
                 m.session_id.as_str(),
@@ -562,6 +671,7 @@ impl SessionStore {
                 json_str(&m.identity)?,
                 m.software_version,
                 m.discovered_at.to_rfc3339(),
+                m.request_address,
             ],
         )
         .map_err(storage)?;
@@ -574,7 +684,7 @@ impl SessionStore {
         let mut stmt = conn
             .prepare(
                 "SELECT id, session_id, module_key, name, address, protocol, identity,
-                        software_version, discovered_at
+                        software_version, discovered_at, request_address
                  FROM modules WHERE session_id = ?1 ORDER BY module_key",
             )
             .map_err(storage)?;
@@ -591,7 +701,7 @@ impl SessionStore {
         self.lock()?
             .query_row(
                 "SELECT id, session_id, module_key, name, address, protocol, identity,
-                        software_version, discovered_at
+                        software_version, discovered_at, request_address
                  FROM modules WHERE id = ?1",
                 [id.as_str()],
                 row_to_module,
@@ -982,6 +1092,7 @@ fn row_to_module(r: &Row<'_>) -> rusqlite::Result<AimResult<Module>> {
     let identity: String = r.get(6)?;
     let software_version: Option<String> = r.get(7)?;
     let discovered_at = parse_ts(r, 8)?;
+    let request_address: Option<String> = r.get(9)?;
 
     Ok(from_enum_str(&protocol).and_then(|protocol| {
         Ok(Module {
@@ -990,6 +1101,7 @@ fn row_to_module(r: &Row<'_>) -> rusqlite::Result<AimResult<Module>> {
             module_key,
             name,
             address,
+            request_address,
             protocol,
             identity: from_json_str(&identity)?,
             software_version,
@@ -1147,6 +1259,27 @@ fn from_json_str<T: for<'de> Deserialize<'de>>(s: &str) -> AimResult<T> {
     serde_json::from_str(s).map_err(|e| {
         AimError::new(ErrorCode::StorageError, format!("stored JSON is undecodable: {e}"))
     })
+}
+
+fn row_to_capture(r: &Row<'_>) -> rusqlite::Result<AimResult<StoredCapture>> {
+    let capture: String = r.get(6)?;
+    Ok(Ok(StoredCapture {
+        id: r.get(0)?,
+        session_id: r.get(1)?,
+        vehicle_id: r.get(2)?,
+        module_key: r.get(3)?,
+        label: r.get(4)?,
+        taken_at: r.get(5)?,
+        capture: match serde_json::from_str(&capture) {
+            Ok(v) => v,
+            Err(e) => {
+                return Ok(Err(AimError::new(
+                    ErrorCode::StorageError,
+                    format!("stored capture is undecodable: {e}"),
+                )))
+            }
+        },
+    }))
 }
 
 fn storage(e: rusqlite::Error) -> AimError {

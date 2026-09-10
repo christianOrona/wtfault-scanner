@@ -876,7 +876,7 @@ fn an_unknown_feature_id_is_an_error_rather_than_an_invented_answer() {
 #[test]
 fn capturing_twice_around_a_change_identifies_the_bits_that_moved() {
     let (mut service, _dir) = service_with_profile(MIRROR_PROFILE);
-    const BODY: u16 = 0x7A0;
+    const BODY: &str = "7A0";
     const DID: u16 = 0xDE01;
 
     // 1. Capture.
@@ -928,7 +928,10 @@ fn capturing_twice_around_a_change_identifies_the_bits_that_moved() {
 
     match c.as_mapping(BODY, true) {
         aim_decoders::Mapping::DataIdentifierBits { module, did, byte, mask, on, off } => {
-            assert_eq!((module, did, byte, mask, on, off), (BODY, DID, 3, 0x04, 0x04, 0x00));
+            assert_eq!(
+                (module.as_str(), did, byte, mask, on, off),
+                (BODY, DID, 3, 0x04, 0x04, 0x00)
+            );
         }
         other => panic!("wrong mapping kind: {other:?}"),
     }
@@ -940,7 +943,7 @@ fn capturing_twice_around_a_change_identifies_the_bits_that_moved() {
 fn capturing_from_a_module_that_holds_nothing_says_so() {
     let (mut service, _dir) = service_with_profile(MIRROR_PROFILE);
     // The engine controller answers plenty, but holds no configuration records.
-    let r = service.capture_configuration(0x7E0, &[0xDE01], None, USER);
+    let r = service.capture_configuration("7E0", &[0xDE01], None, USER);
     assert!(!r.success);
     assert_eq!(r.error.as_ref().unwrap().code, aim_types::ErrorCode::NoData);
 }

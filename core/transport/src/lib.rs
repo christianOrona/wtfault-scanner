@@ -18,6 +18,7 @@
 
 #![warn(missing_docs)]
 
+pub mod bluetooth_windows;
 pub mod loopback;
 pub mod ports;
 #[cfg(feature = "serial")]
@@ -41,6 +42,15 @@ pub trait Transport: Send {
 
     /// Stable human-readable identity: `COM5`, `/dev/rfcomm0`, `sim:dpf_regen`.
     fn descriptor(&self) -> String;
+
+    /// Line speed in use, for a transport where that is a meaningful question.
+    ///
+    /// `None` for the simulator and for Bluetooth, whose virtual port ignores
+    /// baud entirely. Reported so a successful connect can record the speed it
+    /// was found at and the next one can skip the search.
+    fn baud(&self) -> Option<u32> {
+        None
+    }
 
     /// Open the link. Idempotent: opening an open transport is a no-op.
     fn open(&mut self) -> AimResult<()>;
