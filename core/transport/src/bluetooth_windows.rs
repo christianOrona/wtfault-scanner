@@ -69,6 +69,12 @@ pub fn spp_roles() -> BTreeMap<String, SppRole> {
 ///
 /// Split out so the parsing is testable without a registry, which matters
 /// because the interesting input is a shape nobody has on a build machine.
+///
+/// Compiled only where it is reachable. Off Windows the registry does not exist
+/// and [`spp_roles`] never calls this, so building it there is dead code — and
+/// CI lints with `-D warnings`, which is how that was found rather than
+/// guessed at.
+#[cfg(any(windows, test))]
 pub(crate) fn parse_reg_output(text: &str) -> BTreeMap<String, SppRole> {
     /// Serial Port Profile. A key under any other UUID is not a COM port.
     const SPP_UUID: &str = "00001101";
@@ -102,6 +108,7 @@ pub(crate) fn parse_reg_output(text: &str) -> BTreeMap<String, SppRole> {
 
 /// An all-zero device address means the port is waiting for anyone, which is
 /// the incoming one.
+#[cfg(any(windows, test))]
 fn role_from_key(key: &str) -> SppRole {
     let has_real_address = key
         .rsplit('\\')
