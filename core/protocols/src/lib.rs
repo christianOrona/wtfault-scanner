@@ -29,5 +29,6 @@ pub use obd2::{
     strip_dtc_count, MonitorTest, ObdRequest, ObdResponse, Service,
 };
 pub use uds::{
-    decode_dtc_by_status_mask, NegativeResponseCode, UdsDtc, UdsRequest, UdsResponse, UdsService,
+    decode_dtc_by_status_mask, NegativeResponseCode, RefusalKind, UdsDtc, UdsRequest, UdsResponse,
+    UdsService,
 };

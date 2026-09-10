@@ -57,6 +57,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/modules/{key}/dtcs", get(module_dtcs))
         .route("/api/v1/modules/{key}/signals", get(module_signals))
         .route("/api/v1/modules/{key}/monitor-tests", get(module_monitor_tests))
+        .route("/api/v1/modules/{key}/capabilities", get(module_capabilities))
         .route("/api/v1/modules/{key}/read", post(module_read))
         .route("/api/v1/dtcs/clear", post(clear_dtcs))
         .route("/api/v1/readiness", get(readiness))
@@ -425,6 +426,14 @@ async fn module_signals(
     Path(key): Path<String>,
 ) -> ApiResult<Json<ToolResult>> {
     Ok(Json(state.with_service(move |s| s.read_supported_pids(&key, "user:api")).await?))
+}
+
+/// Measure what one module supports. Reads only.
+async fn module_capabilities(
+    State(state): State<AppState>,
+    Path(key): Path<String>,
+) -> ApiResult<Json<ToolResult>> {
+    Ok(Json(state.with_service(move |s| s.probe_module_capabilities(&key, "user:api")).await?))
 }
 
 async fn module_monitor_tests(

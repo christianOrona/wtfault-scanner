@@ -65,6 +65,8 @@ pub mod capabilities {
     pub const READ_MONITOR_TESTS: &str = "obd2.read_monitor_tests";
     /// Discover every module on the bus and read its fault memory.
     pub const SCAN_ALL_MODULES: &str = "obd2.scan_all_modules";
+    /// Measure what one module supports, without writing to it.
+    pub const PROBE_MODULE_CAPABILITIES: &str = "obd2.probe_module_capabilities";
     /// List configurable features applicable to this vehicle.
     pub const LIST_FEATURES: &str = "config.list_features";
     /// Read one feature's current setting from the vehicle. L0.
@@ -138,6 +140,61 @@ fn in_legislated_range(request_addr: &str) -> serde_json::Value {
 
 const FREEZE_FRAME_PIDS: [u8; 14] =
     [0x03, 0x04, 0x05, 0x0B, 0x0C, 0x0D, 0x0F, 0x10, 0x11, 0x1F, 0x21, 0x2F, 0x33, 0x42];
+
+/// What one UDS exchange produced, kept as three distinct outcomes.
+///
+/// "Refused" and "no answer" are different facts and must not collapse into
+/// each other: a refusal means the module is there and said no, and carries a
+/// reason worth showing.
+enum UdsOutcome {
+    Positive(Vec<u8>),
+    Refused(aim_protocols::NegativeResponseCode),
+    NoAnswer(String),
+}
+
+impl UdsOutcome {
+    fn is_positive(&self) -> bool {
+        matches!(self, UdsOutcome::Positive(_))
+    }
+
+    /// The stable refusal code, when the module gave a reason.
+    fn refusal_code(&self) -> Option<&'static str> {
+        match self {
+            UdsOutcome::Refused(nrc) => Some(nrc.refusal().code()),
+            _ => None,
+        }
+    }
+
+    /// What happened, in language meant for a person.
+    fn detail(&self) -> Option<String> {
+        match self {
+            UdsOutcome::Positive(_) => None,
+            UdsOutcome::Refused(nrc) => Some(nrc.refusal().explain().to_string()),
+            UdsOutcome::NoAnswer(why) => Some(why.clone()),
+        }
+    }
+}
+
+/// What reading one module's fault memory produced.
+///
+/// Carries *why* a module declined rather than only that it did. A module that
+/// answers `securityAccessDenied` has said it has fault memory and will not show
+/// it; one that answers `serviceNotSupported` has said it does not keep any.
+/// Collapsing both to "did not answer" throws away the difference.
+#[derive(Debug, Default)]
+struct DtcReadOutcome {
+    dtcs: Vec<serde_json::Value>,
+    /// Human-readable note, when something other than a clean read happened.
+    note: Option<String>,
+    /// The refusal, classified, when the module gave a reason.
+    refusal: Option<aim_protocols::RefusalKind>,
+}
+
+impl DtcReadOutcome {
+    fn refused(note: String, refusal: Option<aim_protocols::RefusalKind>) -> DtcReadOutcome {
+        DtcReadOutcome { dtcs: Vec::new(), note: Some(note), refusal }
+    }
+}
 
 /// What one operation produced, before it is wrapped in the §7 envelope.
 #[derive(Debug, Default)]
@@ -2249,20 +2306,31 @@ impl DiagnosticService {
         let mut modules = Vec::new();
         let mut total_faults = 0usize;
         let mut refused = 0usize;
+        // Counted by reason, so the scan can say what kind of wall it hit
+        // rather than how many times it hit something.
+        let mut refusals: std::collections::BTreeMap<aim_protocols::RefusalKind, usize> =
+            std::collections::BTreeMap::new();
 
         for (request_addr, response_addr) in &found {
             let target = RequestTarget::Physical(request_addr.clone());
             let reply = self.adapter.request_pdu(&dtc_request, &target, budget.read);
 
-            let (dtcs, note) = match reply {
+            let outcome = match reply {
                 Ok(messages) => match messages.into_iter().find(|m| &m.address == response_addr) {
                     Some(m) => self.decode_uds_dtcs(&m.payload),
-                    None => (Vec::new(), Some("did not answer the fault request".to_string())),
+                    None => DtcReadOutcome::refused(
+                        String::from("did not answer the fault request"),
+                        None,
+                    ),
                 },
-                Err(e) => (Vec::new(), Some(e.message.clone())),
+                Err(e) => DtcReadOutcome::refused(e.message.clone(), None),
             };
+            let DtcReadOutcome { dtcs, note, refusal } = outcome;
             if note.is_some() {
                 refused += 1;
+            }
+            if let Some(kind) = refusal {
+                *refusals.entry(kind).or_insert(0usize) += 1;
             }
             total_faults += dtcs.len();
             let fault_count = dtcs.len();
@@ -2320,6 +2388,17 @@ impl DiagnosticService {
                 ),
             ));
         }
+
+        // One warning per distinct reason, carrying what it means. A count of
+        // refusals tells a user nothing they can act on; "four modules have
+        // fault memory and will not show it without manufacturer security"
+        // tells them where they stand.
+        for (kind, count) in &refusals {
+            warnings.push(Warning::info(
+                kind.code(),
+                format!("{count} module(s): {}", kind.explain()),
+            ));
+        }
         warnings.push(Warning::info(
             "uds_scan_scope",
             "This reads every module that answers on the standard diagnostic addresses, not \
@@ -2345,23 +2424,199 @@ impl DiagnosticService {
     /// Returns the note separately so a module that answered something other
     /// than a positive response is reported as such rather than as "no faults",
     /// which are very different things to a person deciding whether to worry.
-    fn decode_uds_dtcs(&self, payload: &[u8]) -> (Vec<serde_json::Value>, Option<String>) {
+    /// Measure what one module supports. Reads only.
+    pub fn probe_module_capabilities(&mut self, module_key: &str, initiator: &str) -> ToolResult {
+        let t0 = Instant::now();
+        self.record_invocation(
+            "probe_module_capabilities",
+            initiator,
+            serde_json::json!({ "module": module_key }),
+        );
+        let outcome = self
+            .authorize(capabilities::PROBE_MODULE_CAPABILITIES, initiator, None)
+            .and_then(|_| self.probe_capabilities_inner(module_key));
+        self.finish(
+            "probe_module_capabilities",
+            capabilities::PROBE_MODULE_CAPABILITIES,
+            t0,
+            outcome,
+        )
+    }
+
+    /// Ask a module what it has, rather than reasoning about what it probably
+    /// has.
+    ///
+    /// Everything here is a read. The result is a map of this module's actual
+    /// surface — which identifiers exist, which sessions it grants, whether it
+    /// implements security at all — measured on the vehicle in front of us.
+    ///
+    /// The programming session (0x02) is deliberately never requested. Entering
+    /// it can stop a module behaving normally until it is power-cycled, and
+    /// nothing in this build needs it. "We did not ask" is a better answer than
+    /// a stalled module in somebody's driveway.
+    fn probe_capabilities_inner(&mut self, module_key: &str) -> AimResult<Payload> {
+        self.require_usable()?;
+        let module = self.module_by_key(module_key)?;
+        // Modules are recorded by the address they answered on; a request goes
+        // to the matching request address.
+        let addr = RequestTarget::from_response_address(&module.address)
+            .unwrap_or_else(|| RequestTarget::Physical(module.address.clone()));
+        let budget = Duration::from_millis(1500);
+        let mut warnings = Vec::new();
+
+        // 1. Which sessions this module grants.
+        let mut sessions = Vec::new();
+        for (id, name) in [(0x01u8, "default"), (0x03u8, "extended")] {
+            let request = aim_protocols::UdsRequest::diagnostic_session_control(id).to_bytes();
+            let granted = match self.adapter.request_pdu(&request, &addr, budget) {
+                Ok(replies) => Self::first_uds_outcome(&replies),
+                Err(e) => UdsOutcome::NoAnswer(e.message),
+            };
+            sessions.push(serde_json::json!({
+                "session": name,
+                "sub_function": format!("{id:02X}"),
+                "granted": granted.is_positive(),
+                "refused_because": granted.refusal_code(),
+                "detail": granted.detail(),
+            }));
+        }
+
+        // 2. Whether security is implemented at all.
+        //
+        // Requesting a seed changes nothing — the module either offers one or
+        // says it will not. This does not attempt a key, and this build has no
+        // manufacturer key algorithm to attempt one with. What it establishes
+        // is whether `securityAccessDenied` elsewhere is a real lock on this
+        // module or a red herring.
+        let seed_request = aim_protocols::UdsRequest::security_access_request_seed(0x01).to_bytes();
+        let seed = match self.adapter.request_pdu(&seed_request, &addr, budget) {
+            Ok(replies) => Self::first_uds_outcome(&replies),
+            Err(e) => UdsOutcome::NoAnswer(e.message),
+        };
+        let security = serde_json::json!({
+            "implements_security_access": seed.is_positive(),
+            "refused_because": seed.refusal_code(),
+            "detail": seed.detail(),
+            "note": "A seed was requested and nothing was sent back. This build has no \
+                     manufacturer key algorithm and does not attempt one.",
+        });
+
+        // 3. The identification block.
+        let mut identifiers = Vec::new();
+        let mut strikes = 0usize;
+        for did in 0xF180..=0xF1FFu16 {
+            let request = aim_protocols::UdsRequest::read_data_by_identifier(did).to_bytes();
+            let outcome = match self.adapter.request_pdu(&request, &addr, budget) {
+                Ok(replies) => {
+                    strikes = 0;
+                    Self::first_uds_outcome(&replies)
+                }
+                Err(e) => {
+                    strikes += 1;
+                    UdsOutcome::NoAnswer(e.message)
+                }
+            };
+            // A module that has stopped answering is not a module full of
+            // absent identifiers, and asking it another 100 times says nothing.
+            if strikes >= SIGNAL_TIMEOUT_STRIKES {
+                warnings.push(Warning::info(
+                    "identifier_sweep_stopped_early",
+                    format!(
+                        "Stopped at {did:04X}: the module went quiet for \
+                         {SIGNAL_TIMEOUT_STRIKES} consecutive requests. What is listed was \
+                         measured; what is missing was not asked."
+                    ),
+                ));
+                break;
+            }
+            if let UdsOutcome::Positive(payload) = &outcome {
+                // 0x62, echoed DID, then the record.
+                let record = payload.get(3..).unwrap_or(&[]);
+                identifiers.push(serde_json::json!({
+                    "did": format!("{did:04X}"),
+                    "length": record.len(),
+                    "bytes": record.iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(" "),
+                    "text": Self::printable_ascii(record),
+                }));
+            }
+        }
+
+        // Leave the module as it was found. An extended session lapses on its
+        // own, but waiting for a timeout is not the same as putting it back.
+        let restore = aim_protocols::UdsRequest::diagnostic_session_control(0x01).to_bytes();
+        let _ = self.adapter.request_pdu(&restore, &addr, budget);
+
+        warnings.push(Warning::info(
+            "probe_is_read_only",
+            "Nothing was written. Sessions were opened and closed, a security seed was \
+             requested and discarded, and identifiers were read.",
+        ));
+
+        Ok(Payload {
+            data: Some(serde_json::json!({
+                "module": module_key,
+                "address": module.address,
+                "sessions": sessions,
+                "security": security,
+                "identifiers": identifiers,
+                "identifier_count": identifiers.len(),
+                "identifiers_probed": "F180-F1FF",
+            })),
+            warnings,
+            evidence: self.recorder.last_response_event(),
+            ..Default::default()
+        })
+    }
+
+    /// Classify the first usable UDS reply in a batch.
+    fn first_uds_outcome(replies: &[aim_adapter::EcuMessage]) -> UdsOutcome {
+        use aim_protocols::UdsResponse;
+        for m in replies {
+            match UdsResponse::parse(&m.payload) {
+                Ok(UdsResponse::Positive { .. }) => return UdsOutcome::Positive(m.payload.clone()),
+                Ok(UdsResponse::Negative { nrc, .. }) => return UdsOutcome::Refused(nrc),
+                Err(_) => continue,
+            }
+        }
+        UdsOutcome::NoAnswer(String::from("no parsable response"))
+    }
+
+    /// The printable run of a record, when it plainly is text.
+    ///
+    /// Returned only when every byte is printable, so a part number is shown as
+    /// a part number and a bitfield is not dressed up as mojibake.
+    fn printable_ascii(bytes: &[u8]) -> Option<String> {
+        if bytes.is_empty() || !bytes.iter().all(|b| (0x20..0x7F).contains(b)) {
+            return None;
+        }
+        Some(String::from_utf8_lossy(bytes).trim().to_string())
+    }
+
+    fn decode_uds_dtcs(&self, payload: &[u8]) -> DtcReadOutcome {
         use aim_protocols::UdsResponse;
         let parsed = match UdsResponse::parse(payload) {
             Ok(p) => p,
-            Err(e) => return (Vec::new(), Some(e.message)),
+            Err(e) => return DtcReadOutcome::refused(e.message, None),
         };
         let data = match &parsed {
             UdsResponse::Positive { data, .. } => data.clone(),
+            // The refusal reason is kept, not flattened to "declined". A module
+            // that says securityAccessDenied has told us it *has* fault memory
+            // and will not show it, which is a different fact from one that says
+            // the service does not exist.
             UdsResponse::Negative { nrc, .. } => {
-                return (Vec::new(), Some(format!("declined: {}", nrc.description())))
+                return DtcReadOutcome::refused(
+                    format!("declined: {}", nrc.description()),
+                    Some(nrc.refusal()),
+                )
             }
         };
         // Skip the echoed sub-function byte before the availability mask.
         let body = data.split_first().map(|(_, rest)| rest).unwrap_or(&[]);
         let dtcs = aim_protocols::decode_dtc_by_status_mask(body);
-        (
-            dtcs.iter()
+        DtcReadOutcome {
+            dtcs: dtcs
+                .iter()
                 .map(|d| {
                     // Looked up on the two-byte base code, because that is what
                     // the catalogue is keyed on. A code with no entry keeps its
@@ -2385,8 +2640,9 @@ impl DiagnosticService {
                     })
                 })
                 .collect(),
-            None,
-        )
+            note: None,
+            refusal: None,
+        }
     }
 
     /// Emissions readiness from every module that keeps it.
@@ -2674,6 +2930,41 @@ mod tests {
         // Nothing 11-bit leaks into the 29-bit sweep or the reverse.
         assert!(addrs.iter().all(|a| a.len() == 8));
         assert!(eleven.iter().all(|a| a.len() == 3));
+    }
+
+    /// A record is shown as text only when it plainly is text, so a part number
+    /// reads as one and a bitfield is not dressed up as mojibake.
+    #[test]
+    fn only_printable_records_are_offered_as_text() {
+        assert_eq!(
+            DiagnosticService::printable_ascii(b"37805-5MR-C120"),
+            Some(String::from("37805-5MR-C120"))
+        );
+        assert_eq!(DiagnosticService::printable_ascii(&[0x01, 0xFF, 0x00]), None);
+        // One unprintable byte is enough: a record is text or it is not.
+        assert_eq!(DiagnosticService::printable_ascii(b"AB\x00CD"), None);
+        assert_eq!(DiagnosticService::printable_ascii(&[]), None);
+    }
+
+    /// A refusal and a silence are different facts and must not merge.
+    #[test]
+    fn a_refusal_carries_its_reason_and_a_silence_does_not_pretend_to() {
+        use aim_protocols::NegativeResponseCode;
+
+        let locked = UdsOutcome::Refused(NegativeResponseCode::SecurityAccessDenied);
+        assert!(!locked.is_positive());
+        assert_eq!(locked.refusal_code(), Some("module_refused_security_required"));
+        assert!(locked.detail().is_some_and(|d| d.contains("seed/key")));
+
+        let absent = UdsOutcome::Refused(NegativeResponseCode::RequestOutOfRange);
+        assert_eq!(absent.refusal_code(), Some("module_refused_not_present"));
+
+        // Silence gives no reason, and none is invented for it.
+        let quiet = UdsOutcome::NoAnswer(String::from("timed out"));
+        assert_eq!(quiet.refusal_code(), None);
+
+        assert!(UdsOutcome::Positive(vec![0x62]).is_positive());
+        assert_eq!(UdsOutcome::Positive(vec![0x62]).detail(), None);
     }
 
     /// The legislated block is an 11-bit concept; 29-bit gets no invented one.

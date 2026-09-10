@@ -201,6 +201,22 @@ impl ToolRegistry {
                 no_args(),
             ),
             ToolSchema::new(
+                "probe_module_capabilities",
+                capabilities::PROBE_MODULE_CAPABILITIES,
+                PermissionLevel::L0,
+                "Ask one module what it actually supports, instead of guessing. Reports which \
+                 data identifiers exist and their contents, which diagnostic sessions it \
+                 grants, and whether it implements security access at all. Use this when a \
+                 request was refused and you need to know why, or before proposing anything \
+                 that depends on what a module can do. Reads only: it writes nothing, sends no \
+                 security key, and never requests a programming session.",
+                "Per-module: the identifiers that answered with their bytes and any readable \
+                 text, which sessions were granted or refused and for what stated reason, and \
+                 whether security access is implemented. Identifiers that do not exist are \
+                 absent rather than listed as empty.",
+                module_arg(true),
+            ),
+            ToolSchema::new(
                 "list_vehicle_features",
                 capabilities::LIST_FEATURES,
                 PermissionLevel::L0,
@@ -523,6 +539,9 @@ pub fn execute(
         "read_supported_pids" => service.read_supported_pids(module.unwrap_or_default(), initiator),
         "read_monitor_tests" => service.read_monitor_tests(module.unwrap_or_default(), initiator),
         "scan_all_modules" => service.scan_all_modules(initiator),
+        "probe_module_capabilities" => {
+            service.probe_module_capabilities(module.unwrap_or_default(), initiator)
+        }
         "list_vehicle_features" => service.list_features(initiator),
         "preview_configuration_change" => {
             // The model supplies a feature id and a value. Nothing else it

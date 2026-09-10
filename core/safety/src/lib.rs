@@ -215,6 +215,10 @@ impl CapabilityRegistry {
                 "obd2.read_monitor_tests",
                 "Read on-board monitor test results and their pass or fail limits",
             ),
+            Capability::read_only(
+                "obd2.probe_module_capabilities",
+                "Measure which identifiers, sessions and services one module supports",
+            ),
             Capability::read_only("obd2.read_vehicle_configuration", "Read vehicle configuration"),
             Capability::read_only("adapter.connect", "Open and initialize the adapter link"),
             Capability::read_only("adapter.disconnect", "Close the adapter link"),
