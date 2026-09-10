@@ -43,6 +43,35 @@ codes:
   P0208: { description: "Injector circuit/open, cylinder 8", verification: verified }
   P0217: { description: "Engine over temperature condition", verification: verified }
 
+  # --- cylinder contribution / balance ---
+  # P0269 was read from a real vehicle and had no description here. The whole
+  # range is filled rather than only the code that was reported, because the
+  # next one to turn up will be its neighbour.
+  P0261: { description: "Cylinder 1 injector circuit low", verification: verified }
+  P0262: { description: "Cylinder 1 injector circuit high", verification: verified }
+  P0263: { description: "Cylinder 1 contribution/balance fault", verification: verified }
+  P0264: { description: "Cylinder 2 injector circuit low", verification: verified }
+  P0265: { description: "Cylinder 2 injector circuit high", verification: verified }
+  P0266: { description: "Cylinder 2 contribution/balance fault", verification: verified }
+  P0267: { description: "Cylinder 3 injector circuit low", verification: verified }
+  P0268: { description: "Cylinder 3 injector circuit high", verification: verified }
+  P0269: { description: "Cylinder 3 contribution/balance fault", verification: verified }
+  P0270: { description: "Cylinder 4 injector circuit low", verification: verified }
+  P0271: { description: "Cylinder 4 injector circuit high", verification: verified }
+  P0272: { description: "Cylinder 4 contribution/balance fault", verification: verified }
+  P0273: { description: "Cylinder 5 injector circuit low", verification: verified }
+  P0274: { description: "Cylinder 5 injector circuit high", verification: verified }
+  P0275: { description: "Cylinder 5 contribution/balance fault", verification: verified }
+  P0276: { description: "Cylinder 6 injector circuit low", verification: verified }
+  P0277: { description: "Cylinder 6 injector circuit high", verification: verified }
+  P0278: { description: "Cylinder 6 contribution/balance fault", verification: verified }
+  P0279: { description: "Cylinder 7 injector circuit low", verification: verified }
+  P0280: { description: "Cylinder 7 injector circuit high", verification: verified }
+  P0281: { description: "Cylinder 7 contribution/balance fault", verification: verified }
+  P0282: { description: "Cylinder 8 injector circuit low", verification: verified }
+  P0283: { description: "Cylinder 8 injector circuit high", verification: verified }
+  P0284: { description: "Cylinder 8 contribution/balance fault", verification: verified }
+
   # --- boost / turbocharger ---
   P0234: { description: "Turbocharger/supercharger overboost condition", verification: verified }
   P0236: { description: "Turbocharger/supercharger boost sensor A circuit range/performance", verification: verified }

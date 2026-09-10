@@ -90,6 +90,12 @@ pub mod capabilities {
 ///
 /// Swept exhaustively rather than from a per-manufacturer list, because a list
 /// is a guess about a vehicle and a sweep is a measurement of one.
+/// Consecutive timeouts before a signal stops being asked for.
+///
+/// Three, because two can be coincidence on a busy bus and four is another
+/// twenty-four seconds of somebody waiting.
+const SIGNAL_TIMEOUT_STRIKES: usize = 3;
+
 const UDS_SCAN_RANGE: std::ops::RangeInclusive<u16> = 0x700..=0x7EF;
 
 const FREEZE_FRAME_PIDS: [u8; 14] =
@@ -151,6 +157,14 @@ pub struct DiagnosticService {
     /// Set when any reply this session arrived incomplete. Evidence about the
     /// adapter, consumed by the configuration-change checks.
     saw_truncated_response: bool,
+    /// Consecutive timeouts per module and signal, so a parameter that has
+    /// repeatedly failed to answer stops being asked.
+    ///
+    /// Measured from real sessions: three PIDs each hit the six-second request
+    /// ceiling across roughly 1,350 requests. A parameter that has timed out
+    /// three times running is not about to start answering, and every retry
+    /// costs six seconds of somebody standing next to a vehicle.
+    signal_timeouts: BTreeMap<String, usize>,
     reference_year: u16,
 }
 
@@ -183,6 +197,7 @@ impl DiagnosticService {
             supported_mids: BTreeMap::new(),
             vehicle: None,
             saw_truncated_response: false,
+            signal_timeouts: BTreeMap::new(),
             reference_year: 2026,
         })
     }
@@ -2027,9 +2042,19 @@ impl DiagnosticService {
         let mut bus_errors = 0usize;
         let mut skipped = Vec::new();
 
+        let mut given_up = Vec::new();
+
         for signal in signals {
             if bus_errors >= 2 {
                 skipped.push(signal.clone());
+                continue;
+            }
+            // A parameter that has timed out repeatedly is not going to start
+            // answering. Deliberately *not* recorded as unsupported: a timeout
+            // is not a negative response, and the vehicle never said no.
+            let key = format!("{}:{signal}", module.module_key);
+            if self.signal_timeouts.get(&key).copied().unwrap_or(0) >= SIGNAL_TIMEOUT_STRIKES {
+                given_up.push(signal.clone());
                 continue;
             }
             let pid = match self.resolve_signal(signal) {
@@ -2046,10 +2071,15 @@ impl DiagnosticService {
                 Ok((mut decoded, ev)) => {
                     evidence = ev.or(evidence);
                     values.append(&mut decoded);
+                    // It answered, so whatever went wrong before has passed.
+                    self.signal_timeouts.remove(&key);
                 }
                 Err(e) => {
                     if matches!(e.code, ErrorCode::AdapterError | ErrorCode::VehicleNotResponding) {
                         bus_errors += 1;
+                    }
+                    if e.code == ErrorCode::TransportTimeout {
+                        *self.signal_timeouts.entry(key).or_insert(0) += 1;
                     }
                     warnings.push(Warning::caution(
                         "signal_unavailable",
@@ -2057,6 +2087,20 @@ impl DiagnosticService {
                     ));
                 }
             }
+        }
+
+        if !given_up.is_empty() {
+            warnings.push(Warning::info(
+                "signal_stopped_being_asked",
+                format!(
+                    "{} signal{} stopped being asked for after timing out {SIGNAL_TIMEOUT_STRIKES} \
+                     times in a row ({}). This is not the vehicle saying it does not support \
+                     them - it never answered either way. Reconnect to try again.",
+                    given_up.len(),
+                    if given_up.len() == 1 { "" } else { "s" },
+                    given_up.join(", ")
+                ),
+            ));
         }
 
         if !skipped.is_empty() {

@@ -31,8 +31,10 @@ Mined from the local session database. These are measured counts, not guesses.
 requests. A PID that has timed out several times in a session is not going to
 start answering, and each retry costs six seconds of a person's time.
 
-**Open.** A per-session strike count that drops a PID from the poll set after
-repeated timeouts. Tracked as an issue.
+**Fixed.** A parameter that times out three times running on a module stops
+being asked for the rest of the session. Reported as "stopped being asked",
+not as unsupported: a timeout is not a negative response and the vehicle never
+said no.
 
 ### A real code with no catalogue entry
 
@@ -41,7 +43,9 @@ description. The structural decoding is shown and no description is invented,
 which is the designed behaviour, but this is a generic SAE code that belongs in
 the shipped catalogue.
 
-**Open.** Tracked as an issue.
+**Fixed.** The whole cylinder contribution/balance range is catalogued, not
+just the code that was reported - the next one to turn up will be its
+neighbour.
 
 ### Adapter-level failures are more common than expected
 

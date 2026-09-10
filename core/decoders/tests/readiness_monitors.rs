@@ -108,3 +108,18 @@ fn engine_type_is_reported_because_it_changes_what_bytes_c_and_d_mean() {
     let diesel = monitors(0x00, 0x0F, 0x00, 0x00);
     flag(&diesel, "compression_ignition", true);
 }
+
+/// P0269 was read from a real vehicle and had no description. The whole
+/// cylinder-contribution range is now catalogued, not just the reported code.
+#[test]
+fn the_cylinder_contribution_range_has_descriptions() {
+    let catalog = aim_decoders::DtcCatalog::generic_sae().expect("catalogue loads");
+    for code in ["P0263", "P0266", "P0269", "P0272", "P0275", "P0278", "P0281", "P0284"] {
+        let info = catalog.describe(code).expect("decodes structurally");
+        let d = info.description.unwrap_or_default();
+        assert!(
+            d.to_lowercase().contains("contribution"),
+            "{code} should describe a cylinder contribution/balance fault, got {d:?}"
+        );
+    }
+}
