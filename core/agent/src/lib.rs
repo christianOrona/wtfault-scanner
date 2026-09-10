@@ -33,6 +33,7 @@ pub mod prompts;
 pub mod provider;
 pub mod report;
 pub mod run;
+pub mod scripted;
 pub mod settings;
 pub mod tools;
 
