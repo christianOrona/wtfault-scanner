@@ -90,13 +90,51 @@ pub mod capabilities {
 ///
 /// Swept exhaustively rather than from a per-manufacturer list, because a list
 /// is a guess about a vehicle and a sweep is a measurement of one.
+const UDS_SCAN_RANGE: std::ops::RangeInclusive<u16> = 0x700..=0x7EF;
+
 /// Consecutive timeouts before a signal stops being asked for.
 ///
 /// Three, because two can be coincidence on a busy bus and four is another
 /// twenty-four seconds of somebody waiting.
 const SIGNAL_TIMEOUT_STRIKES: usize = 3;
 
-const UDS_SCAN_RANGE: std::ops::RangeInclusive<u16> = 0x700..=0x7EF;
+/// The diagnostic request identifiers a full-vehicle scan sweeps, written in
+/// the addressing the negotiated protocol actually uses.
+///
+/// An 11-bit vehicle is swept over [`UDS_SCAN_RANGE`]. A 29-bit vehicle
+/// addresses modules as `18DA<target>F1`, and sweeping 11-bit identifiers there
+/// reaches nothing at all — which the scan then reports as a vehicle with no
+/// modules, rather than as a scan that asked the wrong question. Measured on a
+/// 2023 Odyssey, whose two modules sat at `18DAF110` and `18DAF11E` while the
+/// 11-bit sweep found nothing in sixty seconds.
+fn scan_addresses(protocol: aim_types::ObdProtocol) -> Vec<String> {
+    if protocol.is_29_bit() {
+        // 0x33 is the functional target, not a module.
+        (0x00..=0xFF_u16)
+            .filter(|target| *target != 0x33)
+            .map(|target| format!("18DA{target:02X}F1"))
+            .collect()
+    } else {
+        // 0x7DF is the functional broadcast and is not a module: probing it
+        // produces a reply from every emissions ECU at once.
+        UDS_SCAN_RANGE.filter(|addr| *addr != 0x7DF).map(|addr| format!("{addr:03X}")).collect()
+    }
+}
+
+/// Whether a request identifier falls in the legislated emissions block.
+///
+/// Defined for 11-bit addressing as `0x7E0..=0x7E7`. ISO 15765-4 gives 29-bit
+/// addressing no equivalent contiguous block, so rather than invent one the
+/// question is left unanswered there.
+fn in_legislated_range(request_addr: &str) -> serde_json::Value {
+    if request_addr.len() != 3 {
+        return serde_json::Value::Null;
+    }
+    match u16::from_str_radix(request_addr, 16) {
+        Ok(addr) => serde_json::json!((0x7E0..=0x7E7).contains(&addr)),
+        Err(_) => serde_json::Value::Null,
+    }
+}
 
 const FREEZE_FRAME_PIDS: [u8; 14] =
     [0x03, 0x04, 0x05, 0x0B, 0x0C, 0x0D, 0x0F, 0x10, 0x11, 0x1F, 0x21, 0x2F, 0x33, 0x42];
@@ -2181,14 +2219,12 @@ impl DiagnosticService {
         let mut warnings = Vec::new();
         let probe = aim_protocols::UdsRequest::tester_present(false).to_bytes();
 
-        // The 11-bit diagnostic range. 0x7DF is the functional broadcast and is
-        // skipped: it is not a module, and probing it produces a reply from
-        // every emissions ECU at once.
-        for addr in UDS_SCAN_RANGE {
-            if addr == 0x7DF {
-                continue;
-            }
-            let target = RequestTarget::Physical(format!("{addr:03X}"));
+        // Addressed the way this vehicle is actually addressed. Sweeping
+        // 11-bit identifiers on a 29-bit vehicle reaches nothing and reports it
+        // as an empty vehicle.
+        let addresses = scan_addresses(self.adapter.protocol());
+        for addr in &addresses {
+            let target = RequestTarget::Physical(addr.clone());
             let replies = match self.adapter.request_pdu(&probe, &target, budget.probe) {
                 Ok(r) => r,
                 // A link that has genuinely fallen over should stop the sweep
@@ -2197,7 +2233,7 @@ impl DiagnosticService {
                 Err(_) => continue,
             };
             for m in replies {
-                found.push((addr, m.address.clone()));
+                found.push((addr.clone(), m.address.clone()));
             }
         }
 
@@ -2215,7 +2251,7 @@ impl DiagnosticService {
         let mut refused = 0usize;
 
         for (request_addr, response_addr) in &found {
-            let target = RequestTarget::Physical(format!("{request_addr:03X}"));
+            let target = RequestTarget::Physical(request_addr.clone());
             let reply = self.adapter.request_pdu(&dtc_request, &target, budget.read);
 
             let (dtcs, note) = match reply {
@@ -2262,10 +2298,10 @@ impl DiagnosticService {
             // ABS controller because it usually is on some vehicles is exactly
             // the invention this project refuses.
             modules.push(serde_json::json!({
-                "request_address": format!("{request_addr:03X}"),
+                "request_address": request_addr,
                 "address": response_addr,
                 "name": format!("Module at {response_addr}"),
-                "in_legislated_range": (0x7E0..=0x7E7).contains(request_addr),
+                "in_legislated_range": in_legislated_range(request_addr),
                 "faults": dtcs,
                 "fault_count": fault_count,
                 "note": note,
@@ -2296,7 +2332,7 @@ impl DiagnosticService {
                 "modules": modules,
                 "module_count": modules.len(),
                 "fault_count": total_faults,
-                "addresses_probed": UDS_SCAN_RANGE.count(),
+                "addresses_probed": addresses.len(),
             })),
             warnings,
             evidence: self.recorder.last_response_event(),
@@ -2612,6 +2648,42 @@ impl DiagnosticService {
 mod tests {
     use super::*;
     use aim_safety::CapabilityRegistry;
+
+    /// A full scan must ask in the addressing the vehicle answers in.
+    ///
+    /// Measured on a 2023 Odyssey: its modules sit at `18DAF110` and
+    /// `18DAF11E`, and the 11-bit sweep spent sixty seconds finding nothing
+    /// before reporting the vehicle had no modules at all.
+    #[test]
+    fn a_full_scan_addresses_a_29_bit_vehicle_in_29_bit() {
+        let addrs = scan_addresses(aim_types::ObdProtocol::Iso15765Can29_500);
+        // The engine and transmission controllers on the vehicle this was
+        // measured against, addressed for a request rather than a response.
+        assert!(addrs.contains(&String::from("18DA10F1")), "the engine controller is unreachable");
+        assert!(addrs.contains(&String::from("18DA1EF1")));
+        // The functional target is a broadcast, not a module.
+        assert!(!addrs.contains(&String::from("18DA33F1")));
+        assert_eq!(addrs.len(), 255);
+
+        // An 11-bit vehicle keeps the range it had.
+        let eleven = scan_addresses(aim_types::ObdProtocol::Iso15765Can11_500);
+        assert!(eleven.contains(&String::from("7E0")));
+        assert!(!eleven.contains(&String::from("7DF")), "the broadcast id is not a module");
+        assert_eq!(eleven.len(), UDS_SCAN_RANGE.count() - 1);
+
+        // Nothing 11-bit leaks into the 29-bit sweep or the reverse.
+        assert!(addrs.iter().all(|a| a.len() == 8));
+        assert!(eleven.iter().all(|a| a.len() == 3));
+    }
+
+    /// The legislated block is an 11-bit concept; 29-bit gets no invented one.
+    #[test]
+    fn the_legislated_range_is_left_unstated_where_it_is_undefined() {
+        assert_eq!(in_legislated_range("7E0"), serde_json::json!(true));
+        assert_eq!(in_legislated_range("7E7"), serde_json::json!(true));
+        assert_eq!(in_legislated_range("760"), serde_json::json!(false));
+        assert_eq!(in_legislated_range("18DA10F1"), serde_json::Value::Null);
+    }
 
     /// Every capability id this service uses must exist in the registry.
     /// A typo here would mean an operation is refused as "unknown" at runtime
