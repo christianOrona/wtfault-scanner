@@ -129,6 +129,30 @@ fn scan_addresses(protocol: aim_types::ObdProtocol) -> Vec<String> {
     }
 }
 
+/// Identifier ranges worth asking a module about, and why.
+///
+/// There are 65,536 possible identifiers and asking them all would take hours,
+/// so this is a curated set rather than an exhaustive one — and what it leaves
+/// out is a real limit, not a rounding error.
+///
+/// The identification block was the only range this used to sweep, which was
+/// enough to learn what a module *is* and useless for learning what it can be
+/// configured to do. Measured on a 2019 F-250: that range returned the VIN,
+/// part numbers and software versions — none of which move when somebody
+/// changes a setting, so a capture of it could never show a setting changing.
+const DID_SWEEP_RANGES: [(u16, u16, &str); 4] = [
+    // ISO 14229 identification. Who this module is.
+    (0xF180, 0xF1FF, "identification"),
+    // Where Ford keeps configuration blocks. The one mapping this project
+    // ships as a worked example is at 0xDE01.
+    (0xDE00, 0xDEFF, "configuration (manufacturer)"),
+    // System supplier specific. Commonly holds calibration and option bytes.
+    (0xFD00, 0xFDFF, "system supplier"),
+    // The low end of the manufacturer range, sampled rather than swept: a full
+    // pass here is 40,000 identifiers and hours of somebody's evening.
+    (0x0100, 0x01FF, "manufacturer (sampled)"),
+];
+
 /// The second way of asking a module whether it is there.
 ///
 /// `TesterPresent` is the obvious probe and not every module answers it.
@@ -2697,43 +2721,63 @@ impl DiagnosticService {
                      manufacturer key algorithm and does not attempt one.",
         });
 
-        // 3. The identification block.
+        // 3. Every range worth asking about.
         let mut identifiers = Vec::new();
-        let mut strikes = 0usize;
-        for did in 0xF180..=0xF1FFu16 {
-            let request = aim_protocols::UdsRequest::read_data_by_identifier(did).to_bytes();
-            let outcome = match self.adapter.request_pdu(&request, &addr, budget) {
-                Ok(replies) => {
-                    strikes = 0;
-                    Self::first_uds_outcome(&replies)
+        let mut ranges_probed = Vec::new();
+        for (start, end, purpose) in DID_SWEEP_RANGES {
+            let mut strikes = 0usize;
+            let mut found_here = 0usize;
+            let mut stopped_at = None;
+            for did in start..=end {
+                let request = aim_protocols::UdsRequest::read_data_by_identifier(did).to_bytes();
+                let outcome = match self.adapter.request_pdu(&request, &addr, budget) {
+                    Ok(replies) => {
+                        strikes = 0;
+                        Self::first_uds_outcome(&replies)
+                    }
+                    Err(e) => {
+                        strikes += 1;
+                        UdsOutcome::NoAnswer(e.message)
+                    }
+                };
+                // A module that has stopped answering is not a module full of
+                // absent identifiers, and asking it another hundred times says
+                // nothing. Counted per range, so one quiet range does not
+                // abandon the ones after it.
+                if strikes >= SIGNAL_TIMEOUT_STRIKES {
+                    stopped_at = Some(did);
+                    break;
                 }
-                Err(e) => {
-                    strikes += 1;
-                    UdsOutcome::NoAnswer(e.message)
+                if let UdsOutcome::Positive(payload) = &outcome {
+                    // 0x62, echoed DID, then the record.
+                    let record = payload.get(3..).unwrap_or(&[]);
+                    found_here += 1;
+                    identifiers.push(serde_json::json!({
+                        "did": format!("{did:04X}"),
+                        "range": purpose,
+                        "length": record.len(),
+                        "bytes":
+                            record.iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(" "),
+                        "text": Self::printable_ascii(record),
+                    }));
                 }
-            };
-            // A module that has stopped answering is not a module full of
-            // absent identifiers, and asking it another 100 times says nothing.
-            if strikes >= SIGNAL_TIMEOUT_STRIKES {
+            }
+            ranges_probed.push(serde_json::json!({
+                "from": format!("{start:04X}"),
+                "to": format!("{end:04X}"),
+                "purpose": purpose,
+                "found": found_here,
+                "stopped_early_at": stopped_at.map(|d| format!("{d:04X}")),
+            }));
+            if let Some(did) = stopped_at {
                 warnings.push(Warning::info(
-                    "identifier_sweep_stopped_early",
+                    "identifier_range_stopped_early",
                     format!(
-                        "Stopped at {did:04X}: the module went quiet for \
-                         {SIGNAL_TIMEOUT_STRIKES} consecutive requests. What is listed was \
-                         measured; what is missing was not asked."
+                        "{purpose}: stopped at {did:04X} after {SIGNAL_TIMEOUT_STRIKES} \
+                         consecutive silences. What is listed for this range was measured; what \
+                         is missing was not asked."
                     ),
                 ));
-                break;
-            }
-            if let UdsOutcome::Positive(payload) = &outcome {
-                // 0x62, echoed DID, then the record.
-                let record = payload.get(3..).unwrap_or(&[]);
-                identifiers.push(serde_json::json!({
-                    "did": format!("{did:04X}"),
-                    "length": record.len(),
-                    "bytes": record.iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(" "),
-                    "text": Self::printable_ascii(record),
-                }));
             }
         }
 
@@ -2756,7 +2800,7 @@ impl DiagnosticService {
                 "security": security,
                 "identifiers": identifiers,
                 "identifier_count": identifiers.len(),
-                "identifiers_probed": "F180-F1FF",
+                "ranges_probed": ranges_probed,
             })),
             warnings,
             evidence: self.recorder.last_response_event(),
