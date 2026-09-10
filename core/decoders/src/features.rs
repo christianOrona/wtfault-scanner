@@ -312,9 +312,102 @@ pub struct Applicability {
     /// taxonomy.
     #[serde(default)]
     pub platform: Option<String>,
+    /// VIN prefixes this mapping is a *candidate* for, without having been
+    /// measured there.
+    ///
+    /// Characters 1–8 of a VIN are not arbitrary: the standard puts the
+    /// manufacturer, line, body style, and engine there, which is most of what
+    /// decides whether two vehicles share a configuration layout. Two trucks
+    /// with the same first eight characters and the same model year are very
+    /// likely to hold a setting in the same bit — likely, not certain.
+    ///
+    /// This exists because scoping a measured mapping to one exact VIN and
+    /// stopping was too strict to be useful. The next identical truck got
+    /// nothing at all, when the honest thing is to offer what we know, label it
+    /// as coming from a different vehicle, and let this one settle it. That is
+    /// the same rule already applied to community definitions from another
+    /// model; applying it to strangers' data and not our own was inconsistent.
+    ///
+    /// A candidate is never writable on that basis alone. It is read, decoded,
+    /// and checked against something the owner can see.
+    #[serde(default)]
+    pub candidate_vin_prefixes: Vec<String>,
+}
+
+/// How much a feature's mapping has to do with the vehicle in front of us.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MappingRelevance {
+    /// Measured on this exact vehicle.
+    Measured,
+    /// Measured on a different vehicle that this one closely resembles. A
+    /// hypothesis about this vehicle, and it must be said so.
+    Candidate,
+    /// Not applicable here.
+    None,
+}
+
+impl MappingRelevance {
+    /// Stable identifier for interfaces and logs.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            MappingRelevance::Measured => "measured_on_this_vehicle",
+            MappingRelevance::Candidate => "measured_on_a_similar_vehicle",
+            MappingRelevance::None => "not_applicable",
+        }
+    }
+
+    /// What this means, in language meant for a person.
+    pub fn explain(&self) -> &'static str {
+        match self {
+            MappingRelevance::Measured => {
+                "This mapping was measured on this exact vehicle, by watching the setting change."
+            }
+            MappingRelevance::Candidate => {
+                "This mapping was measured on a DIFFERENT vehicle that closely resembles yours - \
+                 same manufacturer, line, body and engine by VIN, same model year. Configuration \
+                 layouts usually match across such vehicles and sometimes do not. Reading it is \
+                 safe and will say what it thinks the current setting is; check that against what \
+                 your vehicle actually shows before trusting it."
+            }
+            MappingRelevance::None => "This mapping is not for this vehicle.",
+        }
+    }
 }
 
 impl Applicability {
+    /// How much a mapping scoped by this has to do with `vin`.
+    ///
+    /// Exact VIN is [`MappingRelevance::Measured`]. A vehicle sharing the first
+    /// eight VIN characters is a [`MappingRelevance::Candidate`]. Anything else
+    /// is nothing, and an unidentified vehicle is nothing — a candidate is a
+    /// claim about a *particular* similar vehicle, not a default.
+    pub fn relevance(
+        &self,
+        make: Option<&str>,
+        model_year: Option<u16>,
+        vin: Option<&str>,
+    ) -> MappingRelevance {
+        if self.matches(make, model_year, vin) {
+            return MappingRelevance::Measured;
+        }
+        let Some(vin) = vin.filter(|v| v.len() >= 8) else {
+            return MappingRelevance::None;
+        };
+        // Only the exact-VIN constraint may be relaxed. Everything else this
+        // applicability states still has to hold, so a candidate cannot escape
+        // a make or model-year restriction by the back door.
+        let without_vin = Applicability { vins: Vec::new(), ..self.clone() };
+        if !without_vin.matches(make, model_year, Some(vin)) {
+            return MappingRelevance::None;
+        }
+        let prefix = &vin[..8];
+        if self.candidate_vin_prefixes.iter().any(|p| p.eq_ignore_ascii_case(prefix)) {
+            return MappingRelevance::Candidate;
+        }
+        MappingRelevance::None
+    }
+
     /// Whether a feature could apply to this vehicle.
     ///
     /// An empty constraint matches everything: a feature that does not say it
@@ -761,6 +854,7 @@ features:
             wmi_prefixes: vec!["1FT".into()],
             vins: Vec::new(),
             platform: None,
+            candidate_vin_prefixes: Vec::new(),
         };
         assert!(a.matches(Some("Ford Motor Company (US, truck)"), Some(2019), Some("1FT7W2BT")));
         assert!(!a.matches(Some("Toyota"), Some(2019), Some("JTD")));

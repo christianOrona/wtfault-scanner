@@ -14,6 +14,7 @@
 
 #![warn(missing_docs)]
 
+pub mod asbuilt;
 pub mod catalog;
 pub mod dtc;
 pub mod explain;
