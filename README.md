@@ -6,8 +6,8 @@
 
 ### *Just ask your car what the fuck is wrong.*
 
-An OBD-II scanner with a language model attached — and a hard rule that it
-never makes anything up.
+An OBD-II scanner with a language model attached. The model can be wrong. What
+it cannot do is hand you a guess wearing the label of something your car said.
 
 [![CI](https://github.com/christianOrona/wtfault-scanner/actions/workflows/check.yml/badge.svg)](https://github.com/christianOrona/wtfault-scanner/actions/workflows/check.yml)
 [![status: work in progress](https://img.shields.io/badge/status-work%20in%20progress-orange)](#status)
@@ -110,9 +110,13 @@ number's clothes.
 
 Emissions diagnostics are legislated, which is why every scanner reads them.
 Brakes, airbag, body and transmission modules are on the same wires answering
-the same ISO standard, and almost nothing asks them. This does — and because it
-uses the public standard rather than proprietary identifiers, it behaves the
-same across manufacturers.
+the same ISO standard, and almost nothing asks them. This does.
+
+Because it asks in the public standard rather than with proprietary
+identifiers, the *asking* works on vehicles nobody wrote special code for — a
+module that answers a fault request answers it the same way whoever built it.
+Understanding the answer in detail is where manufacturers diverge, and that part
+is data the app either has for your vehicle or admits it does not.
 
 ### It shows its working
 
@@ -131,9 +135,12 @@ hardware and uses the extra throughput.
 
 ## Four rules it will not break
 
-**It never invents a reading.** If a tool did not return it, the app does not
-know it. Every number on screen carries the raw bytes it came from and can show
-you the adapter exchange that produced it.
+**A measurement can only come from the vehicle.** Every number the app presents
+as a reading carries the raw bytes it came from and can show you the adapter
+exchange that produced it. A model can still be wrong in its reasoning — that is
+what models do — but there is no path by which its prose becomes a value in the
+measured column, because that column is populated from tool results and nothing
+else.
 
 **It separates what it measured from what it believes.** A fault read from your
 vehicle, a description from the standard code catalogue, and the model's own
@@ -144,9 +151,13 @@ three different things. Repair costs are always the third one.
 guess at what it probably is. A code with no catalogue entry keeps its
 structural decoding and gets no description rather than an invented one.
 
-**It is read-only, structurally.** Configuration writes and programming are
-compiled off. Clearing trouble codes is the single exception, needs a typed
-confirmation, and the agent cannot reach it at all.
+**A change is not believed until it is seen.** Configuration writes exist, behind
+a typed confirmation, a full precondition list, and a read-back: the record is
+read, the masked bits changed, the record written whole, then read again and
+compared. A module answering "accepted" is not a changed setting, and a write
+that cannot be verified is reported as unverified with the final state unknown.
+Programming and firmware are compiled off, and the assistant can reach none of
+it.
 
 ---
 
@@ -173,7 +184,13 @@ fault memory. This reaches modules the emissions services cannot address, and
 it distinguishes a fault **failing right now** from one merely **stored** from
 an earlier drive — which the legislated services cannot tell you at all.
 
-Standard ISO 14229, so it works the same across manufacturers.
+The transport and the services are ISO 14229, which is why this works on
+vehicles nobody wrote special code for. What is **not** standard is everything
+that makes an answer meaningful: which addresses a manufacturer put its modules
+on, which identifiers hold which data, how a value is scaled, which diagnostic
+sessions exist, and what security a module demands before it will talk. Those
+are per-manufacturer, and the app treats them as data it either has for your
+vehicle or honestly does not.
 
 ### Live data
 
@@ -284,9 +301,9 @@ profiles** shows the folder and exactly what was read.
 
 Not a limitation to work around — a design decision:
 
-- **No configuration writes.** The seam is built, tested and compiled off. A
-  request to change a setting returns a full list of every check that would
-  have to pass, so you can see precisely what stands in the way.
+- **Nothing in the braking, steering or throttle path.** Refused by risk class,
+  permanently, whatever evidence exists. A tool you run in your own driveway on
+  a vehicle you then drive on a road should not change how it stops.
 - **Nothing to do with immobilisers, keys or firmware.** Not implemented, and
   a verified mapping would not change that.
 - **Nothing that defeats an emissions control.** Illegal in most places, and
@@ -322,8 +339,12 @@ line between them.
   from a URL, with a count of how many people have verified it, does not exist.
 - **RAM 2018 and newer** put a Security Gateway between the port and the bus. No
   standards-based tool reaches past it, this one included.
-- **Configuration writes are compiled off** — a design decision rather than a
-  gap, but worth stating in the same list so nobody discovers it by surprise.
+- **No verified configuration mapping ships.** The write path is built and
+  tested end to end, and every feature in the catalogue has `mapping: null`
+  because this project has measured none. That is a gap rather than a refusal:
+  it closes when somebody measures one and drops in a profile file, with no new
+  release. Refusals on risk grounds — brakes, keys, firmware — are the other
+  kind, and the app says which one it is telling you.
 
 
 ---
@@ -333,6 +354,8 @@ line between them.
 | | |
 |---|---|
 | `docs/ARCHITECTURE.md` | crate map and design decisions |
+| `docs/SAFETY.md` | the two ceilings, and what has to be true before a write |
+| `docs/SECURITY.md` | threat model, credentials, and where your data goes |
 | `docs/API.md` | the `/api/v1` contract |
 | `docs/HANDOFF.md` | the specification this is built against |
 

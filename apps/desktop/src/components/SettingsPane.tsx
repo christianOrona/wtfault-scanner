@@ -670,12 +670,13 @@ function AboutDialog({ health, onClose }: { health: Health | null; onClose: () =
             the codes were last cleared — then explains all of it in plain language.
           </p>
           <p>
-            <strong>What it will not do.</strong> It does not write configuration, program
-            modules, or touch anything to do with immobilisers or keys. Clearing trouble
-            codes is the single exception and needs typing a confirmation. It will not
-            invent a reading: every number on screen can show you the exact exchange with
-            the vehicle that produced it, and anything from the model's general knowledge
-            rather than from your car is labelled as such.
+            <strong>What it will not do.</strong> It does not program modules or touch
+            anything to do with immobilisers, keys or firmware. Changing a vehicle setting
+            and clearing trouble codes both need a typed confirmation, and the assistant
+            cannot reach either. A measurement can only come from the vehicle: every number
+            shown as a reading can show you the exact exchange that produced it. The model
+            can still reason wrongly — what it cannot do is have its guess appear as
+            something your car said.
           </p>
           <p>
             <strong>Where your data is.</strong> Scans are stored on this machine only. API
