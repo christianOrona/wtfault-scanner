@@ -21,6 +21,7 @@ pub mod features;
 pub mod monitors;
 pub mod pids;
 pub mod profiles;
+pub mod signalset;
 pub mod vin;
 
 pub use dtc::{DtcCatalog, DtcInfo, DtcSystem};
