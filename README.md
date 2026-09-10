@@ -353,6 +353,7 @@ line between them.
 
 | | |
 |---|---|
+| `STATUS.md` | where the project is, and what real sessions have shown |
 | `docs/ARCHITECTURE.md` | crate map and design decisions |
 | `docs/SAFETY.md` | the two ceilings, and what has to be true before a write |
 | `docs/SECURITY.md` | threat model, credentials, and where your data goes |
