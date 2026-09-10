@@ -70,6 +70,41 @@ What transfers from those projects is *knowledge*, and we have already taken it:
 the adapter-resilience work in this repository came from reading python-OBD and
 AndrOBD for behaviour and reimplementing independently.
 
+### But "reimplement natively" was only half an answer
+
+Rejecting the Python libraries and stopping there was a gap in the first draft
+of this report. The obvious next question — *what exists natively in Rust?* —
+went unasked, and the answer turns out to matter.
+
+Verified from crates.io on 2026-09-10:
+
+| Crate | Licence | Downloads | Updated | Verdict |
+|---|---|---|---|---|
+| `automotive_diag` | **MIT OR Apache-2.0** | 208,986 | 2026-08 | **Evaluate.** `no_std` definitions for UDS, KWP2000, OBD-II, DoIP |
+| `can-dbc` | **MIT OR Apache-2.0** | 5,369,533 | 2026-07 | Usable if DBC is ever needed |
+| `iso13400-2` | MIT OR LGPL-3.0 | 1,298,815 | 2026-05 | Usable under the MIT option. DoIP, future |
+| `docan` | MIT OR LGPL-3.0 | 6,032 | 2026-05 | Usable under the MIT option |
+| `automotive` | MIT | 10,727 | 2026-03 | Worth a look |
+| `can_adapter` | MIT | 6,126 | 2026-08 | Worth a look if J2534 ever lands |
+| `ecu_diagnostics` | **GPL-3.0-only** | 85,750 | 2026-08 | **Cannot link.** Would relicense this project |
+| `isotp-rs` | **GPL-3.0** | 15,939 | 2024-10 | Cannot link |
+| `ecu-uds` | **GPL-3.0** | 8,390 | 2024-10 | Cannot link |
+| `j1939` | **GPL-3.0-only** | 31,211 | 2026-02 | Cannot link. Relevant if heavy diesel is ever supported |
+| `socketcan` | MIT | 9,621,591 | 2026-09 | Linux CAN interfaces. Wrong layer for an ELM327 |
+
+The standout is **`automotive_diag`**: `no_std`, definitions-only, under exactly
+this project's licence, actively maintained, and covering KWP2000 and DoIP as
+well as UDS. Our own UDS tables are hand-written and cover the subset we needed.
+
+That is worth evaluating rather than adopting on sight — the tables work today —
+but "we wrote our own service and NRC tables" is a weaker position than "we use
+the maintained ones and keep our own semantics on top". See #40.
+
+Note also that four of the most relevant crates are GPL. In Rust a GPL
+dependency is linked into the binary and relicenses the whole application, which
+is a harder constraint than the same library would be in Python. That is the
+one place where the language difference cuts *against* us.
+
 ### python-can does not solve our problem
 
 python-can abstracts **CAN interfaces** — SocketCAN, PCAN, Vector, Kvaser.
