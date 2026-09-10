@@ -217,6 +217,22 @@ CREATE INDEX config_captures_by_vehicle ON config_captures (vehicle_id, taken_at
 CREATE INDEX config_captures_by_session ON config_captures (session_id);
 "#,
     },
+    Migration {
+        version: 3,
+        name: "remember the address a module listens on",
+        sql: r#"
+-- `address` is where a module answered. That is not where to send it
+-- anything: `7E8` answers for `7E0`, and outside the legislated block there is
+-- no formula at all. A full scan learns both halves by construction - it sends
+-- to an address and records who answered - and used to discard the half it
+-- sent to, so body and chassis modules could be discovered and then never
+-- spoken to again.
+--
+-- Nullable, because modules recorded by earlier builds do not have it and a
+-- missing value is a fact ("we do not know") rather than a broken row.
+ALTER TABLE modules ADD COLUMN request_address TEXT;
+"#,
+    },
 ];
 
 /// Bring `conn` up to the latest schema version, returning that version.

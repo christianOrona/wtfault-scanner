@@ -262,6 +262,22 @@ impl CapabilityRegistry {
             // The risk class is carried separately from the level because a
             // policy that says "convenience changes only" cannot be expressed
             // in levels alone.
+            // Establishes *whether* a module accepts writes at all, by asking
+            // it to write to an identifier it has already said it does not
+            // have. Nothing can land: there is nowhere for it to go, and the
+            // service call is refused before the module reaches for storage.
+            //
+            // Still declared as a write. It issues WriteDataByIdentifier, and
+            // classifying it by its intent rather than by the service it sends
+            // is exactly the kind of reasoning that turns into an accident. A
+            // person confirms it; an agent may never initiate it.
+            Capability::read_only(
+                "config.probe_write_gate",
+                "Find out whether a module accepts writes, without writing anything",
+            )
+            .at_level(PermissionLevel::L1)
+            .with_risk(RiskClass::Convenience)
+            .never_for_agents(),
             Capability::read_only("config.write_feature", "Change a vehicle configuration setting")
                 .at_level(PermissionLevel::L2)
                 .with_risk(RiskClass::Convenience)

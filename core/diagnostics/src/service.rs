@@ -65,6 +65,8 @@ pub mod capabilities {
     pub const READ_MONITOR_TESTS: &str = "obd2.read_monitor_tests";
     /// Discover every module on the bus and read its fault memory.
     pub const SCAN_ALL_MODULES: &str = "obd2.scan_all_modules";
+    /// Find out whether a module accepts writes, without writing anything.
+    pub const PROBE_WRITE_GATE: &str = "config.probe_write_gate";
     /// Measure what one module supports, without writing to it.
     pub const PROBE_MODULE_CAPABILITIES: &str = "obd2.probe_module_capabilities";
     /// List community signal definitions that might apply to this vehicle.
@@ -518,8 +520,10 @@ impl DiagnosticService {
         module: &Module,
         request: &ObdRequest,
     ) -> AimResult<(EcuMessage, Option<i64>)> {
-        let target = RequestTarget::from_response_address(&module.address)
-            .unwrap_or(RequestTarget::Functional);
+        // Falls back to a broadcast rather than failing: this path filters the
+        // answers by address anyway, so a module whose request address is
+        // unknown is still reachable, just less efficiently.
+        let target = Self::request_target(module).unwrap_or(RequestTarget::Functional);
         let messages = self.request(request, &target)?;
         let evidence = self.recorder.last_response_event();
         messages
@@ -556,6 +560,31 @@ impl DiagnosticService {
                 ))
             },
         )
+    }
+
+    /// Where to send this module something.
+    ///
+    /// [`Module::address`] is where it *answered*, which is not the same place.
+    /// Prefers the address discovery actually sent to, falls back to the
+    /// standard derivation for the legislated block, and refuses rather than
+    /// guessing when neither is available — sending a request to a response
+    /// address reaches nothing, and looks exactly like a module that is not
+    /// there.
+    fn request_target(module: &Module) -> AimResult<RequestTarget> {
+        if let Some(addr) = &module.request_address {
+            return Ok(RequestTarget::Physical(addr.clone()));
+        }
+        RequestTarget::from_response_address(&module.address).ok_or_else(|| {
+            AimError::new(
+                ErrorCode::PreconditionFailed,
+                format!(
+                    "the address {} listens on is not known. It answered on {}, and outside the \
+                     legislated block there is no way to derive one from the other - run a full \
+                     scan, which learns both.",
+                    module.module_key, module.address
+                ),
+            )
+        })
     }
 
     fn require_usable(&self) -> AimResult<()> {
@@ -851,6 +880,15 @@ impl DiagnosticService {
                 id: aim_types::ModuleId::new(),
                 session_id: self.session.id.clone(),
                 module_key: key.clone(),
+                // Derivable here: this came from a functional broadcast, and
+                // the legislated block is the one place response and request
+                // addresses are related by the standard.
+                request_address: RequestTarget::from_response_address(&message.address).and_then(
+                    |t| match t {
+                        RequestTarget::Physical(a) => Some(a),
+                        RequestTarget::Functional => None,
+                    },
+                ),
                 // Named by address until the module tells us otherwise. Which
                 // module sits at which OBD address is vehicle-specific, and
                 // guessing would be an invention.
@@ -2388,7 +2426,7 @@ impl DiagnosticService {
         //
         // Asking a known module how long it actually takes turns that from a
         // constant somebody has to tune into a measurement.
-        let (probe_budget, calibrated_with) = self.calibrate_probe_budget(budget.probe);
+        let (probe_budget, calibrated_with) = self.calibrate_probe_budget();
         if let Some(ms) = calibrated_with {
             warnings.push(Warning::info(
                 "discovery_deadline_measured",
@@ -2401,6 +2439,9 @@ impl DiagnosticService {
         }
 
         for (attempt, probe) in [(0usize, probe.clone()), (1, fallback_probe())].into_iter() {
+            let mut answered = 0usize;
+            let mut errored = 0usize;
+            let mut silent = 0usize;
             for addr in &addresses {
                 let target = RequestTarget::Physical(addr.clone());
                 let replies = match self.adapter.request_pdu(&probe, &target, probe_budget) {
@@ -2408,12 +2449,31 @@ impl DiagnosticService {
                     // A link that has genuinely fallen over should stop the
                     // sweep rather than produce 240 identical failures.
                     Err(e) if e.code == ErrorCode::TransportDisconnected => return Err(e),
-                    Err(_) => continue,
+                    Err(_) => {
+                        errored += 1;
+                        continue;
+                    }
                 };
+                if replies.is_empty() {
+                    silent += 1;
+                }
                 for m in replies {
+                    answered += 1;
                     found.push((addr.clone(), m.address.clone()));
                 }
             }
+            // A sweep that finds nothing is the failure worth diagnosing, and
+            // "nothing answered" and "everything errored" are different
+            // failures that look identical from outside.
+            tracing::info!(
+                sweep = attempt,
+                probe = ?probe,
+                budget_ms = probe_budget.as_millis(),
+                answered,
+                silent,
+                errored,
+                "discovery sweep finished"
+            );
             if !found.is_empty() {
                 if attempt == 1 {
                     warnings.push(Warning::info(
@@ -2480,6 +2540,11 @@ impl DiagnosticService {
                 id: aim_types::ModuleId::new(),
                 session_id: self.session.id.clone(),
                 module_key: key.clone(),
+                // Learned by construction: the scan sent to this address and
+                // this module answered. Outside the legislated block there is
+                // no formula relating the two, so this is the only way to
+                // know where to send anything later.
+                request_address: Some(request_addr.clone()),
                 // Described, never named. See below.
                 name: format!("Module at {response_addr}"),
                 address: response_addr.clone(),
@@ -2591,8 +2656,7 @@ impl DiagnosticService {
         let module = self.module_by_key(module_key)?;
         // Modules are recorded by the address they answered on; a request goes
         // to the matching request address.
-        let addr = RequestTarget::from_response_address(&module.address)
-            .unwrap_or_else(|| RequestTarget::Physical(module.address.clone()));
+        let addr = Self::request_target(&module)?;
         let budget = Duration::from_millis(1500);
         let mut warnings = Vec::new();
 
@@ -2735,7 +2799,7 @@ impl DiagnosticService {
 
     /// Find a deadline a module that is definitely there can actually meet.
     ///
-    /// Tries the derived budget first, then progressively longer ones, against
+    /// Tries progressively longer deadlines against
     /// a module already discovered in this session. Returns the deadline to
     /// sweep with, and how long the module needed when that was longer than the
     /// derived budget.
@@ -2744,14 +2808,30 @@ impl DiagnosticService {
     /// against or nothing answers: an uncalibrated sweep is still worth running,
     /// and a slow sweep of the whole range on a vehicle that will not answer
     /// anything is worse than a quick one.
-    fn calibrate_probe_budget(&mut self, derived: Duration) -> (Duration, Option<u128>) {
-        let Some(known) = self.store.modules(&self.session.id).ok().and_then(|m| m.into_iter().next())
-        else {
-            return (derived, None);
-        };
-        let Some(target) = RequestTarget::from_response_address(&known.address) else {
-            return (derived, None);
-        };
+    fn calibrate_probe_budget(&mut self) -> (Duration, Option<u128>) {
+        // Every module we could address, not merely the first one recorded.
+        //
+        // Taking the first was a bug with a nasty shape: a successful scan adds
+        // body and chassis modules to the session, `from_response_address` only
+        // derives a request address for the legislated block, and so the first
+        // module in the list became one it could not address. Calibration then
+        // bailed, the sweep ran at the uncalibrated deadline, and found nothing.
+        // The first successful scan poisoned every scan after it — which is
+        // exactly the "worked once and never again" this was reported as.
+        let known: Vec<(String, RequestTarget)> = self
+            .store
+            .modules(&self.session.id)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|m| Self::request_target(&m).ok().map(|t| (m.module_key.clone(), t)))
+            .collect();
+        if known.is_empty() {
+            // Nothing to calibrate against - a full scan run before anything
+            // else. Still not `derived`: that figure is measured OBD-II
+            // throughput, and this sweep speaks UDS. 88 ms of it found nothing
+            // on a truck that answers at 250 ms.
+            return (CANDIDATES[0], None);
+        }
 
         // Deliberately does not try `derived`. That number comes from measured
         // OBD-II throughput, and a UDS request is not an OBD-II request:
@@ -2763,11 +2843,8 @@ impl DiagnosticService {
         //
         // Capped at a second: past that the sweep costs more time than the
         // information is worth, and something else is wrong.
-        const CANDIDATES: [Duration; 3] = [
-            Duration::from_millis(250),
-            Duration::from_millis(600),
-            Duration::from_millis(1000),
-        ];
+        const CANDIDATES: [Duration; 3] =
+            [Duration::from_millis(250), Duration::from_millis(600), Duration::from_millis(1000)];
         // Twice in a row, because a single answer inside a deadline does not
         // establish that the deadline is enough.
         const CONSECUTIVE: usize = 2;
@@ -2775,21 +2852,200 @@ impl DiagnosticService {
         for probe in [aim_protocols::UdsRequest::tester_present(false).to_bytes(), fallback_probe()]
         {
             for budget in CANDIDATES {
-                let consistent = (0..CONSECUTIVE).all(|_| {
-                    self.adapter
-                        .request_pdu(&probe, &target, budget)
-                        .map(|r| !r.is_empty())
-                        .unwrap_or(false)
-                });
-                if consistent {
-                    return (budget, Some(budget.as_millis()));
+                // Any known module answering consistently is enough. Modules
+                // differ in which probe they answer and how fast, so requiring
+                // one particular module to cooperate makes calibration fail for
+                // reasons that have nothing to do with the deadline.
+                for (module_key, target) in &known {
+                    let consistent = (0..CONSECUTIVE).all(|_| {
+                        self.adapter
+                            .request_pdu(&probe, target, budget)
+                            .map(|r| !r.is_empty())
+                            .unwrap_or(false)
+                    });
+                    tracing::info!(
+                        against = %module_key,
+                        budget_ms = budget.as_millis(),
+                        consistent,
+                        "calibrating the discovery deadline"
+                    );
+                    if consistent {
+                        return (budget, Some(budget.as_millis()));
+                    }
                 }
             }
         }
+        tracing::warn!(
+            candidates = known.len(),
+            "no deadline produced a consistent answer from any module known to be present"
+        );
         // Nothing answered consistently at any deadline. Sweep at the longest
         // tried rather than at `derived`: we have just watched a module that is
         // definitely present fail to meet the shorter ones.
         (CANDIDATES[CANDIDATES.len() - 1], None)
+    }
+
+    /// Find out whether a module accepts writes, without writing anything.
+    ///
+    /// The question this answers cannot be answered by reading: a module that
+    /// refuses `SecurityAccess` may still accept `WriteDataByIdentifier` in the
+    /// extended session, and the only thing that knows is the module.
+    ///
+    /// So it is asked to write to an identifier **it has already said it does
+    /// not have**, and the refusal is read:
+    ///
+    /// * `requestOutOfRange` — the write was processed and rejected for the
+    ///   identifier. Writes are open here.
+    /// * `securityAccessDenied` — security is checked first. Writes are locked.
+    ///
+    /// # Why nothing can land
+    ///
+    /// The identifier is verified absent immediately before, in this session,
+    /// on this module. If the read succeeds — if the identifier turns out to
+    /// exist — this refuses rather than writing to it. That check is the whole
+    /// safety argument and it is why this cannot be folded into a helper that
+    /// takes a caller-supplied identifier.
+    pub fn probe_write_gate(
+        &mut self,
+        module_key: &str,
+        initiator: &str,
+        confirmation: Option<&str>,
+    ) -> ToolResult {
+        let t0 = Instant::now();
+        self.record_invocation(
+            "probe_write_gate",
+            initiator,
+            serde_json::json!({ "module": module_key, "confirmed": confirmation.is_some() }),
+        );
+        let outcome = self
+            .authorize(capabilities::PROBE_WRITE_GATE, initiator, confirmation)
+            .and_then(|_| self.probe_write_gate_inner(module_key));
+        self.finish("probe_write_gate", capabilities::PROBE_WRITE_GATE, t0, outcome)
+    }
+
+    fn probe_write_gate_inner(&mut self, module_key: &str) -> AimResult<Payload> {
+        self.require_usable()?;
+        let module = self.module_by_key(module_key)?;
+        let addr = Self::request_target(&module)?;
+        let budget = Duration::from_millis(1500);
+
+        // Reserved by ISO 14229 and not used by any manufacturer for storage.
+        // Chosen so that even a module that lies about not having it has
+        // nothing meaningful behind it.
+        const ABSENT_DID: u16 = 0xF1FE;
+
+        // 1. Establish, now, that this module does not have it.
+        let read = aim_protocols::UdsRequest::read_data_by_identifier(ABSENT_DID).to_bytes();
+        let read_outcome =
+            Self::first_uds_outcome(&self.adapter.request_pdu(&read, &addr, budget)?);
+        if read_outcome.is_positive() {
+            return Err(AimError::new(
+                ErrorCode::PreconditionFailed,
+                format!(
+                    "{module_key} answered data identifier {ABSENT_DID:04X}, so it holds \
+                     something. This probe only writes where nothing can land, and will not \
+                     write here."
+                ),
+            ));
+        }
+
+        // 2. Put the module in the most capable session it will grant, because
+        //    otherwise this measures the wrong thing. Most modules refuse
+        //    writes in the default session as a matter of course, so probing
+        //    there produces `wrong_session` whatever the module's real policy
+        //    is - a foregone conclusion dressed up as a finding.
+        let extended = aim_protocols::UdsRequest::diagnostic_session_control(0x03).to_bytes();
+        let session_opened = match self.adapter.request_pdu(&extended, &addr, budget) {
+            Ok(replies) => Self::first_uds_outcome(&replies).is_positive(),
+            Err(_) => false,
+        };
+
+        // 3. Ask it to write there. It cannot succeed, and the refusal is the
+        //    measurement.
+        let write =
+            aim_protocols::UdsRequest::write_data_by_identifier(ABSENT_DID, &[0x00]).to_bytes();
+        let write_outcome =
+            Self::first_uds_outcome(&self.adapter.request_pdu(&write, &addr, budget)?);
+
+        // A positive response would mean the module accepted a write to an
+        // identifier it had just denied having. Nothing was aimed anywhere real,
+        // but the module is not behaving as described and that has to be said.
+        if write_outcome.is_positive() {
+            return Ok(Payload {
+                data: Some(serde_json::json!({
+                    "module": module_key,
+                    "writes_accepted": true,
+                    "conclusive": false,
+                })),
+                warnings: vec![Warning::caution(
+                    "module_accepted_a_write_it_should_have_refused",
+                    format!(
+                        "{module_key} said it does not have identifier {ABSENT_DID:04X} and then \
+                         accepted a write to it. Nothing was aimed at anything real, but this \
+                         module does not answer the standard the way the standard describes, and \
+                         nothing it says about writes should be relied on."
+                    ),
+                )],
+                evidence: self.recorder.last_response_event(),
+                ..Default::default()
+            });
+        }
+
+        let refusal = match &write_outcome {
+            UdsOutcome::Refused(nrc) => Some(nrc.refusal()),
+            _ => None,
+        };
+        let writes_open = matches!(refusal, Some(aim_protocols::RefusalKind::NotPresent));
+
+        let verdict = match refusal {
+            Some(aim_protocols::RefusalKind::NotPresent) => {
+                "This module processed the write and refused it because the identifier does not \
+                 exist - not because of security. Writes are open here in the session that is \
+                 currently available, so a measured mapping could be applied to this module."
+            }
+            Some(aim_protocols::RefusalKind::SecurityRequired) => {
+                "This module checked security before anything else. Writes are locked behind a \
+                 seed/key exchange this build does not have, and cannot be reached from here."
+            }
+            Some(aim_protocols::RefusalKind::WrongSession) => {
+                "This module will not take writes in the sessions it grants us. It may accept \
+                 them in the programming session, which this build never requests."
+            }
+            Some(_) => {
+                "This module refused for a reason that does not settle the question either way."
+            }
+            None => {
+                "This module did not answer the write request at all, which settles nothing. It \
+                 may not implement the service."
+            }
+        };
+
+        Ok(Payload {
+            data: Some(serde_json::json!({
+                "module": module_key,
+                "address_written_to": match &addr {
+                    RequestTarget::Physical(a) => a.clone(),
+                    RequestTarget::Functional => String::from("broadcast"),
+                },
+                "identifier_used": format!("{ABSENT_DID:04X}"),
+                "identifier_confirmed_absent": true,
+                "extended_session_opened": session_opened,
+                "writes_accepted": false,
+                "writes_open_without_security": writes_open,
+                "refused_because": refusal.map(|r| r.code()),
+                "verdict": verdict,
+            })),
+            warnings: vec![Warning::info(
+                "nothing_was_written",
+                format!(
+                    "The identifier {ABSENT_DID:04X} was confirmed absent on this module \
+                     immediately before, so the write had nowhere to land. What was measured is \
+                     the refusal, not a change."
+                ),
+            )],
+            evidence: self.recorder.last_response_event(),
+            ..Default::default()
+        })
     }
 
     /// Community signal definitions that might apply to this vehicle.
@@ -3404,8 +3660,7 @@ impl DiagnosticService {
         let target = match module_key {
             Some(k) => {
                 let module = self.module_by_key(k)?;
-                RequestTarget::from_response_address(&module.address)
-                    .unwrap_or(RequestTarget::Functional)
+                Self::request_target(&module).unwrap_or(RequestTarget::Functional)
             }
             None => RequestTarget::Functional,
         };

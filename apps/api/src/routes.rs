@@ -43,6 +43,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/config/captures", get(list_captures))
         .route("/api/v1/catalog/signals", get(catalog_signals))
         .route("/api/v1/catalog/signals/{signal}", post(read_catalog_signal))
+        .route("/api/v1/modules/{key}/write-gate", post(probe_write_gate))
         .route("/api/v1/features/{id}/preview", post(preview_feature_change))
         .route("/api/v1/features/{id}/apply", post(apply_feature_change))
         .route("/api/v1/tools", get(tools))
@@ -790,6 +791,25 @@ async fn capture_configuration(
         state
             .with_service(move |s| {
                 s.capture_configuration(&body.module, &body.identifiers, body.label, "user:api")
+            })
+            .await?,
+    ))
+}
+
+/// Find out whether a module accepts writes, without writing anything.
+///
+/// Issues `WriteDataByIdentifier` to an identifier verified absent on that
+/// module immediately before, so there is nowhere for it to land. The refusal
+/// is the measurement. A person confirms this; an agent may never initiate it.
+async fn probe_write_gate(
+    State(state): State<AppState>,
+    Path(key): Path<String>,
+    Json(body): Json<ClearBody>,
+) -> ApiResult<Json<ToolResult>> {
+    Ok(Json(
+        state
+            .with_service(move |s| {
+                s.probe_write_gate(&key, "user:api", Some(body.confirmation.as_str()))
             })
             .await?,
     ))

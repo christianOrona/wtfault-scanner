@@ -99,6 +99,19 @@ pub struct Module {
     pub name: String,
     /// Response CAN identifier / addressing string as observed.
     pub address: String,
+    /// The address this module *listens* on, when it is known.
+    ///
+    /// [`Module::address`] is where a module answered; it is not where to send
+    /// it anything. For the legislated block the request address is derivable
+    /// (`7E8` answers for `7E0`), but outside it there is no formula — and the
+    /// body and chassis modules holding the settings people actually want to
+    /// change are all outside it.
+    ///
+    /// A full scan learns both halves by construction: it sends to an address
+    /// and records who answered. Discarding the half it sent to meant those
+    /// modules could be found and then never spoken to again.
+    #[serde(default)]
+    pub request_address: Option<String>,
     /// Protocol the module answered on.
     pub protocol: ObdProtocol,
     /// Identity strings read from the module (CALID, CVN, ECU name).

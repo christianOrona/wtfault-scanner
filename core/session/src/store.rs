@@ -628,7 +628,7 @@ impl SessionStore {
         let existing: Option<Module> = conn
             .query_row(
                 "SELECT id, session_id, module_key, name, address, protocol, identity,
-                        software_version, discovered_at
+                        software_version, discovered_at, request_address
                  FROM modules WHERE session_id = ?1 AND module_key = ?2",
                 params![m.session_id.as_str(), m.module_key],
                 row_to_module,
@@ -640,7 +640,7 @@ impl SessionStore {
         if let Some(prev) = existing {
             conn.execute(
                 "UPDATE modules SET name = ?3, address = ?4, protocol = ?5, identity = ?6,
-                                    software_version = ?7
+                                    software_version = ?7, request_address = ?8
                  WHERE session_id = ?1 AND module_key = ?2",
                 params![
                     m.session_id.as_str(),
@@ -650,6 +650,7 @@ impl SessionStore {
                     enum_str(&m.protocol)?,
                     json_str(&m.identity)?,
                     m.software_version,
+                    m.request_address,
                 ],
             )
             .map_err(storage)?;
@@ -658,8 +659,8 @@ impl SessionStore {
 
         conn.execute(
             "INSERT INTO modules (id, session_id, module_key, name, address, protocol, identity,
-                                  software_version, discovered_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                                  software_version, discovered_at, request_address)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 m.id.as_str(),
                 m.session_id.as_str(),
@@ -670,6 +671,7 @@ impl SessionStore {
                 json_str(&m.identity)?,
                 m.software_version,
                 m.discovered_at.to_rfc3339(),
+                m.request_address,
             ],
         )
         .map_err(storage)?;
@@ -682,7 +684,7 @@ impl SessionStore {
         let mut stmt = conn
             .prepare(
                 "SELECT id, session_id, module_key, name, address, protocol, identity,
-                        software_version, discovered_at
+                        software_version, discovered_at, request_address
                  FROM modules WHERE session_id = ?1 ORDER BY module_key",
             )
             .map_err(storage)?;
@@ -699,7 +701,7 @@ impl SessionStore {
         self.lock()?
             .query_row(
                 "SELECT id, session_id, module_key, name, address, protocol, identity,
-                        software_version, discovered_at
+                        software_version, discovered_at, request_address
                  FROM modules WHERE id = ?1",
                 [id.as_str()],
                 row_to_module,
@@ -1090,6 +1092,7 @@ fn row_to_module(r: &Row<'_>) -> rusqlite::Result<AimResult<Module>> {
     let identity: String = r.get(6)?;
     let software_version: Option<String> = r.get(7)?;
     let discovered_at = parse_ts(r, 8)?;
+    let request_address: Option<String> = r.get(9)?;
 
     Ok(from_enum_str(&protocol).and_then(|protocol| {
         Ok(Module {
@@ -1098,6 +1101,7 @@ fn row_to_module(r: &Row<'_>) -> rusqlite::Result<AimResult<Module>> {
             module_key,
             name,
             address,
+            request_address,
             protocol,
             identity: from_json_str(&identity)?,
             software_version,
