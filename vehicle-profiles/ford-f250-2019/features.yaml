@@ -1,0 +1,94 @@
+# Measured configuration mappings for one 2019 Ford F-250 Super Duty.
+#
+# WHAT THIS FILE IS.
+#
+# The first mapping in this project measured on a real vehicle. Every number
+# below was observed changing on the truck itself: a baseline capture, the owner
+# changing one setting with the vehicle's own menu, a second capture, and a diff
+# reporting only the bits that moved. Then the same again in reverse.
+#
+# WHAT IT IS NOT.
+#
+# It is not a mapping for "a 2019 F-250". It is scoped by exact VIN, and that
+# scoping is deliberate rather than cautious: a configuration record's layout can
+# differ between trims and build dates of the same model year, and writing a
+# neighbouring bit in a body module is how a body module stops working. Another
+# truck of the same year may match and may not, and nothing here can tell the
+# difference. Measure your own.
+#
+# HOW IT WAS MEASURED, so it can be checked or repeated:
+#
+#   Vehicle    2019 Ford F-250 Super Duty, VIN 1FT7W2BT7KEF78036
+#   Adapter    ELM327 v1.5 USB cable at 500000 baud, HS-CAN
+#   Protocol   ISO 15765-4 CAN, 11-bit, 500 kbit/s
+#   Module     answers on 72E, listens on 726
+#   Ranges     0xDE00-0xDEFF swept; 41 configuration records captured across
+#              four body modules (723, 726, 736, 7D0)
+#
+#   Run 1  AutoLock ON  -> OFF   DE0E byte 4 bit 0: 1 -> 0
+#   Run 2  AutoLock OFF -> ON    DE0E byte 4 bit 0: 0 -> 1
+#
+#   In both runs exactly one bit moved, in one module, and the other three
+#   modules showed no change at all. The two runs were diffed with opposite
+#   `after_is_on` values and independently agreed that 1 is the enabled state.
+
+version: 1
+profile: ford-f250-2019
+
+features:
+  - id: autolock_doors_when_driving
+    name: "Lock the doors automatically when driving"
+    risk: convenience
+
+    easy: >-
+      The truck locks its own doors once you start moving, and unlocks them
+      again depending on how the rest of the door settings are configured. This
+      is the same switch as the AutoLock entry in the door and lock menu on the
+      dash - changing it here does exactly what changing it there does.
+
+    technical: >-
+      A single bit in a body module configuration record, read with ISO 14229
+      service 0x22 and written whole with 0x2E after opening an extended
+      diagnostic session. The module accepts writes in that session without a
+      security access exchange, which was established separately by asking it to
+      write to an identifier it had just reported as absent.
+
+    modules: ["72E"]
+
+    # An exact VIN. Applicability fails closed: a truck that is not this one
+    # gets nothing, however similar it looks.
+    applies_to:
+      vins: ["1FT7W2BT7KEF78036"]
+
+    # Evidence for reading: where the setting lives, and how that was learned.
+    verification: verified
+    source: >-
+      measured on the vehicle by capture/diff, 2026-09-10: two toggles in
+      opposite directions, one bit moved each time, three other body modules
+      unchanged
+
+    # Evidence for writing is a separate fact and this project does not conflate
+    # them. Knowing which bit holds the setting is not knowing that writing it
+    # works, and nobody has written this bit from this application yet.
+    #
+    # What IS established: this module accepts WriteDataByIdentifier in the
+    # extended session and does not gate it behind security access. That makes a
+    # write reachable; it does not make it demonstrated.
+    write_verification:
+      verification: unverified
+      verified_on_vehicles: 0
+      source: "not yet written from this application"
+      notes: >-
+        The write path has not been exercised on this vehicle. Before it is,
+        the read-back must be checked against the dash menu: a write that
+        reports success and leaves the menu unchanged means the mapping is
+        wrong, and that is the case worth catching.
+
+    mapping:
+      kind: data_identifier_bits
+      module: "726"
+      did: 0xDE0E
+      byte: 4
+      mask: 0x01
+      on: 0x01
+      off: 0x00

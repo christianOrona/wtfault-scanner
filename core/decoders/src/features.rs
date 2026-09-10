@@ -470,6 +470,14 @@ impl FeatureCatalog {
             include_str!("../../../vehicle-profiles/reference-vehicle/features.yaml"),
             "embedded:reference-vehicle/features.yaml",
         )?;
+        // The first mapping in this project measured on a real vehicle, scoped
+        // by exact VIN to the truck it was measured on. Shipping it is safe for
+        // the same reason as the line above: applicability fails closed, so a
+        // vehicle that is not that one gets nothing however similar it looks.
+        c.load_yaml(
+            include_str!("../../../vehicle-profiles/ford-f250-2019/features.yaml"),
+            "embedded:ford-f250-2019/features.yaml",
+        )?;
         Ok(c)
     }
 
@@ -978,5 +986,65 @@ mod reference_profile_tests {
             !f.applies_to.matches(Some("Ford"), Some(2019), None),
             "an unidentified vehicle must fail closed against an exact-VIN scope"
         );
+    }
+}
+
+#[cfg(test)]
+mod measured_on_a_real_vehicle {
+    use super::*;
+
+    /// The first mapping this project measured on a vehicle rather than
+    /// inferring. Pinned because these numbers are evidence: they were observed
+    /// changing on a 2019 F-250 twice, in opposite directions, and a silent edit
+    /// to any of them would be a claim about a truck nobody re-measured.
+    #[test]
+    fn the_f250_autolock_mapping_is_exactly_what_was_measured() {
+        let catalog = FeatureCatalog::embedded().unwrap();
+        let feature = catalog.get("autolock_doors_when_driving").expect("the measured feature");
+
+        let target = feature
+            .mapping
+            .as_ref()
+            .and_then(|m| m.as_data_identifier())
+            .expect("a mapping that can actually be executed");
+
+        assert_eq!(target.module, "726", "the module it listens on, not the one it answers on");
+        assert_eq!(target.did, 0xDE0E);
+        assert_eq!(target.byte, 4);
+        assert_eq!(target.mask, 0x01);
+        assert_eq!(target.on, 0x01);
+        assert_eq!(target.off, 0x00);
+    }
+
+    /// Knowing where a setting lives is not knowing that writing it works, and
+    /// the catalogue must keep saying so until somebody has written it.
+    #[test]
+    fn knowing_where_it_lives_is_not_permission_to_write_it() {
+        let catalog = FeatureCatalog::embedded().unwrap();
+        let feature = catalog.get("autolock_doors_when_driving").unwrap();
+
+        assert_eq!(feature.verification, VerificationStatus::Verified, "reading was measured");
+        let write = feature.write_verification.as_ref().expect("write evidence is stated");
+        assert_eq!(
+            write.verification,
+            VerificationStatus::Unverified,
+            "nobody has written this bit from this application yet"
+        );
+        assert_eq!(write.verified_on_vehicles, 0);
+    }
+
+    /// Scoped to one VIN, and failing closed is the whole reason this is safe
+    /// to ship. A record's layout can differ between trims of the same year.
+    #[test]
+    fn another_truck_of_the_same_year_gets_nothing() {
+        let catalog = FeatureCatalog::embedded().unwrap();
+        let feature = catalog.get("autolock_doors_when_driving").unwrap();
+
+        let vin = |v: Option<&str>| feature.applies_to.matches(Some("Ford"), Some(2019), v);
+        assert!(vin(Some("1FT7W2BT7KEF78036")));
+        // One character different: a different truck.
+        assert!(!vin(Some("1FT7W2BT7KEF78037")));
+        // And an unread VIN is not a match, rather than a default.
+        assert!(!vin(None));
     }
 }
