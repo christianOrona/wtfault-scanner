@@ -45,7 +45,9 @@ pub fn now() -> Timestamp {
 ///
 /// Wrapped in a newtype so that every serialized timestamp in the API and the
 /// SQLite store has exactly one representation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 #[serde(transparent)]
 pub struct Timestamp(#[serde(with = "time::serde::rfc3339")] pub time::OffsetDateTime);
 
@@ -100,10 +102,7 @@ pub fn unhex(s: &str) -> Option<Vec<u8>> {
     if cleaned.len() % 2 != 0 {
         return None;
     }
-    (0..cleaned.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&cleaned[i..i + 2], 16).ok())
-        .collect()
+    (0..cleaned.len()).step_by(2).map(|i| u8::from_str_radix(&cleaned[i..i + 2], 16).ok()).collect()
 }
 
 #[cfg(test)]

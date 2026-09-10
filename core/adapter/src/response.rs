@@ -43,10 +43,7 @@ pub enum ResponseClass {
 impl ResponseClass {
     /// Whether the reply carries usable content.
     pub fn is_success(&self) -> bool {
-        matches!(
-            self,
-            ResponseClass::Ok | ResponseClass::Data | ResponseClass::Info
-        )
+        matches!(self, ResponseClass::Ok | ResponseClass::Data | ResponseClass::Info)
     }
 
     /// Stable wire form used in the event log.
@@ -82,15 +79,12 @@ impl ResponseClass {
             ResponseClass::Timeout => ErrorCode::TransportTimeout,
         };
         Some(
-            AimError::new(
-                code,
-                format!("adapter answered {:?} with {}", command, self.as_str()),
-            )
-            .with_details(serde_json::json!({
-                "command": command,
-                "classification": self.as_str(),
-                "lines": lines,
-            })),
+            AimError::new(code, format!("adapter answered {:?} with {}", command, self.as_str()))
+                .with_details(serde_json::json!({
+                    "command": command,
+                    "classification": self.as_str(),
+                    "lines": lines,
+                })),
         )
     }
 }
@@ -227,10 +221,7 @@ fn is_hex_line(line: &str) -> bool {
 }
 
 fn normalize(s: &str) -> String {
-    s.chars()
-        .filter(|c| !c.is_whitespace())
-        .flat_map(|c| c.to_uppercase())
-        .collect()
+    s.chars().filter(|c| !c.is_whitespace()).flat_map(|c| c.to_uppercase()).collect()
 }
 
 #[cfg(test)]
@@ -334,11 +325,7 @@ mod tests {
         // sweeping protocols. It used to classify as Info, and Info counts as
         // success, so the sweep accepted ISO 9141-2 on a CAN-only vehicle and
         // stopped before trying anything that would have worked.
-        for text in [
-            "BUS INIT: ...ERROR\r\r>",
-            "BUS INIT: ERROR\r\r>",
-            "BUS INIT:ERROR\r\r>",
-        ] {
+        for text in ["BUS INIT: ...ERROR\r\r>", "BUS INIT: ERROR\r\r>", "BUS INIT:ERROR\r\r>"] {
             let r = p("0902", text);
             assert_eq!(r.class, ResponseClass::BusError, "{text:?}");
             assert!(!r.class.is_success(), "{text:?} must not count as success");

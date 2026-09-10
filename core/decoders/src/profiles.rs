@@ -97,10 +97,8 @@ pub struct Extensible<'a> {
 /// A directory that does not exist is not an error — it is the normal state
 /// before anyone has added anything.
 pub fn load_directory(dir: &Path, into: Extensible<'_>) -> ProfileReport {
-    let mut report = ProfileReport {
-        directory: Some(dir.display().to_string()),
-        files: Vec::new(),
-    };
+    let mut report =
+        ProfileReport { directory: Some(dir.display().to_string()), files: Vec::new() };
 
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
@@ -122,11 +120,7 @@ pub fn load_directory(dir: &Path, into: Extensible<'_>) -> ProfileReport {
     let Extensible { features, pids, explanations } = into;
 
     for path in paths {
-        let name = path
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("unnamed")
-            .to_string();
+        let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("unnamed").to_string();
         let source = format!("user:{name}");
 
         let text = match std::fs::read_to_string(&path) {
@@ -147,17 +141,13 @@ pub fn load_directory(dir: &Path, into: Extensible<'_>) -> ProfileReport {
         // can be called anything the user finds meaningful.
         let kind = classify(&text);
         let result: Result<usize, String> = match kind {
-            ProfileKind::Features => features
-                .load_yaml(&text, &source)
-                .map_err(|e| e.message.clone()),
-            ProfileKind::Pids => pids
-                .load_yaml(&text)
-                .map(|_| 1)
-                .map_err(|e| e.message.clone()),
-            ProfileKind::Explanations => explanations
-                .load_yaml(&text)
-                .map(|_| 1)
-                .map_err(|e| e.message.clone()),
+            ProfileKind::Features => {
+                features.load_yaml(&text, &source).map_err(|e| e.message.clone())
+            }
+            ProfileKind::Pids => pids.load_yaml(&text).map(|_| 1).map_err(|e| e.message.clone()),
+            ProfileKind::Explanations => {
+                explanations.load_yaml(&text).map(|_| 1).map_err(|e| e.message.clone())
+            }
             ProfileKind::Unrecognised => Err(String::from(
                 "no recognised top-level key: expected one of `features`, `pids`, \
                  `signals`, `codes` or `concepts`",
@@ -183,8 +173,7 @@ pub fn load_directory(dir: &Path, into: Extensible<'_>) -> ProfileReport {
 fn classify(text: &str) -> ProfileKind {
     // Cheap and good enough: a top-level key is a line with no leading space.
     let has = |key: &str| {
-        text.lines()
-            .any(|l| l.starts_with(key) && l[key.len()..].trim_start().starts_with(':'))
+        text.lines().any(|l| l.starts_with(key) && l[key.len()..].trim_start().starts_with(':'))
     };
     if has("features") {
         ProfileKind::Features

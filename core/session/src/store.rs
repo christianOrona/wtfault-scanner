@@ -80,10 +80,8 @@ impl SessionStore {
         // migration, as an error that no longer knows it came from SQLite.
         // Reading the schema forces the header now, while the error is still
         // typed and can be classified as corruption rather than guessed at.
-        conn.query_row("SELECT count(*) FROM sqlite_master", [], |r| {
-            r.get::<_, i64>(0)
-        })
-        .map_err(|e| open_failure(p, e))?;
+        conn.query_row("SELECT count(*) FROM sqlite_master", [], |r| r.get::<_, i64>(0))
+            .map_err(|e| open_failure(p, e))?;
         SessionStore::from_connection(conn, Some(p.display().to_string()))
             .map_err(|e| enrich_open_failure(p, e))
     }
@@ -106,15 +104,10 @@ impl SessionStore {
             // rather than as a hang.
             let _ = conn.pragma_update(None, "busy_timeout", 5000);
         }
-        conn.pragma_update(None, "foreign_keys", "ON")
-            .map_err(storage)?;
+        conn.pragma_update(None, "foreign_keys", "ON").map_err(storage)?;
         schema::migrate(&mut conn)?;
         let (events, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
-        Ok(SessionStore {
-            conn: Arc::new(Mutex::new(conn)),
-            events,
-            path,
-        })
+        Ok(SessionStore { conn: Arc::new(Mutex::new(conn)), events, path })
     }
 
     /// Where this database lives, or `None` for in-memory.
@@ -177,8 +170,7 @@ impl SessionStore {
     /// open - a distinction worth having before anyone deletes anything.
     pub fn integrity_check(&self) -> AimResult<String> {
         let conn = self.lock()?;
-        conn.query_row("PRAGMA integrity_check(20)", [], |r| r.get::<_, String>(0))
-            .map_err(storage)
+        conn.query_row("PRAGMA integrity_check(20)", [], |r| r.get::<_, String>(0)).map_err(storage)
     }
 
     fn lock(&self) -> AimResult<MutexGuard<'_, Connection>> {
@@ -205,11 +197,7 @@ impl SessionStore {
             .execute(
                 "INSERT INTO sessions (id, vehicle_id, started_at, ended_at, label)
                  VALUES (?1, NULL, ?2, NULL, ?3)",
-                params![
-                    session.id.as_str(),
-                    session.started_at.to_rfc3339(),
-                    session.label
-                ],
+                params![session.id.as_str(), session.started_at.to_rfc3339(), session.label],
             )
             .map_err(storage)?;
         self.append_event(&session.id, EventKind::SessionStarted { label })?;
@@ -299,10 +287,7 @@ impl SessionStore {
     pub fn append_event(&self, session_id: &SessionId, kind: EventKind) -> AimResult<i64> {
         let timestamp = aim_types::now();
         let payload = serde_json::to_string(&kind).map_err(|e| {
-            AimError::new(
-                ErrorCode::StorageError,
-                format!("cannot serialize event: {e}"),
-            )
+            AimError::new(ErrorCode::StorageError, format!("cannot serialize event: {e}"))
         })?;
         let name = kind.name();
 
@@ -322,22 +307,13 @@ impl SessionStore {
             .map_err(storage)?;
             let id = conn.last_insert_rowid();
             let seq: i64 = conn
-                .query_row(
-                    "SELECT seq FROM session_events WHERE id = ?1",
-                    [id],
-                    |r| r.get(0),
-                )
+                .query_row("SELECT seq FROM session_events WHERE id = ?1", [id], |r| r.get(0))
                 .map_err(storage)?;
             (id, seq)
         };
 
-        let event = SessionEvent {
-            id: Some(id),
-            session_id: session_id.clone(),
-            seq,
-            timestamp,
-            kind,
-        };
+        let event =
+            SessionEvent { id: Some(id), session_id: session_id.clone(), seq, timestamp, kind };
         // No subscribers is the normal case (headless runs); it is not an error.
         let _ = self.events.send(event);
         Ok(id)
@@ -538,11 +514,7 @@ impl SessionStore {
                 ],
             )
             .map_err(storage)?;
-            return Ok(Module {
-                id: prev.id,
-                discovered_at: prev.discovered_at,
-                ..m.clone()
-            });
+            return Ok(Module { id: prev.id, discovered_at: prev.discovered_at, ..m.clone() });
         }
 
         conn.execute(
@@ -644,10 +616,7 @@ impl SessionStore {
             )
             .map_err(storage)?;
         let rows = stmt
-            .query_map(
-                params![session_id.as_str(), module_id.map(|m| m.as_str())],
-                row_to_dtc,
-            )
+            .query_map(params![session_id.as_str(), module_id.map(|m| m.as_str())], row_to_dtc)
             .map_err(storage)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(storage)?;
@@ -938,13 +907,7 @@ fn row_to_event(r: &Row<'_>) -> rusqlite::Result<AimResult<SessionEvent>> {
     let seq: i64 = r.get(2)?;
     let timestamp = parse_ts(r, 3)?;
     Ok(match serde_json::from_str::<EventKind>(&payload) {
-        Ok(kind) => Ok(SessionEvent {
-            id: Some(id),
-            session_id,
-            seq,
-            timestamp,
-            kind,
-        }),
+        Ok(kind) => Ok(SessionEvent { id: Some(id), session_id, seq, timestamp, kind }),
         Err(e) => Err(AimError::new(
             ErrorCode::StorageError,
             format!("event {id} has an undecodable payload: {e}"),
@@ -1113,9 +1076,7 @@ fn parse_ts(r: &Row<'_>, idx: usize) -> rusqlite::Result<Timestamp> {
         rusqlite::Error::FromSqlConversionFailure(
             idx,
             rusqlite::types::Type::Text,
-            Box::new(std::io::Error::other(format!(
-                "{s:?} is not an RFC 3339 timestamp"
-            ))),
+            Box::new(std::io::Error::other(format!("{s:?} is not an RFC 3339 timestamp"))),
         )
     })
 }
@@ -1153,10 +1114,7 @@ fn json_str<T: Serialize>(v: &T) -> AimResult<String> {
 
 fn from_json_str<T: for<'de> Deserialize<'de>>(s: &str) -> AimResult<T> {
     serde_json::from_str(s).map_err(|e| {
-        AimError::new(
-            ErrorCode::StorageError,
-            format!("stored JSON is undecodable: {e}"),
-        )
+        AimError::new(ErrorCode::StorageError, format!("stored JSON is undecodable: {e}"))
     })
 }
 

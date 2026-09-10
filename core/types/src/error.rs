@@ -102,10 +102,21 @@ impl ErrorCode {
             NoActiveSession | PreconditionFailed | CapabilityMissing | AdapterBusy => 409,
             TransportTimeout => 504,
             NotImplemented => 501,
-            VehicleNotResponding | NoData | AdapterNotIdentified | AdapterRejectedCommand
-            | AdapterError | AdapterInitFailed | TransportOpenFailed | TransportDisconnected
-            | TransportIo | TransportUnsupported | ProtocolMalformedResponse | IsoTpError
-            | NegativeResponse | UnexpectedResponse | DecodedValueOutOfRange => 502,
+            VehicleNotResponding
+            | NoData
+            | AdapterNotIdentified
+            | AdapterRejectedCommand
+            | AdapterError
+            | AdapterInitFailed
+            | TransportOpenFailed
+            | TransportDisconnected
+            | TransportIo
+            | TransportUnsupported
+            | ProtocolMalformedResponse
+            | IsoTpError
+            | NegativeResponse
+            | UnexpectedResponse
+            | DecodedValueOutOfRange => 502,
             Cancelled => 499,
             StorageError | Internal => 500,
         }

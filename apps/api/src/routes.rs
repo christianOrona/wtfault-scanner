@@ -63,20 +63,14 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/update/check", get(update_check))
         .route("/api/v1/update/apply", post(update_apply))
         .route("/api/v1/modules/{key}/freeze-frame", get(freeze_frame))
-        .route(
-            "/api/v1/modules/{key}/tests/{test_id}/run",
-            post(run_module_test),
-        )
+        .route("/api/v1/modules/{key}/tests/{test_id}/run", post(run_module_test))
         // ---- sessions ----
         .route("/api/v1/sessions", get(list_sessions))
         .route("/api/v1/sessions/{id}", get(session_detail))
         .route("/api/v1/sessions/{id}/events", get(session_events))
         .route("/api/v1/sessions/{id}/modules", get(session_modules))
         .route("/api/v1/sessions/{id}/dtcs", get(session_dtcs))
-        .route(
-            "/api/v1/sessions/{id}/measurements",
-            get(session_measurements),
-        )
+        .route("/api/v1/sessions/{id}/measurements", get(session_measurements))
         .route("/api/v1/sessions/{id}/stream", get(ws::session_events_ws))
         .route("/api/v1/sessions/{before}/compare/{after}", get(compare_sessions))
         // ---- agent seam ----
@@ -138,9 +132,7 @@ async fn explanations(State(state): State<AppState>) -> ApiResult<Json<Value>> {
     use aim_decoders::ExplainKind;
     let c = &state.decoders.explanations;
     let bucket = |k: ExplainKind| -> Vec<Value> {
-        c.all(k)
-            .map(|e| json!({ "id": e.id, "easy": e.easy, "technical": e.technical }))
-            .collect()
+        c.all(k).map(|e| json!({ "id": e.id, "easy": e.easy, "technical": e.technical })).collect()
     };
     Ok(Json(json!({
         "signals": bucket(ExplainKind::Signal),
@@ -151,9 +143,7 @@ async fn explanations(State(state): State<AppState>) -> ApiResult<Json<Value>> {
 
 /// Configurable features that could apply to the connected vehicle.
 async fn features(State(state): State<AppState>) -> ApiResult<Json<ToolResult>> {
-    Ok(Json(
-        state.with_service(|s| s.list_features("user:api")).await?,
-    ))
+    Ok(Json(state.with_service(|s| s.list_features("user:api")).await?))
 }
 
 #[derive(Debug, Deserialize)]
@@ -287,9 +277,7 @@ async fn run_tool(
     let body = body.map(|Json(b)| b);
     let mut call = aim_tools::ToolCall::new(
         name,
-        body.as_ref()
-            .and_then(|b| b.initiator.clone())
-            .unwrap_or_else(|| String::from("user:api")),
+        body.as_ref().and_then(|b| b.initiator.clone()).unwrap_or_else(|| String::from("user:api")),
     );
     if let Some(b) = &body {
         if !b.arguments.is_null() {
@@ -300,9 +288,7 @@ async fn run_tool(
         }
     }
     let tools = std::sync::Arc::clone(&state.tools);
-    let result = state
-        .with_service(move |s| aim_tools::execute(s, &tools, &call))
-        .await?;
+    let result = state.with_service(move |s| aim_tools::execute(s, &tools, &call)).await?;
     Ok(Json(result))
 }
 
@@ -369,9 +355,10 @@ async fn adapter(State(state): State<AppState>) -> ApiResult<Json<Value>> {
             })
         })
         .await?;
-    Ok(Json(snapshot.unwrap_or_else(|| {
-        json!({ "connected": false, "state": { "state": "disconnected" } })
-    })))
+    Ok(Json(
+        snapshot
+            .unwrap_or_else(|| json!({ "connected": false, "state": { "state": "disconnected" } })),
+    ))
 }
 
 async fn connect(
@@ -389,11 +376,7 @@ async fn disconnect(State(state): State<AppState>) -> ApiResult<Json<ToolResult>
 // ----------------------------------------------------------------- vehicle
 
 async fn identify_vehicle(State(state): State<AppState>) -> ApiResult<Json<ToolResult>> {
-    Ok(Json(
-        state
-            .with_service(|s| s.identify_vehicle("user:api"))
-            .await?,
-    ))
+    Ok(Json(state.with_service(|s| s.identify_vehicle("user:api")).await?))
 }
 
 // ----------------------------------------------------------------- modules
@@ -403,9 +386,7 @@ async fn scan_modules(State(state): State<AppState>) -> ApiResult<Json<ToolResul
 }
 
 async fn list_modules(State(state): State<AppState>) -> ApiResult<Json<Value>> {
-    let modules = state
-        .with_service(|s| s.store().modules(s.session_id()))
-        .await??;
+    let modules = state.with_service(|s| s.store().modules(s.session_id())).await??;
     Ok(Json(json!({ "modules": modules })))
 }
 
@@ -413,44 +394,28 @@ async fn module_identity(
     State(state): State<AppState>,
     Path(key): Path<String>,
 ) -> ApiResult<Json<ToolResult>> {
-    Ok(Json(
-        state
-            .with_service(move |s| s.get_module_identity(&key, "user:api"))
-            .await?,
-    ))
+    Ok(Json(state.with_service(move |s| s.get_module_identity(&key, "user:api")).await?))
 }
 
 async fn module_dtcs(
     State(state): State<AppState>,
     Path(key): Path<String>,
 ) -> ApiResult<Json<ToolResult>> {
-    Ok(Json(
-        state
-            .with_service(move |s| s.read_dtcs(Some(&key), "user:api"))
-            .await?,
-    ))
+    Ok(Json(state.with_service(move |s| s.read_dtcs(Some(&key), "user:api")).await?))
 }
 
 async fn module_signals(
     State(state): State<AppState>,
     Path(key): Path<String>,
 ) -> ApiResult<Json<ToolResult>> {
-    Ok(Json(
-        state
-            .with_service(move |s| s.read_supported_pids(&key, "user:api"))
-            .await?,
-    ))
+    Ok(Json(state.with_service(move |s| s.read_supported_pids(&key, "user:api")).await?))
 }
 
 async fn module_monitor_tests(
     State(state): State<AppState>,
     Path(key): Path<String>,
 ) -> ApiResult<Json<ToolResult>> {
-    Ok(Json(
-        state
-            .with_service(move |s| s.read_monitor_tests(&key, "user:api"))
-            .await?,
-    ))
+    Ok(Json(state.with_service(move |s| s.read_monitor_tests(&key, "user:api")).await?))
 }
 
 #[derive(Debug, Deserialize)]
@@ -468,9 +433,7 @@ struct ClearBody {
 
 /// Sweep the diagnostic address range and read every module's fault memory.
 async fn scan_all_modules(State(state): State<AppState>) -> ApiResult<Json<ToolResult>> {
-    Ok(Json(
-        state.with_service(|s| s.scan_all_modules("user:api")).await?,
-    ))
+    Ok(Json(state.with_service(|s| s.scan_all_modules("user:api")).await?))
 }
 
 /// Emissions readiness from every module that keeps it.
@@ -479,9 +442,7 @@ async fn scan_all_modules(State(state): State<AppState>) -> ApiResult<Json<ToolR
 /// question and the modules can disagree, so the answer has to include all of
 /// them or it is picking a winner without saying so.
 async fn readiness(State(state): State<AppState>) -> ApiResult<Json<ToolResult>> {
-    Ok(Json(
-        state.with_service(|s| s.read_readiness("user:api")).await?,
-    ))
+    Ok(Json(state.with_service(|s| s.read_readiness("user:api")).await?))
 }
 
 /// Clear stored codes. The one write a person can make in this build.
@@ -522,11 +483,7 @@ async fn module_read(
     if body.signals.is_empty() {
         return Err(ApiError::bad_request("signals must not be empty"));
     }
-    Ok(Json(
-        state
-            .with_service(move |s| s.read_live_data(&key, &body.signals, "user:api"))
-            .await?,
-    ))
+    Ok(Json(state.with_service(move |s| s.read_live_data(&key, &body.signals, "user:api")).await?))
 }
 
 #[derive(Debug, Deserialize)]
@@ -540,11 +497,7 @@ async fn freeze_frame(
     Path(key): Path<String>,
     Query(q): Query<FrameQuery>,
 ) -> ApiResult<Json<ToolResult>> {
-    Ok(Json(
-        state
-            .with_service(move |s| s.read_freeze_frame(&key, q.frame, "user:api"))
-            .await?,
-    ))
+    Ok(Json(state.with_service(move |s| s.read_freeze_frame(&key, q.frame, "user:api")).await?))
 }
 
 /// Active tests are handoff §13's `POST /modules/{id}/tests/{testId}/run`.
@@ -669,10 +622,7 @@ async fn session_measurements(
 ) -> ApiResult<Json<Value>> {
     let id = SessionId::from_string(id);
     state.store.get_session(&id)?;
-    let measurements =
-        state
-            .store
-            .measurements(&id, q.signal.as_deref(), q.limit.min(10_000))?;
+    let measurements = state.store.measurements(&id, q.signal.as_deref(), q.limit.min(10_000))?;
     Ok(Json(json!({ "measurements": measurements })))
 }
 
@@ -743,9 +693,7 @@ fn safe_name(raw: &str) -> ApiResult<String> {
         && base != ".."
         && !base.contains("..")
         && base.len() <= 120
-        && base
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ' '));
+        && base.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ' '));
     if ok {
         Ok(base.to_string())
     } else {
@@ -763,20 +711,12 @@ async fn compare_sessions(
     State(state): State<AppState>,
     Path((before, after)): Path<(String, String)>,
 ) -> ApiResult<Json<Value>> {
-    let cmp = aim_session::compare_sessions(
-        &state.store,
-        &SessionId(before),
-        &SessionId(after),
-    )?;
+    let cmp = aim_session::compare_sessions(&state.store, &SessionId(before), &SessionId(after))?;
     // `notable` is the store's own judgement about what is worth a person's
     // attention. Sent alongside rather than used to filter, so the UI can show
     // everything if asked and the API never silently drops data.
-    let notable: Vec<&str> = cmp
-        .signals
-        .iter()
-        .filter(|s| s.notable())
-        .map(|s| s.signal_id.as_str())
-        .collect();
+    let notable: Vec<&str> =
+        cmp.signals.iter().filter(|s| s.notable()).map(|s| s.signal_id.as_str()).collect();
     Ok(Json(json!({ "comparison": cmp, "notable_signals": notable })))
 }
 

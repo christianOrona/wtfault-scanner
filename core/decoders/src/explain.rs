@@ -64,9 +64,7 @@ impl ExplanationCatalog {
     /// Load the explanations embedded in the binary.
     pub fn generic_obd() -> AimResult<ExplanationCatalog> {
         let mut c = ExplanationCatalog::default();
-        c.load_yaml(include_str!(
-            "../../../vehicle-profiles/generic-obd/explanations.yaml"
-        ))?;
+        c.load_yaml(include_str!("../../../vehicle-profiles/generic-obd/explanations.yaml"))?;
         Ok(c)
     }
 

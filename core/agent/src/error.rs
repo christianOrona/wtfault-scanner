@@ -194,9 +194,13 @@ mod tests {
 
     #[test]
     fn retryable_classification() {
-        assert!(AgentError::RateLimited { provider: "p".into(), retry_after_secs: None }.is_retryable());
-        assert!(AgentError::Api { provider: "p".into(), status: 503, message: String::new() }.is_retryable());
-        assert!(!AgentError::Api { provider: "p".into(), status: 400, message: String::new() }.is_retryable());
+        assert!(
+            AgentError::RateLimited { provider: "p".into(), retry_after_secs: None }.is_retryable()
+        );
+        assert!(AgentError::Api { provider: "p".into(), status: 503, message: String::new() }
+            .is_retryable());
+        assert!(!AgentError::Api { provider: "p".into(), status: 400, message: String::new() }
+            .is_retryable());
         assert!(!AgentError::Refused { category: None, explanation: None }.is_retryable());
     }
 }

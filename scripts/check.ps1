@@ -82,8 +82,8 @@ if ($Fix) {
 
 # Core first: it is the fastest and catches the most, so a broken build is
 # reported in seconds rather than after the slow steps have run.
-Invoke-Step 'core: tests' '.' @('cargo', 'test', '--workspace')
-Invoke-Step 'core: clippy' '.' @('cargo', 'clippy', '--workspace', '--all-targets', '--', '-D', 'warnings')
+Invoke-Step 'core: tests' '.' @('cargo', 'test', '--workspace', '--locked')
+Invoke-Step 'core: clippy' '.' @('cargo', 'clippy', '--workspace', '--all-targets', '--locked', '--', '-D', 'warnings')
 
 # The UI's typecheck is part of its build, so this covers both.
 Invoke-Step 'ui: typecheck and build' 'apps/desktop' @('npm', 'run', '-s', 'build')
@@ -93,12 +93,12 @@ if (-not $Quick) {
     # core/transport/Cargo.toml promises this works; CI checks it, so checking
     # it here too means CI never reports something this script would have
     # caught first.
-    Invoke-Step 'core: no serial' '.' @('cargo', 'clippy', '--workspace', '--all-targets', '--no-default-features', '--', '-D', 'warnings')
+    Invoke-Step 'core: no serial' '.' @('cargo', 'clippy', '--workspace', '--all-targets', '--no-default-features', '--locked', '--', '-D', 'warnings')
 
     # The shell, explicitly, because --workspace does not reach it. Must come
     # after the UI build above: the shell embeds `../dist` with `include_dir!`,
     # so it does not compile at all until the UI has been built once.
-    Invoke-Step 'shell: clippy' 'apps/desktop/src-tauri' @('cargo', 'clippy', '--all-targets', '--', '-D', 'warnings')
+    Invoke-Step 'shell: clippy' 'apps/desktop/src-tauri' @('cargo', 'clippy', '--all-targets', '--locked', '--', '-D', 'warnings')
 }
 
 Write-Host ""

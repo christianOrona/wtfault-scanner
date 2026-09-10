@@ -47,13 +47,8 @@ fn event_sequence_numbers_are_gap_free_and_ordered() {
     let s = store();
     let session = s.create_session(None).unwrap();
     for i in 0..50 {
-        s.append_event(
-            &session.id,
-            EventKind::AdapterRequest {
-                command: format!("010{i:X}"),
-            },
-        )
-        .unwrap();
+        s.append_event(&session.id, EventKind::AdapterRequest { command: format!("010{i:X}") })
+            .unwrap();
     }
     let events = s.events_since(&session.id, 0, 1000).unwrap();
     assert_eq!(events.len(), 51);
@@ -84,9 +79,7 @@ fn events_can_be_read_incrementally_which_is_what_the_websocket_needs() {
     }
     let first = s.events_since(&session.id, 0, 3).unwrap();
     assert_eq!(first.len(), 3);
-    let rest = s
-        .events_since(&session.id, first.last().unwrap().seq, 100)
-        .unwrap();
+    let rest = s.events_since(&session.id, first.last().unwrap().seq, 100).unwrap();
     assert_eq!(rest.len(), 3);
     assert_eq!(rest[0].seq, 4);
 }
@@ -129,13 +122,8 @@ async fn subscribers_receive_events_as_they_are_appended() {
     assert_eq!(first.seq, 1);
     assert!(first.id.is_some(), "published events carry their row id");
 
-    s.append_event(
-        &session.id,
-        EventKind::UserNote {
-            text: "unplugged the sensor".into(),
-        },
-    )
-    .unwrap();
+    s.append_event(&session.id, EventKind::UserNote { text: "unplugged the sensor".into() })
+        .unwrap();
     let second = rx.recv().await.unwrap();
     assert_eq!(second.seq, 2);
 }
@@ -157,21 +145,15 @@ fn ending_a_session_is_idempotent_and_history_does_not_change() {
 #[test]
 fn a_missing_session_is_not_found_rather_than_an_empty_one() {
     let s = store();
-    let err = s
-        .get_session(&SessionId::from_string("ses_nope"))
-        .unwrap_err();
+    let err = s.get_session(&SessionId::from_string("ses_nope")).unwrap_err();
     assert_eq!(err.code, ErrorCode::NotFound);
 }
 
 #[test]
 fn vehicles_are_deduplicated_by_vin_but_never_merged_without_one() {
     let s = store();
-    let a = s
-        .upsert_vehicle(&Vehicle::from_vin(Some("1FT7W2BT6KEC00001".into())))
-        .unwrap();
-    let b = s
-        .upsert_vehicle(&Vehicle::from_vin(Some("1FT7W2BT6KEC00001".into())))
-        .unwrap();
+    let a = s.upsert_vehicle(&Vehicle::from_vin(Some("1FT7W2BT6KEC00001".into()))).unwrap();
+    let b = s.upsert_vehicle(&Vehicle::from_vin(Some("1FT7W2BT6KEC00001".into()))).unwrap();
     assert_eq!(a.id, b.id, "the same VIN is the same vehicle");
 
     let x = s.upsert_vehicle(&Vehicle::from_vin(None)).unwrap();
@@ -183,17 +165,12 @@ fn vehicles_are_deduplicated_by_vin_but_never_merged_without_one() {
 fn a_vehicle_attached_to_a_session_shows_up_in_the_session_list() {
     let s = store();
     let session = s.create_session(None).unwrap();
-    let vehicle = s
-        .upsert_vehicle(&Vehicle::from_vin(Some("1FT7W2BT6KEC00001".into())))
-        .unwrap();
+    let vehicle = s.upsert_vehicle(&Vehicle::from_vin(Some("1FT7W2BT6KEC00001".into()))).unwrap();
     s.attach_vehicle(&session.id, &vehicle.id).unwrap();
 
     let summary = &s.list_sessions(10).unwrap()[0];
     assert_eq!(summary.session.id, session.id);
-    assert_eq!(
-        summary.vehicle.as_ref().unwrap().vin.as_deref(),
-        Some("1FT7W2BT6KEC00001")
-    );
+    assert_eq!(summary.vehicle.as_ref().unwrap().vin.as_deref(), Some("1FT7W2BT6KEC00001"));
 }
 
 #[test]
@@ -223,9 +200,7 @@ fn connections_round_trip_with_their_capability_snapshot() {
     assert!(back[0].disconnected_at.is_none());
 
     s.close_connection(&c.id).unwrap();
-    assert!(s.connections(&session.id).unwrap()[0]
-        .disconnected_at
-        .is_some());
+    assert!(s.connections(&session.id).unwrap()[0].disconnected_at.is_some());
 }
 
 #[test]
@@ -245,10 +220,7 @@ fn rediscovering_a_module_updates_it_instead_of_duplicating_it() {
     assert_eq!(again.id, m.id, "the module keeps its identity across reads");
     let stored = s.modules(&session.id).unwrap();
     assert_eq!(stored.len(), 1);
-    assert_eq!(
-        stored[0].identity.ecu_name.as_deref(),
-        Some("SIM ENGINE CONTROL")
-    );
+    assert_eq!(stored[0].identity.ecu_name.as_deref(), Some("SIM ENGINE CONTROL"));
     assert_eq!(s.get_module(&m.id).unwrap().module_key, "ECU_7E8");
 }
 
@@ -304,8 +276,7 @@ fn measurements_keep_the_raw_bytes_they_were_decoded_from() {
             now(),
         ),
     );
-    s.record_measurement(&measurement_from(&session.id, &m.id, &decoded))
-        .unwrap();
+    s.record_measurement(&measurement_from(&session.id, &m.id, &decoded)).unwrap();
 
     let stored = s.measurements(&session.id, Some("engine_rpm"), 10).unwrap();
     assert_eq!(stored.len(), 1);
@@ -313,10 +284,7 @@ fn measurements_keep_the_raw_bytes_they_were_decoded_from() {
     assert_eq!(stored[0].unit.as_deref(), Some("rpm"));
     assert_eq!(stored[0].raw_value, "410c1118");
     // Filtering by a signal that was never read returns nothing, not everything.
-    assert!(s
-        .measurements(&session.id, Some("coolant_temp"), 10)
-        .unwrap()
-        .is_empty());
+    assert!(s.measurements(&session.id, Some("coolant_temp"), 10).unwrap().is_empty());
 }
 
 #[test]

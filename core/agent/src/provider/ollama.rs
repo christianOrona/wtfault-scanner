@@ -365,7 +365,8 @@ mod tests {
         let fast = OllamaProvider::new("p", "P", "qwen3:8b", None, Speed::Fast, None).unwrap();
         assert!(fast.speed.suppress_thinking());
 
-        let quality = OllamaProvider::new("p", "P", "qwen3:8b", None, Speed::Quality, None).unwrap();
+        let quality =
+            OllamaProvider::new("p", "P", "qwen3:8b", None, Speed::Quality, None).unwrap();
         assert!(!quality.speed.suppress_thinking());
     }
 

@@ -10,7 +10,9 @@ fn main() {
     let base = std::env::var("APPDATA").unwrap_or_default();
     let path = match std::env::var("AIM_DB") {
         Ok(p) => std::path::PathBuf::from(p),
-        Err(_) => std::path::Path::new(&base).join("ai-mechanic").join("data").join("sessions.sqlite"),
+        Err(_) => {
+            std::path::Path::new(&base).join("ai-mechanic").join("data").join("sessions.sqlite")
+        }
     };
     let store = match aim_session::SessionStore::open(&path) {
         Ok(s) => s,
@@ -29,9 +31,8 @@ fn main() {
         );
     }
 
-    let Some(target) = std::env::args()
-        .nth(1)
-        .or_else(|| sessions.first().map(|s| s.session.id.0.clone()))
+    let Some(target) =
+        std::env::args().nth(1).or_else(|| sessions.first().map(|s| s.session.id.0.clone()))
     else {
         println!("no sessions recorded");
         return;

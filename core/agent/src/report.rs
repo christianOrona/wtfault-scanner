@@ -147,11 +147,7 @@ impl Report {
             return None;
         }
         let currency = costs[0].currency.clone();
-        Some((
-            costs.iter().map(|c| c.low).sum(),
-            costs.iter().map(|c| c.high).sum(),
-            currency,
-        ))
+        Some((costs.iter().map(|c| c.low).sum(), costs.iter().map(|c| c.high).sum(), currency))
     }
 
     /// Why this report is not usable as it stands, if it is not.
@@ -257,7 +253,10 @@ impl Report {
     }
 
     /// See [`Report::incoherence`]; `codes` are the codes actually read.
-    pub fn incoherence_against(&self, codes: &std::collections::BTreeSet<String>) -> Option<String> {
+    pub fn incoherence_against(
+        &self,
+        codes: &std::collections::BTreeSet<String>,
+    ) -> Option<String> {
         // Fabricated codes are the worst failure this type can carry.
         //
         // Measured on qwen3:8b, and caused by an earlier version of the rule
@@ -266,8 +265,7 @@ impl Report {
         // this vehicle reported. Pressure to produce findings turned an
         // omission into an invention, which is far more dangerous: a buyer
         // could walk away over a misfire that does not exist.
-        let invented: Vec<String> =
-            self.cited_codes().difference(codes).cloned().collect();
+        let invented: Vec<String> = self.cited_codes().difference(codes).cloned().collect();
         if !invented.is_empty() {
             let known = if codes.is_empty() {
                 "none were read".to_string()
@@ -302,7 +300,8 @@ impl Report {
                  Add them and submit again."
             ));
         }
-        if self.findings.is_empty() && matches!(self.verdict, Verdict::WalkAway | Verdict::Negotiate)
+        if self.findings.is_empty()
+            && matches!(self.verdict, Verdict::WalkAway | Verdict::Negotiate)
         {
             return Some(format!(
                 "You set verdict {:?} but left `findings` empty. A verdict that says something is \
@@ -448,7 +447,12 @@ mod tests {
     }
 
     fn cost() -> CostRange {
-        CostRange { low: 800.0, high: 2500.0, currency: "USD".into(), basis: "general knowledge".into() }
+        CostRange {
+            low: 800.0,
+            high: 2500.0,
+            currency: "USD".into(),
+            basis: "general knowledge".into(),
+        }
     }
 
     #[test]
@@ -516,7 +520,10 @@ mod tests {
             verdict: Verdict::Negotiate,
             headline: "h".into(),
             summary: "s".into(),
-            findings: vec![finding(Source::ModelKnowledge, Some(cost())), finding(Source::ModelKnowledge, Some(cost()))],
+            findings: vec![
+                finding(Source::ModelKnowledge, Some(cost())),
+                finding(Source::ModelKnowledge, Some(cost())),
+            ],
             watch_items: vec![],
             not_checked: vec![],
             next_steps: vec![],

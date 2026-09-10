@@ -18,10 +18,8 @@ const USER: &str = "user:test";
 fn service(scenario: ScenarioId) -> (DiagnosticService, aim_simulator::SharedEmulator) {
     let transport = SimulatedTransport::new(scenario);
     let emulator = transport.emulator();
-    let adapter: Box<dyn DiagnosticAdapter> = Box::new(Elm327Adapter::new(
-        Box::new(transport),
-        Elm327Config::fast(),
-    ));
+    let adapter: Box<dyn DiagnosticAdapter> =
+        Box::new(Elm327Adapter::new(Box::new(transport), Elm327Config::fast()));
     let store = SessionStore::open_in_memory().unwrap();
     let decoders = Arc::new(DecoderSet::generic_obd().unwrap());
     let service =
@@ -68,10 +66,13 @@ fn a_silent_bus_connects_degraded_and_says_so_loudly() {
     let result = service.connect(USER);
     assert!(result.success, "the adapter itself is fine");
     assert!(matches!(service.state(), ConnectionState::Degraded { .. }));
-    assert!(result
-        .warnings
-        .iter()
-        .any(|w| w.code == "adapter_degraded" && w.severity == aim_types::WarningSeverity::Serious));
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|w| w.code == "adapter_degraded"
+                && w.severity == aim_types::WarningSeverity::Serious)
+    );
 
     // And reads then fail with the vehicle's silence, not a fabricated value.
     let scan = service.scan_modules(USER);
@@ -113,13 +114,7 @@ fn calibration_identifiers_come_back_with_the_vin() {
     let calids = data["calibration_ids"].as_array().unwrap();
     assert_eq!(calids.len(), 1);
     assert_eq!(calids[0], "SIMULATED-CAL-01");
-    assert_eq!(
-        data["calibration_verification_numbers"]
-            .as_array()
-            .unwrap()
-            .len(),
-        1
-    );
+    assert_eq!(data["calibration_verification_numbers"].as_array().unwrap().len(), 1);
 }
 
 #[test]
@@ -149,10 +144,7 @@ fn module_identity_fills_in_calibration_and_ecu_name() {
     let identity = &result.data.as_ref().unwrap()["identity"];
     assert_eq!(identity["ecu_name"], "SIM ENGINE CONTROL");
     assert_eq!(identity["calibration_ids"][0], "SIMULATED-CAL-01");
-    assert!(!identity["calibration_verification_numbers"]
-        .as_array()
-        .unwrap()
-        .is_empty());
+    assert!(!identity["calibration_verification_numbers"].as_array().unwrap().is_empty());
 }
 
 #[test]
@@ -166,10 +158,7 @@ fn a_module_that_reports_less_still_returns_what_it_has() {
     let identity = &result.data.as_ref().unwrap()["identity"];
     assert_eq!(identity["ecu_name"], "SIM MODULE 7EB");
     assert!(identity["calibration_ids"].as_array().unwrap().is_empty());
-    assert!(result
-        .warnings
-        .iter()
-        .any(|w| w.code == "identity_field_unavailable"));
+    assert!(result.warnings.iter().any(|w| w.code == "identity_field_unavailable"));
 }
 
 #[test]
@@ -180,12 +169,8 @@ fn supported_pids_are_enumerated_across_the_whole_mask_chain() {
     assert!(result.success, "{:?}", result.error);
 
     let data = result.data.unwrap();
-    let pids: Vec<u64> = data["pids"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|p| p["pid"].as_u64().unwrap())
-        .collect();
+    let pids: Vec<u64> =
+        data["pids"].as_array().unwrap().iter().map(|p| p["pid"].as_u64().unwrap()).collect();
 
     // The chain must have been walked past the first mask: 0x7C only appears
     // in the fourth block.
@@ -215,11 +200,7 @@ fn every_advertised_pid_can_actually_be_read() {
         }
         let signal = entry["signal_id"].as_str().unwrap();
         let r = service.read_pid("ECU_7E8", signal, USER);
-        assert!(
-            r.success,
-            "advertised PID {pid:02X} ({signal}) could not be read: {:?}",
-            r.error
-        );
+        assert!(r.success, "advertised PID {pid:02X} ({signal}) could not be read: {:?}", r.error);
     }
 }
 
@@ -240,10 +221,8 @@ fn reading_a_pid_produces_a_decoded_value_with_provenance_and_a_measurement() {
     assert!(value.provenance.evidence_ref.is_some());
 
     // And it landed in the measurement series.
-    let stored = service
-        .store()
-        .measurements(service.session_id(), Some("engine_rpm"), 10)
-        .unwrap();
+    let stored =
+        service.store().measurements(service.session_id(), Some("engine_rpm"), 10).unwrap();
     assert_eq!(stored.len(), 1);
     assert_eq!(stored[0].value, Some(rpm));
     assert_eq!(stored[0].raw_value, value.provenance.raw_hex);
@@ -288,10 +267,8 @@ fn reading_from_an_unscanned_module_says_to_scan_first() {
 fn live_data_samples_several_signals_and_reports_the_ones_it_could_not_read() {
     let (mut service, _) = connected(ScenarioId::Healthy);
     service.scan_modules(USER);
-    let signals: Vec<String> = ["engine_rpm", "coolant_temp", "nonsense_signal"]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
+    let signals: Vec<String> =
+        ["engine_rpm", "coolant_temp", "nonsense_signal"].iter().map(|s| s.to_string()).collect();
     let result = service.read_live_data("ECU_7E8", &signals, USER);
 
     assert!(result.success);
@@ -321,14 +298,8 @@ fn unverified_decoders_taint_the_values_they_produce() {
     let result = service.read_pid("ECU_7E8", "dpf_temp_bank1_inlet", USER);
     assert!(result.success);
     assert!(!result.values[0].is_trustworthy());
-    assert_eq!(
-        result.values[0].provenance.verification,
-        aim_types::VerificationStatus::Unverified
-    );
-    assert!(result
-        .warnings
-        .iter()
-        .any(|w| w.code == "unverified_decoder"));
+    assert_eq!(result.values[0].provenance.verification, aim_types::VerificationStatus::Unverified);
+    assert!(result.warnings.iter().any(|w| w.code == "unverified_decoder"));
 }
 
 #[test]
@@ -338,11 +309,7 @@ fn a_healthy_vehicle_reports_no_codes_rather_than_failing() {
     let result = service.read_dtcs(None, USER);
     assert!(result.success, "{:?}", result.error);
     assert_eq!(result.data.unwrap()["confirmed_count"], 0);
-    assert!(service
-        .store()
-        .dtcs(service.session_id(), None)
-        .unwrap()
-        .is_empty());
+    assert!(service.store().dtcs(service.session_id(), None).unwrap().is_empty());
 }
 
 #[test]
@@ -360,12 +327,7 @@ fn dtcs_are_read_across_all_three_services_and_described_from_the_catalog() {
     let statuses: Vec<DtcStatus> = dtcs.iter().map(|d| d.status).collect();
     assert_eq!(
         statuses,
-        vec![
-            DtcStatus::Confirmed,
-            DtcStatus::Confirmed,
-            DtcStatus::Pending,
-            DtcStatus::Permanent
-        ]
+        vec![DtcStatus::Confirmed, DtcStatus::Confirmed, DtcStatus::Pending, DtcStatus::Permanent]
     );
 
     // Descriptions come from the catalog, never invented.
@@ -401,28 +363,17 @@ fn the_freeze_frame_is_a_snapshot_from_the_past_not_a_live_reading() {
     assert_eq!(data["dtc"], "P2463");
     assert!(data["dtc_description"].is_string());
 
-    let frozen_rpm = frame
-        .values
-        .iter()
-        .find(|v| v.signal_id == "engine_rpm")
-        .unwrap()
-        .value
-        .as_f64()
-        .unwrap();
-    assert!(
-        (frozen_rpm - 748.0).abs() < 1.0,
-        "frozen rpm was {frozen_rpm}"
-    );
+    let frozen_rpm =
+        frame.values.iter().find(|v| v.signal_id == "engine_rpm").unwrap().value.as_f64().unwrap();
+    assert!((frozen_rpm - 748.0).abs() < 1.0, "frozen rpm was {frozen_rpm}");
     assert!(
         live_rpm > frozen_rpm + 200.0,
         "the truck is at a raised idle now ({live_rpm}) versus when the code stored ({frozen_rpm})"
     );
 
     // A freeze frame must not pollute the live measurement series.
-    let measured = service
-        .store()
-        .measurements(service.session_id(), Some("engine_rpm"), 100)
-        .unwrap();
+    let measured =
+        service.store().measurements(service.session_id(), Some("engine_rpm"), 100).unwrap();
     assert_eq!(measured.len(), 1, "only the live read was recorded");
 }
 
@@ -452,27 +403,19 @@ fn clearing_codes_needs_confirmation_and_a_stopped_engine() {
     assert!(after.success);
 }
 
-
 #[test]
 fn every_safety_decision_is_recorded_with_its_initiator() {
     let (mut service, _) = connected(ScenarioId::DpfRegen);
     service.scan_modules(USER);
     service.clear_dtcs(None, "agent:planner", None);
 
-    let events = service
-        .store()
-        .events_since(service.session_id(), 0, 10_000)
-        .unwrap();
+    let events = service.store().events_since(service.session_id(), 0, 10_000).unwrap();
     let refusal = events
         .iter()
         .filter_map(|e| match &e.kind {
-            EventKind::SafetyDecision {
-                operation,
-                allowed,
-                initiator,
-                reason,
-                ..
-            } if operation == "obd2.clear_dtcs" => {
+            EventKind::SafetyDecision { operation, allowed, initiator, reason, .. }
+                if operation == "obd2.clear_dtcs" =>
+            {
                 Some((*allowed, initiator.clone(), reason.clone()))
             }
             _ => None,
@@ -498,10 +441,7 @@ fn the_flight_recorder_captures_the_whole_session_in_order() {
     service.read_pid("ECU_7E8", "coolant_temp", USER);
     service.note("owner reports a DPF warning light").unwrap();
 
-    let events = service
-        .store()
-        .events_since(service.session_id(), 0, 100_000)
-        .unwrap();
+    let events = service.store().events_since(service.session_id(), 0, 100_000).unwrap();
     let kinds: Vec<&str> = events.iter().map(|e| e.kind.name()).collect();
 
     for expected in [
@@ -552,10 +492,7 @@ fn observed_conditions_come_from_readings_not_assumptions() {
     assert!(!service.conditions().engine_running);
 
     service.read_pid("ECU_7E8", "engine_rpm", USER);
-    assert!(
-        service.conditions().engine_running,
-        "a raised idle is an engine that is running"
-    );
+    assert!(service.conditions().engine_running, "a raised idle is an engine that is running");
 
     service.read_pid("ECU_7E8", "control_module_voltage", USER);
     let v = service.conditions().battery_voltage.unwrap();
@@ -581,10 +518,7 @@ fn monitor_tests_report_the_measured_value_against_the_vehicles_own_limit() {
         .find(|m| m["mid"] == 0x86 && m["tid"] == 0x80)
         .expect("the marginal particulate filter test");
     assert_eq!(near["passed"], true, "still inside its limits");
-    assert!(
-        near["margin"].as_f64().unwrap() < 0.10,
-        "and within a tenth of them: {near:?}"
-    );
+    assert!(near["margin"].as_f64().unwrap() < 0.10, "and within a tenth of them: {near:?}");
     assert_eq!(near["name"], "Particulate filter, bank 1");
 
     let failed = monitors
@@ -751,20 +685,15 @@ fn a_uds_fault_carries_its_status_and_a_description_when_one_exists() {
 
     // A three-byte code keeps its failure type and its two-byte base, because
     // the catalogue is keyed on the base.
-    let f = all
-        .iter()
-        .find(|f| f["base_code"] == "C0035")
-        .expect("the wheel speed sensor fault");
+    let f = all.iter().find(|f| f["base_code"] == "C0035").expect("the wheel speed sensor fault");
     assert_eq!(f["code"], "C0035-00");
     assert_eq!(f["failing_now"], true);
     assert_eq!(f["confirmed"], true);
     assert_eq!(f["status_summary"], "failing right now");
 
     // Stored-but-not-failing is reported as its own thing, not as "fine".
-    let stored = all
-        .iter()
-        .find(|f| f["base_code"] == "U0121")
-        .expect("the lost-communication fault");
+    let stored =
+        all.iter().find(|f| f["base_code"] == "U0121").expect("the lost-communication fault");
     assert_eq!(stored["failing_now"], false);
     assert_eq!(stored["confirmed"], true);
     assert_eq!(stored["status_summary"], "stored, but not failing at the moment");
@@ -803,4 +732,3 @@ fn a_silent_bus_reports_no_modules_rather_than_an_empty_success() {
     assert!(!result.success);
     assert_eq!(result.error.unwrap().code, ErrorCode::NoData);
 }
-

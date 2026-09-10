@@ -20,10 +20,7 @@ use aim_types::{Timestamp, Value};
 #[track_caller]
 fn flag(m: &std::collections::BTreeMap<String, bool>, id: &str, expected: bool) {
     let actual = *m.get(id).unwrap_or_else(|| panic!("{id} was not decoded"));
-    assert!(
-        actual == expected,
-        "{id} should be {expected}, decoded as {actual}"
-    );
+    assert!(actual == expected, "{id} should be {expected}, decoded as {actual}");
 }
 
 /// Decode PID 01 from its four payload bytes and return the flags by id.
@@ -96,10 +93,8 @@ fn the_warning_lamp_and_code_count_come_from_byte_a() {
         .pids
         .decode(0x01, 0x01, &[0x83, 0x00, 0x00, 0x00], Timestamp::from_unix_millis(0))
         .unwrap();
-    let count = values
-        .iter()
-        .find(|v| v.signal_id == "dtc_count")
-        .expect("dtc_count should be derived");
+    let count =
+        values.iter().find(|v| v.signal_id == "dtc_count").expect("dtc_count should be derived");
     assert_eq!(count.value, Value::Number(3.0), "0x83 is the lamp plus three codes");
 }
 

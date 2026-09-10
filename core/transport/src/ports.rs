@@ -74,9 +74,8 @@ impl PortInfo {
             self.manufacturer.as_deref().unwrap_or("").to_ascii_lowercase(),
             self.product.as_deref().unwrap_or("").to_ascii_lowercase()
         );
-        const HINTS: [&str; 8] = [
-            "obd", "elm", "obdii", "obd2", "vgate", "vlink", "stn", "scantool",
-        ];
+        const HINTS: [&str; 8] =
+            ["obd", "elm", "obdii", "obd2", "vgate", "vlink", "stn", "scantool"];
         self.likely_obd_adapter =
             HINTS.iter().any(|h| haystack.contains(h)) || self.kind == PortKind::Bluetooth;
         self
@@ -188,10 +187,7 @@ mod tests {
         // wired, and a wired link has a line speed that has to be got right —
         // so an unclassifiable port is treated as wired, which is the
         // assumption that fails safely.
-        assert_eq!(
-            PortKind::Bluetooth.transport_kind(),
-            aim_types::TransportKind::Bluetooth
-        );
+        assert_eq!(PortKind::Bluetooth.transport_kind(), aim_types::TransportKind::Bluetooth);
         for k in [PortKind::Usb, PortKind::Native, PortKind::Unknown] {
             assert_eq!(k.transport_kind(), aim_types::TransportKind::Usb, "{k:?}");
         }

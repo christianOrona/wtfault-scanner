@@ -26,6 +26,6 @@ pub mod config;
 pub mod recorder;
 pub mod service;
 
-pub use config::{ChangeContext, ChangePlan, ChangeRequest, Check, DesiredValue, plan_change};
+pub use config::{plan_change, ChangeContext, ChangePlan, ChangeRequest, Check, DesiredValue};
 pub use recorder::SessionRecorder;
 pub use service::{capabilities, DiagnosticService, DtcReport};

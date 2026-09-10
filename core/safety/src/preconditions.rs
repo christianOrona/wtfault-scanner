@@ -115,25 +115,22 @@ pub fn check_all(preconditions: &[Precondition], conditions: &VehicleConditions)
     let failures: Vec<serde_json::Value> = preconditions
         .iter()
         .filter_map(|p| {
-            conditions.check(p).err().map(|why| {
-                serde_json::json!({ "precondition": p.code(), "reason": why })
-            })
+            conditions
+                .check(p)
+                .err()
+                .map(|why| serde_json::json!({ "precondition": p.code(), "reason": why }))
         })
         .collect();
     if failures.is_empty() {
         return Ok(());
     }
-    let summary: Vec<String> = failures
-        .iter()
-        .map(|f| f["reason"].as_str().unwrap_or("unknown").to_string())
-        .collect();
-    Err(
-        AimError::new(
-            ErrorCode::PreconditionFailed,
-            format!("preconditions not met: {}", summary.join("; ")),
-        )
-        .with_details(serde_json::json!({ "failures": failures })),
+    let summary: Vec<String> =
+        failures.iter().map(|f| f["reason"].as_str().unwrap_or("unknown").to_string()).collect();
+    Err(AimError::new(
+        ErrorCode::PreconditionFailed,
+        format!("preconditions not met: {}", summary.join("; ")),
     )
+    .with_details(serde_json::json!({ "failures": failures })))
 }
 
 #[cfg(test)]

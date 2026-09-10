@@ -202,10 +202,7 @@ mod tests {
     fn a_silent_device_produces_a_read_timeout_rather_than_a_hang() {
         let mut t = SimulatedTransport::new(ScenarioId::Healthy);
         t.open().unwrap();
-        t.emulator()
-            .lock()
-            .unwrap()
-            .inject(crate::elm::InjectedFault::Silence);
+        t.emulator().lock().unwrap().inject(crate::elm::InjectedFault::Silence);
         t.write_all(b"ATZ\r").unwrap();
         let (bytes, terminated) =
             aim_transport::read_until(&mut t, b'>', Duration::from_millis(120)).unwrap();

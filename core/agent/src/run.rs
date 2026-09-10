@@ -15,7 +15,9 @@
 //!   see it, say so, and carry on with what it can read.
 
 use crate::error::AgentError;
-use crate::provider::{ChatRequest, Content, LlmProvider, Message, Role, StopReason, ToolSpec, Usage};
+use crate::provider::{
+    ChatRequest, Content, LlmProvider, Message, Role, StopReason, ToolSpec, Usage,
+};
 use crate::report::{self, Report};
 use crate::tools::{summarise_result, ToolExecutor};
 use serde_json::Value;
@@ -356,7 +358,10 @@ impl<'a> Agent<'a> {
                     continue;
                 }
 
-                sink.emit(AgentEvent::ToolStarted { name: name.clone(), arguments: arguments.clone() });
+                sink.emit(AgentEvent::ToolStarted {
+                    name: name.clone(),
+                    arguments: arguments.clone(),
+                });
 
                 let raw = executor.run(&name, &arguments, "agent").await;
                 let success = raw.get("success").and_then(Value::as_bool).unwrap_or(false);
@@ -367,13 +372,16 @@ impl<'a> Agent<'a> {
                 seen.insert(key, summary.clone());
                 if success {
                     ran_tools.insert(name.clone());
-                    if let Some(list) = raw.get("data").and_then(|d| d.get("dtcs")).and_then(|d| d.as_array()) {
+                    if let Some(list) =
+                        raw.get("data").and_then(|d| d.get("dtcs")).and_then(|d| d.as_array())
+                    {
                         for d in list {
                             if let Some(code) = d.get("code").and_then(|c| c.as_str()) {
                                 let status = d.get("status").and_then(|s| s.as_str()).unwrap_or("");
                                 let _ = status;
                                 let up = code.to_ascii_uppercase();
-                                let desc = d.get("description").and_then(|x| x.as_str()).map(String::from);
+                                let desc =
+                                    d.get("description").and_then(|x| x.as_str()).map(String::from);
                                 // Keep the first description seen; the same code
                                 // confirmed and permanent carries the same text.
                                 code_details.entry(up.clone()).or_insert(desc);
@@ -411,8 +419,7 @@ impl<'a> Agent<'a> {
             // measured, clearly labelled as unfinished. This carries no model
             // judgement at all - only codes the vehicle reported and the
             // descriptions this build ships.
-            let codes: Vec<(String, Option<String>)> =
-                code_details.into_iter().collect();
+            let codes: Vec<(String, Option<String>)> = code_details.into_iter().collect();
             report = Some(Report::from_evidence(&codes, steps));
         }
 
@@ -442,9 +449,15 @@ mod tests {
 
     #[async_trait::async_trait]
     impl LlmProvider for ScriptedProvider {
-        fn id(&self) -> &str { "scripted" }
-        fn label(&self) -> &str { "Scripted" }
-        fn model(&self) -> &str { "scripted" }
+        fn id(&self) -> &str {
+            "scripted"
+        }
+        fn label(&self) -> &str {
+            "Scripted"
+        }
+        fn model(&self) -> &str {
+            "scripted"
+        }
         async fn chat(&self, _r: &ChatRequest) -> Result<ChatResponse, AgentError> {
             let mut t = self.turns.lock().unwrap();
             if t.is_empty() {
@@ -518,13 +531,20 @@ mod tests {
     #[tokio::test]
     async fn a_chat_turn_runs_tools_then_answers() {
         let provider = ScriptedProvider::new(vec![
-            turn(vec![tool_use("t1", "read_dtcs", json!({"module":"ECU_7E8"}))], StopReason::ToolUse),
-            turn(vec![Content::text("The engine module has one stored fault.")], StopReason::EndTurn),
+            turn(
+                vec![tool_use("t1", "read_dtcs", json!({"module":"ECU_7E8"}))],
+                StopReason::ToolUse,
+            ),
+            turn(
+                vec![Content::text("The engine module has one stored fault.")],
+                StopReason::EndTurn,
+            ),
         ]);
         let mut exec = FakeExecutor { calls: vec![], answer: ok_envelope() };
         let mut sink = NullSink;
 
-        let out = Agent::new(&provider).chat("sys", vec![Message::user("what is wrong?")], &mut exec, &mut sink)
+        let out = Agent::new(&provider)
+            .chat("sys", vec![Message::user("what is wrong?")], &mut exec, &mut sink)
             .await
             .unwrap();
 
@@ -537,13 +557,17 @@ mod tests {
     #[tokio::test]
     async fn an_inspection_captures_the_submitted_report() {
         let provider = ScriptedProvider::new(vec![
-            turn(vec![tool_use("t1", "read_dtcs", json!({"module":"ECU_7E8"}))], StopReason::ToolUse),
+            turn(
+                vec![tool_use("t1", "read_dtcs", json!({"module":"ECU_7E8"}))],
+                StopReason::ToolUse,
+            ),
             turn(vec![tool_use("t2", report::SUBMIT_TOOL, valid_report())], StopReason::ToolUse),
         ]);
         let mut exec = FakeExecutor { calls: vec![], answer: ok_envelope() };
         let mut sink = NullSink;
 
-        let out = Agent::new(&provider).inspect("sys", "should I buy it?", &mut exec, &mut sink)
+        let out = Agent::new(&provider)
+            .inspect("sys", "should I buy it?", &mut exec, &mut sink)
             .await
             .unwrap();
 
@@ -560,20 +584,26 @@ mod tests {
                              "error":{"code":"vehicle_not_responding","message":"UNABLE TO CONNECT"} });
         let provider = ScriptedProvider::new(vec![
             turn(vec![tool_use("t1", "read_dtcs", json!({}))], StopReason::ToolUse),
-            turn(vec![Content::text("The vehicle did not answer, so I could not read it.")], StopReason::EndTurn),
+            turn(
+                vec![Content::text("The vehicle did not answer, so I could not read it.")],
+                StopReason::EndTurn,
+            ),
         ]);
         let mut exec = FakeExecutor { calls: vec![], answer: failed };
         let mut sink = NullSink;
 
-        let out = Agent::new(&provider).chat("sys", vec![Message::user("scan it")], &mut exec, &mut sink)
+        let out = Agent::new(&provider)
+            .chat("sys", vec![Message::user("scan it")], &mut exec, &mut sink)
             .await
             .unwrap();
 
         assert!(out.text.contains("did not answer"));
         // The failure reached the model as an error-flagged tool result.
         let fed_back = out.messages.iter().any(|m| {
-            m.content.iter().any(|c| matches!(c, Content::ToolResult { is_error: true, content, .. }
-                if content.contains("vehicle_not_responding")))
+            m.content.iter().any(|c| {
+                matches!(c, Content::ToolResult { is_error: true, content, .. }
+                if content.contains("vehicle_not_responding"))
+            })
         });
         assert!(fed_back, "the failure was not shown to the model");
     }
@@ -582,15 +612,26 @@ mod tests {
     async fn a_malformed_report_is_handed_back_for_correction() {
         let provider = ScriptedProvider::new(vec![
             // The codes have to be read before a report is accepted at all.
-            turn(vec![tool_use("t0", "read_dtcs", json!({"module":"ECU_7E8"}))], StopReason::ToolUse),
+            turn(
+                vec![tool_use("t0", "read_dtcs", json!({"module":"ECU_7E8"}))],
+                StopReason::ToolUse,
+            ),
             // Missing the required `summary`.
-            turn(vec![tool_use("t1", report::SUBMIT_TOOL, json!({"verdict":"negotiate","headline":"h"}))], StopReason::ToolUse),
+            turn(
+                vec![tool_use(
+                    "t1",
+                    report::SUBMIT_TOOL,
+                    json!({"verdict":"negotiate","headline":"h"}),
+                )],
+                StopReason::ToolUse,
+            ),
             turn(vec![tool_use("t2", report::SUBMIT_TOOL, valid_report())], StopReason::ToolUse),
         ]);
         let mut exec = FakeExecutor { calls: vec![], answer: ok_envelope() };
         let mut sink = NullSink;
 
-        let out = Agent::new(&provider).inspect("sys", "check it", &mut exec, &mut sink).await.unwrap();
+        let out =
+            Agent::new(&provider).inspect("sys", "check it", &mut exec, &mut sink).await.unwrap();
         assert!(out.report.is_some(), "the model was not given a chance to correct itself");
     }
 
@@ -599,11 +640,16 @@ mod tests {
         // A model stuck in a read loop must not run all night on a slow adapter,
         // and must not return nothing either.
         let mut turns: Vec<ChatResponse> = (0..2)
-            .map(|i| turn(vec![tool_use(&format!("t{i}"), "read_dtcs", json!({}))], StopReason::ToolUse))
+            .map(|i| {
+                turn(vec![tool_use(&format!("t{i}"), "read_dtcs", json!({}))], StopReason::ToolUse)
+            })
             .collect();
         // On the final step only `submit_report` is on offer, so a cooperative
         // model concludes rather than reading again.
-        turns.push(turn(vec![tool_use("t9", report::SUBMIT_TOOL, valid_report())], StopReason::ToolUse));
+        turns.push(turn(
+            vec![tool_use("t9", report::SUBMIT_TOOL, valid_report())],
+            StopReason::ToolUse,
+        ));
 
         let provider = ScriptedProvider::new(turns);
         let mut exec = FakeExecutor { calls: vec![], answer: ok_envelope() };
@@ -631,9 +677,15 @@ mod tests {
 
         #[async_trait::async_trait]
         impl LlmProvider for SpyProvider {
-            fn id(&self) -> &str { "spy" }
-            fn label(&self) -> &str { "Spy" }
-            fn model(&self) -> &str { "spy" }
+            fn id(&self) -> &str {
+                "spy"
+            }
+            fn label(&self) -> &str {
+                "Spy"
+            }
+            fn model(&self) -> &str {
+                "spy"
+            }
             async fn chat(&self, r: &ChatRequest) -> Result<ChatResponse, AgentError> {
                 self.seen.lock().unwrap().push(r.tools.iter().map(|t| t.name.clone()).collect());
                 Ok(turn(vec![tool_use("t", "read_dtcs", json!({}))], StopReason::ToolUse))
@@ -662,14 +714,18 @@ mod tests {
     #[tokio::test]
     async fn an_inspection_that_answers_in_prose_is_asked_for_the_report() {
         let provider = ScriptedProvider::new(vec![
-            turn(vec![tool_use("t0", "read_dtcs", json!({"module":"ECU_7E8"}))], StopReason::ToolUse),
+            turn(
+                vec![tool_use("t0", "read_dtcs", json!({"module":"ECU_7E8"}))],
+                StopReason::ToolUse,
+            ),
             turn(vec![Content::text("Looks fine to me.")], StopReason::EndTurn),
             turn(vec![tool_use("t1", report::SUBMIT_TOOL, valid_report())], StopReason::ToolUse),
         ]);
         let mut exec = FakeExecutor { calls: vec![], answer: ok_envelope() };
         let mut sink = NullSink;
 
-        let out = Agent::new(&provider).inspect("sys", "check it", &mut exec, &mut sink).await.unwrap();
+        let out =
+            Agent::new(&provider).inspect("sys", "check it", &mut exec, &mut sink).await.unwrap();
         assert!(out.report.is_some());
     }
 
@@ -680,20 +736,26 @@ mod tests {
         // detected during the scan" on a truck with three stored codes.
         let provider = ScriptedProvider::new(vec![
             turn(vec![tool_use("t1", report::SUBMIT_TOOL, valid_report())], StopReason::ToolUse),
-            turn(vec![tool_use("t2", "read_dtcs", json!({"module":"ECU_7E8"}))], StopReason::ToolUse),
+            turn(
+                vec![tool_use("t2", "read_dtcs", json!({"module":"ECU_7E8"}))],
+                StopReason::ToolUse,
+            ),
             turn(vec![tool_use("t3", report::SUBMIT_TOOL, valid_report())], StopReason::ToolUse),
         ]);
         let mut exec = FakeExecutor { calls: vec![], answer: ok_envelope() };
         let mut sink = NullSink;
 
-        let out = Agent::new(&provider).inspect("sys", "check it", &mut exec, &mut sink).await.unwrap();
+        let out =
+            Agent::new(&provider).inspect("sys", "check it", &mut exec, &mut sink).await.unwrap();
 
         // The first submission was refused, so the codes did get read.
         assert!(exec.calls.contains(&"read_dtcs".to_string()));
         assert!(out.report.is_some());
         let refused = out.messages.iter().any(|m| {
-            m.content.iter().any(|c| matches!(c, Content::ToolResult { content, is_error: true, .. }
-                if content.contains("read_dtcs")))
+            m.content.iter().any(|c| {
+                matches!(c, Content::ToolResult { content, is_error: true, .. }
+                if content.contains("read_dtcs"))
+            })
         });
         assert!(refused, "the premature report was not refused");
     }
@@ -713,7 +775,10 @@ mod tests {
         });
         // A model that reads, then only ever talks.
         let turns: Vec<ChatResponse> = vec![
-            turn(vec![tool_use("t1", "read_dtcs", json!({"module":"ECU_7E8"}))], StopReason::ToolUse),
+            turn(
+                vec![tool_use("t1", "read_dtcs", json!({"module":"ECU_7E8"}))],
+                StopReason::ToolUse,
+            ),
             turn(vec![Content::text("I am still thinking about it.")], StopReason::EndTurn),
             turn(vec![Content::text("Still thinking.")], StopReason::EndTurn),
         ];
@@ -763,7 +828,12 @@ mod tests {
         // A vehicle whose codes genuinely cannot be read must still produce a
         // report rather than looping until the budget runs out.
         let turns: Vec<ChatResponse> = (0..10)
-            .map(|i| turn(vec![tool_use(&format!("t{i}"), report::SUBMIT_TOOL, valid_report())], StopReason::ToolUse))
+            .map(|i| {
+                turn(
+                    vec![tool_use(&format!("t{i}"), report::SUBMIT_TOOL, valid_report())],
+                    StopReason::ToolUse,
+                )
+            })
             .collect();
         let provider = ScriptedProvider::new(turns);
         let mut exec = FakeExecutor { calls: vec![], answer: ok_envelope() };
@@ -783,8 +853,14 @@ mod tests {
         // Every repeat is a real round trip over a slow Bluetooth adapter, and
         // a 7B model repeats itself readily.
         let provider = ScriptedProvider::new(vec![
-            turn(vec![tool_use("t1", "read_dtcs", json!({"module":"ECU_7E8"}))], StopReason::ToolUse),
-            turn(vec![tool_use("t2", "read_dtcs", json!({"module":"ECU_7E8"}))], StopReason::ToolUse),
+            turn(
+                vec![tool_use("t1", "read_dtcs", json!({"module":"ECU_7E8"}))],
+                StopReason::ToolUse,
+            ),
+            turn(
+                vec![tool_use("t2", "read_dtcs", json!({"module":"ECU_7E8"}))],
+                StopReason::ToolUse,
+            ),
             turn(vec![Content::text("done")], StopReason::EndTurn),
         ]);
         let mut exec = FakeExecutor { calls: vec![], answer: ok_envelope() };
@@ -797,8 +873,10 @@ mod tests {
 
         assert_eq!(exec.calls, vec!["read_dtcs"], "the vehicle was read twice");
         let told = out.messages.iter().any(|m| {
-            m.content.iter().any(|c| matches!(c, Content::ToolResult { content, .. }
-                if content.contains("already_run")))
+            m.content.iter().any(|c| {
+                matches!(c, Content::ToolResult { content, .. }
+                if content.contains("already_run"))
+            })
         });
         assert!(told, "the model was not told it had already run that call");
     }
@@ -806,14 +884,23 @@ mod tests {
     #[tokio::test]
     async fn a_different_argument_is_not_treated_as_a_repeat() {
         let provider = ScriptedProvider::new(vec![
-            turn(vec![tool_use("t1", "read_dtcs", json!({"module":"ECU_7E8"}))], StopReason::ToolUse),
-            turn(vec![tool_use("t2", "read_dtcs", json!({"module":"ECU_7EA"}))], StopReason::ToolUse),
+            turn(
+                vec![tool_use("t1", "read_dtcs", json!({"module":"ECU_7E8"}))],
+                StopReason::ToolUse,
+            ),
+            turn(
+                vec![tool_use("t2", "read_dtcs", json!({"module":"ECU_7EA"}))],
+                StopReason::ToolUse,
+            ),
             turn(vec![Content::text("done")], StopReason::EndTurn),
         ]);
         let mut exec = FakeExecutor { calls: vec![], answer: ok_envelope() };
         let mut sink = NullSink;
 
-        Agent::new(&provider).chat("sys", vec![Message::user("go")], &mut exec, &mut sink).await.unwrap();
+        Agent::new(&provider)
+            .chat("sys", vec![Message::user("go")], &mut exec, &mut sink)
+            .await
+            .unwrap();
         assert_eq!(exec.calls.len(), 2, "a second module must still be read");
     }
 
@@ -821,20 +908,34 @@ mod tests {
     async fn progress_events_are_emitted_for_a_watching_ui() {
         struct Recorder(Vec<AgentEvent>);
         impl EventSink for Recorder {
-            fn emit(&mut self, e: AgentEvent) { self.0.push(e); }
+            fn emit(&mut self, e: AgentEvent) {
+                self.0.push(e);
+            }
         }
 
         let provider = ScriptedProvider::new(vec![
-            turn(vec![Content::text("Reading codes."), tool_use("t1", "read_dtcs", json!({}))], StopReason::ToolUse),
+            turn(
+                vec![Content::text("Reading codes."), tool_use("t1", "read_dtcs", json!({}))],
+                StopReason::ToolUse,
+            ),
             turn(vec![Content::text("Done.")], StopReason::EndTurn),
         ]);
         let mut exec = FakeExecutor { calls: vec![], answer: ok_envelope() };
         let mut sink = Recorder(vec![]);
 
-        Agent::new(&provider).chat("sys", vec![Message::user("go")], &mut exec, &mut sink).await.unwrap();
+        Agent::new(&provider)
+            .chat("sys", vec![Message::user("go")], &mut exec, &mut sink)
+            .await
+            .unwrap();
 
-        assert!(sink.0.iter().any(|e| matches!(e, AgentEvent::ToolStarted { name, .. } if name == "read_dtcs")));
-        assert!(sink.0.iter().any(|e| matches!(e, AgentEvent::ToolFinished { success: true, evidence_ref: Some(103), .. })));
+        assert!(sink
+            .0
+            .iter()
+            .any(|e| matches!(e, AgentEvent::ToolStarted { name, .. } if name == "read_dtcs")));
+        assert!(sink.0.iter().any(|e| matches!(
+            e,
+            AgentEvent::ToolFinished { success: true, evidence_ref: Some(103), .. }
+        )));
         assert_eq!(sink.0.last(), Some(&AgentEvent::Finished));
     }
 }

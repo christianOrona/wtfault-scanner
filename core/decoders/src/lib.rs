@@ -30,7 +30,7 @@ pub use features::{Applicability, FeatureCatalog, FeatureDef, FeatureSupport, Ma
 pub use monitors::{MonitorCatalog, MonitorReading, RawCounts};
 pub use pids::{PidDefinition, PidKind, PidRegistry};
 pub use profiles::{ProfileKind, ProfileLoad, ProfileReport};
-pub use vin::{VinInfo, decode as decode_vin_info};
+pub use vin::{decode as decode_vin_info, VinInfo};
 
 /// The decoder set the diagnostic core runs with: generic SAE PIDs plus the
 /// generic SAE DTC table. Both are embedded in the binary.

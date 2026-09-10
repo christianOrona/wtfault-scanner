@@ -117,12 +117,11 @@ impl LlmProvider for OpenAiProvider {
             AgentError::MalformedResponse { provider: self.label.clone(), detail: e.to_string() }
         })?;
 
-        let choice = parsed.choices.into_iter().next().ok_or_else(|| {
-            AgentError::MalformedResponse {
+        let choice =
+            parsed.choices.into_iter().next().ok_or_else(|| AgentError::MalformedResponse {
                 provider: self.label.clone(),
                 detail: "the response contained no choices".into(),
-            }
-        })?;
+            })?;
 
         let mut content = Vec::new();
         if let Some(t) = choice.message.content.filter(|t| !t.trim().is_empty()) {
@@ -264,11 +263,8 @@ fn to_wire_messages(m: &Message) -> Vec<serde_json::Value> {
             out.push(msg);
         }
         Role::User => {
-            let results: Vec<&Content> = m
-                .content
-                .iter()
-                .filter(|c| matches!(c, Content::ToolResult { .. }))
-                .collect();
+            let results: Vec<&Content> =
+                m.content.iter().filter(|c| matches!(c, Content::ToolResult { .. })).collect();
 
             if results.is_empty() {
                 out.push(json!({ "role": "user", "content": text }));

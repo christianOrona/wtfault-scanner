@@ -277,11 +277,7 @@ impl UdsRequest {
     pub fn write_data_by_identifier(did: u16, value: &[u8]) -> Self {
         let mut data = did.to_be_bytes().to_vec();
         data.extend_from_slice(value);
-        UdsRequest {
-            service: UdsService::WriteDataByIdentifier,
-            sub_function: None,
-            data,
-        }
+        UdsRequest { service: UdsService::WriteDataByIdentifier, sub_function: None, data }
     }
 
     /// SecurityAccess, requesting the seed for a given level.
@@ -661,8 +657,7 @@ mod tests {
             }
         );
         assert_eq!(
-            r.parameters_for(&UdsRequest::read_data_by_identifier(0xF190))
-                .unwrap(),
+            r.parameters_for(&UdsRequest::read_data_by_identifier(0xF190)).unwrap(),
             &[0xF1, 0x90, 0x31]
         );
     }
@@ -670,9 +665,7 @@ mod tests {
     #[test]
     fn negative_responses_carry_the_full_nrc_detail() {
         let r = UdsResponse::parse(&[0x7F, 0x22, 0x31]).unwrap();
-        let err = r
-            .parameters_for(&UdsRequest::read_data_by_identifier(0xF190))
-            .unwrap_err();
+        let err = r.parameters_for(&UdsRequest::read_data_by_identifier(0xF190)).unwrap_err();
         assert_eq!(err.code, ErrorCode::NegativeResponse);
         let d = err.details.unwrap();
         assert_eq!(d["nrc"], 0x31);
@@ -708,9 +701,7 @@ mod tests {
     #[test]
     fn wrong_service_in_response_is_an_error() {
         let r = UdsResponse::parse(&[0x50, 0x03]).unwrap();
-        let err = r
-            .parameters_for(&UdsRequest::read_data_by_identifier(0xF190))
-            .unwrap_err();
+        let err = r.parameters_for(&UdsRequest::read_data_by_identifier(0xF190)).unwrap_err();
         assert_eq!(err.code, ErrorCode::UnexpectedResponse);
     }
 

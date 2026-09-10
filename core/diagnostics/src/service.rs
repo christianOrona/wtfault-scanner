@@ -90,9 +90,8 @@ pub mod capabilities {
 /// is a guess about a vehicle and a sweep is a measurement of one.
 const UDS_SCAN_RANGE: std::ops::RangeInclusive<u16> = 0x700..=0x7EF;
 
-const FREEZE_FRAME_PIDS: [u8; 14] = [
-    0x03, 0x04, 0x05, 0x0B, 0x0C, 0x0D, 0x0F, 0x10, 0x11, 0x1F, 0x21, 0x2F, 0x33, 0x42,
-];
+const FREEZE_FRAME_PIDS: [u8; 14] =
+    [0x03, 0x04, 0x05, 0x0B, 0x0C, 0x0D, 0x0F, 0x10, 0x11, 0x1F, 0x21, 0x2F, 0x33, 0x42];
 
 /// What one operation produced, before it is wrapped in the §7 envelope.
 #[derive(Debug, Default)]
@@ -106,10 +105,7 @@ struct Payload {
 
 impl Payload {
     fn with_data(data: serde_json::Value) -> Self {
-        Payload {
-            data: Some(data),
-            ..Default::default()
-        }
+        Payload { data: Some(data), ..Default::default() }
     }
 }
 
@@ -242,8 +238,7 @@ impl DiagnosticService {
     /// Record an operator note in the flight recorder — handoff §19's
     /// "I just unplugged the sensor" case.
     pub fn note(&self, text: impl Into<String>) -> AimResult<i64> {
-        self.store
-            .append_event(&self.session.id, EventKind::UserNote { text: text.into() })
+        self.store.append_event(&self.session.id, EventKind::UserNote { text: text.into() })
     }
 
     // ------------------------------------------------------------ plumbing
@@ -423,15 +418,13 @@ impl DiagnosticService {
     }
 
     fn module_by_key(&self, key: &str) -> AimResult<Module> {
-        self.store
-            .modules(&self.session.id)?
-            .into_iter()
-            .find(|m| m.module_key == key)
-            .ok_or_else(|| {
+        self.store.modules(&self.session.id)?.into_iter().find(|m| m.module_key == key).ok_or_else(
+            || {
                 AimError::not_found(format!(
                     "no module {key:?} in this session; run scan_modules first"
                 ))
-            })
+            },
+        )
     }
 
     fn require_usable(&self) -> AimResult<()> {
@@ -482,11 +475,8 @@ impl DiagnosticService {
         self.conditions.ignition_on = matches!(state, ConnectionState::Ready);
         self.conditions.battery_voltage = health.battery_voltage;
 
-        let mut warnings: Vec<Warning> = caps
-            .caveats
-            .iter()
-            .map(|c| Warning::caution("adapter_caveat", c.clone()))
-            .collect();
+        let mut warnings: Vec<Warning> =
+            caps.caveats.iter().map(|c| Warning::caution("adapter_caveat", c.clone())).collect();
         if let ConnectionState::Degraded { reason } = &state {
             warnings.push(Warning::serious("adapter_degraded", reason.clone()));
         }
@@ -509,18 +499,16 @@ impl DiagnosticService {
     pub fn disconnect(&mut self, initiator: &str) -> ToolResult {
         let t0 = Instant::now();
         self.record_invocation("disconnect", initiator, serde_json::json!({}));
-        let outcome = self
-            .authorize(capabilities::DISCONNECT, initiator, None)
-            .and_then(|_| {
-                self.adapter.disconnect()?;
-                if let Some(id) = &self.connection_id {
-                    self.store.close_connection(id)?;
-                }
-                self.conditions = VehicleConditions::unknown();
-                Ok(Payload::with_data(serde_json::json!({
-                    "state": self.adapter.state(),
-                })))
-            });
+        let outcome = self.authorize(capabilities::DISCONNECT, initiator, None).and_then(|_| {
+            self.adapter.disconnect()?;
+            if let Some(id) = &self.connection_id {
+                self.store.close_connection(id)?;
+            }
+            self.conditions = VehicleConditions::unknown();
+            Ok(Payload::with_data(serde_json::json!({
+                "state": self.adapter.state(),
+            })))
+        });
         self.finish("disconnect", capabilities::DISCONNECT, t0, outcome)
     }
 
@@ -558,12 +546,7 @@ impl DiagnosticService {
         let outcome = self
             .authorize(capabilities::IDENTIFY_VEHICLE, initiator, None)
             .and_then(|_| self.identify_vehicle_inner());
-        self.finish(
-            "identify_vehicle",
-            capabilities::IDENTIFY_VEHICLE,
-            t0,
-            outcome,
-        )
+        self.finish("identify_vehicle", capabilities::IDENTIFY_VEHICLE, t0, outcome)
     }
 
     fn identify_vehicle_inner(&mut self) -> AimResult<Payload> {
@@ -808,12 +791,7 @@ impl DiagnosticService {
         let outcome = self
             .authorize(capabilities::MODULE_IDENTITY, initiator, None)
             .and_then(|_| self.module_identity_inner(module_key));
-        self.finish(
-            "get_module_identity",
-            capabilities::MODULE_IDENTITY,
-            t0,
-            outcome,
-        )
+        self.finish("get_module_identity", capabilities::MODULE_IDENTITY, t0, outcome)
     }
 
     fn module_identity_inner(&mut self, module_key: &str) -> AimResult<Payload> {
@@ -878,12 +856,7 @@ impl DiagnosticService {
         let outcome = self
             .authorize(capabilities::READ_SUPPORTED_PIDS, initiator, None)
             .and_then(|_| self.supported_pids_inner(module_key));
-        self.finish(
-            "read_supported_pids",
-            capabilities::READ_SUPPORTED_PIDS,
-            t0,
-            outcome,
-        )
+        self.finish("read_supported_pids", capabilities::READ_SUPPORTED_PIDS, t0, outcome)
     }
 
     fn supported_pids_inner(&mut self, module_key: &str) -> AimResult<Payload> {
@@ -921,10 +894,7 @@ impl DiagnosticService {
                 }),
             })
             .collect();
-        let undecodable = described
-            .iter()
-            .filter(|d| d["decoder_available"] == false)
-            .count();
+        let undecodable = described.iter().filter(|d| d["decoder_available"] == false).count();
 
         let mut warnings = Vec::new();
         if undecodable > 0 {
@@ -969,12 +939,7 @@ impl DiagnosticService {
         let outcome = self
             .authorize(capabilities::READ_MONITOR_TESTS, initiator, None)
             .and_then(|_| self.monitor_tests_inner(module_key));
-        self.finish(
-            "read_monitor_tests",
-            capabilities::READ_MONITOR_TESTS,
-            t0,
-            outcome,
-        )
+        self.finish("read_monitor_tests", capabilities::READ_MONITOR_TESTS, t0, outcome)
     }
 
     fn monitor_tests_inner(&mut self, module_key: &str) -> AimResult<Payload> {
@@ -1031,10 +996,7 @@ impl DiagnosticService {
                 // naming rather than dropping: it is usually a monitor that has
                 // not run yet this drive cycle.
                 Err(e) => {
-                    if matches!(
-                        e.code,
-                        ErrorCode::AdapterError | ErrorCode::VehicleNotResponding
-                    ) {
+                    if matches!(e.code, ErrorCode::AdapterError | ErrorCode::VehicleNotResponding) {
                         bus_errors += 1;
                     }
                     unanswered.push(format!("{mid:02X}"));
@@ -1094,10 +1056,8 @@ impl DiagnosticService {
         // Under a tenth of the limit band left is the interesting case: still
         // passing, so no code, but not for much longer.
         const MARGINAL: f64 = 0.10;
-        let marginal = readings
-            .iter()
-            .filter(|r| r.passed && r.margin.is_some_and(|m| m < MARGINAL))
-            .count();
+        let marginal =
+            readings.iter().filter(|r| r.passed && r.margin.is_some_and(|m| m < MARGINAL)).count();
 
         Ok(Payload {
             data: Some(serde_json::json!({
@@ -1161,12 +1121,8 @@ impl DiagnosticService {
             }
         }
         // 0x00 and the continuation markers are questions, not monitors.
-        let list: Vec<u8> = found
-            .into_iter()
-            .filter(|m| *m != 0x00 && m % 0x20 != 0)
-            .collect();
-        self.supported_mids
-            .insert(module.module_key.clone(), list.clone());
+        let list: Vec<u8> = found.into_iter().filter(|m| *m != 0x00 && m % 0x20 != 0).collect();
+        self.supported_mids.insert(module.module_key.clone(), list.clone());
         Ok(list)
     }
 
@@ -1187,11 +1143,7 @@ impl DiagnosticService {
 
     fn features_inner(&mut self) -> Payload {
         let (make, year, vin) = match &self.vehicle {
-            Some(v) => (
-                v.make.clone(),
-                v.year,
-                v.vin.clone(),
-            ),
+            Some(v) => (v.make.clone(), v.year, v.vin.clone()),
             None => (None, None, None),
         };
         let features: Vec<serde_json::Value> = self
@@ -1259,12 +1211,7 @@ impl DiagnosticService {
         let outcome = self
             .authorize(capabilities::PREVIEW_CHANGE, initiator, None)
             .and_then(|_| self.preview_inner(feature_id, desired));
-        self.finish(
-            "preview_configuration_change",
-            capabilities::PREVIEW_CHANGE,
-            t0,
-            outcome,
-        )
+        self.finish("preview_configuration_change", capabilities::PREVIEW_CHANGE, t0, outcome)
     }
 
     fn preview_inner(
@@ -1272,17 +1219,10 @@ impl DiagnosticService {
         feature_id: &str,
         desired: crate::config::DesiredValue,
     ) -> AimResult<Payload> {
-        let modules: Vec<String> = self
-            .store
-            .modules(&self.session.id)?
-            .into_iter()
-            .map(|m| m.module_key)
-            .collect();
+        let modules: Vec<String> =
+            self.store.modules(&self.session.id)?.into_iter().map(|m| m.module_key).collect();
         let caps = self.adapter.capabilities();
-        let request = crate::config::ChangeRequest {
-            feature_id: feature_id.to_string(),
-            desired,
-        };
+        let request = crate::config::ChangeRequest { feature_id: feature_id.to_string(), desired };
         let ctx = crate::config::ChangeContext {
             vehicle: self.vehicle.as_ref(),
             adapter: Some(&caps),
@@ -1291,11 +1231,8 @@ impl DiagnosticService {
             battery_voltage: self.conditions.battery_voltage,
             max_level: aim_safety::MAX_ENABLED_LEVEL,
         };
-        let plan = crate::config::plan_change(
-            &request,
-            self.decoders.features.get(feature_id),
-            &ctx,
-        );
+        let plan =
+            crate::config::plan_change(&request, self.decoders.features.get(feature_id), &ctx);
 
         let mut warnings = Vec::new();
         if !plan.can_apply {
@@ -1354,12 +1291,7 @@ impl DiagnosticService {
         let outcome = self
             .authorize(capabilities::WRITE_FEATURE, initiator, Some(confirmation))
             .and_then(|_| self.apply_change_inner(feature_id, desired));
-        self.finish(
-            "apply_configuration_change",
-            capabilities::WRITE_FEATURE,
-            t0,
-            outcome,
-        )
+        self.finish("apply_configuration_change", capabilities::WRITE_FEATURE, t0, outcome)
     }
 
     fn apply_change_inner(
@@ -1369,20 +1301,13 @@ impl DiagnosticService {
     ) -> AimResult<Payload> {
         // 1. The plan, recomputed now rather than trusted from the preview.
         let plan_payload = self.preview_inner(feature_id, desired)?;
-        let plan: crate::config::ChangePlan = plan_payload
-            .data
-            .clone()
-            .and_then(|v| serde_json::from_value(v).ok())
-            .ok_or_else(|| {
-                AimError::new(ErrorCode::Internal, "could not re-evaluate the change plan")
-            })?;
+        let plan: crate::config::ChangePlan =
+            plan_payload.data.clone().and_then(|v| serde_json::from_value(v).ok()).ok_or_else(
+                || AimError::new(ErrorCode::Internal, "could not re-evaluate the change plan"),
+            )?;
         if !plan.can_apply {
-            let failed: Vec<&str> = plan
-                .checks
-                .iter()
-                .filter(|c| !c.passed)
-                .map(|c| c.id.as_str())
-                .collect();
+            let failed: Vec<&str> =
+                plan.checks.iter().filter(|c| !c.passed).map(|c| c.id.as_str()).collect();
             return Err(AimError::new(
                 ErrorCode::PreconditionFailed,
                 format!(
@@ -1401,11 +1326,8 @@ impl DiagnosticService {
             let feature = self.decoders.features.get(feature_id).ok_or_else(|| {
                 AimError::new(ErrorCode::NotFound, format!("no feature {feature_id}"))
             })?;
-            let target = feature
-                .mapping
-                .as_ref()
-                .and_then(|m| m.as_data_identifier())
-                .ok_or_else(|| {
+            let target =
+                feature.mapping.as_ref().and_then(|m| m.as_data_identifier()).ok_or_else(|| {
                     AimError::new(
                         ErrorCode::PreconditionFailed,
                         "this feature has no mapping that can be executed. Nobody has recorded \
@@ -1453,11 +1375,12 @@ impl DiagnosticService {
         }
 
         // 5. Write the whole record back.
-        let write =
-            aim_protocols::UdsRequest::write_data_by_identifier(target.did, &after_bytes).to_bytes();
+        let write = aim_protocols::UdsRequest::write_data_by_identifier(target.did, &after_bytes)
+            .to_bytes();
         let write_reply = self.adapter.request_pdu(&write, &addr, budget)?;
         let wrote_ok = write_reply.iter().any(|m| {
-            m.payload.first() == Some(&aim_protocols::UdsService::WriteDataByIdentifier.response_id())
+            m.payload.first()
+                == Some(&aim_protocols::UdsService::WriteDataByIdentifier.response_id())
         });
         if !wrote_ok {
             return Err(AimError::new(
@@ -1560,8 +1483,7 @@ impl DiagnosticService {
             }
         }
         let list: Vec<u8> = found.into_iter().collect();
-        self.supported_pids
-            .insert(module.module_key.clone(), list.clone());
+        self.supported_pids.insert(module.module_key.clone(), list.clone());
         Ok(list)
     }
 
@@ -1570,11 +1492,7 @@ impl DiagnosticService {
     /// `module_key` of `None` reads every discovered module.
     pub fn read_dtcs(&mut self, module_key: Option<&str>, initiator: &str) -> ToolResult {
         let t0 = Instant::now();
-        self.record_invocation(
-            "read_dtcs",
-            initiator,
-            serde_json::json!({ "module": module_key }),
-        );
+        self.record_invocation("read_dtcs", initiator, serde_json::json!({ "module": module_key }));
         let outcome = self
             .authorize(capabilities::READ_DTCS, initiator, None)
             .and_then(|_| self.read_dtcs_inner(module_key));
@@ -1684,10 +1602,7 @@ impl DiagnosticService {
             }
         }
 
-        let confirmed = reports
-            .iter()
-            .filter(|r| r.status == DtcStatus::Confirmed)
-            .count();
+        let confirmed = reports.iter().filter(|r| r.status == DtcStatus::Confirmed).count();
         Ok(Payload {
             data: Some(serde_json::json!({
                 "dtcs": reports,
@@ -1717,12 +1632,7 @@ impl DiagnosticService {
         let outcome = self
             .authorize(capabilities::READ_FREEZE_FRAME, initiator, None)
             .and_then(|_| self.freeze_frame_inner(module_key, frame));
-        self.finish(
-            "read_freeze_frame",
-            capabilities::READ_FREEZE_FRAME,
-            t0,
-            outcome,
-        )
+        self.finish("read_freeze_frame", capabilities::READ_FREEZE_FRAME, t0, outcome)
     }
 
     fn freeze_frame_inner(&mut self, module_key: &str, frame: u8) -> AimResult<Payload> {
@@ -1814,24 +1724,22 @@ impl DiagnosticService {
             initiator,
             serde_json::json!({ "module": module_key, "signal": signal }),
         );
-        let outcome = self
-            .authorize(capabilities::READ_PID, initiator, None)
-            .and_then(|_| {
-                let module = self.module_by_key(module_key)?;
-                let pid = self.resolve_signal(signal)?;
-                let (values, evidence) = self.sample(&module, pid)?;
-                Ok(Payload {
-                    values,
-                    data: Some(serde_json::json!({
-                        "module": module_key,
-                        "pid": pid,
-                        "hex": format!("{pid:02X}"),
-                    })),
-                    evidence,
-                    module: Some(module_key.to_string()),
-                    ..Default::default()
-                })
-            });
+        let outcome = self.authorize(capabilities::READ_PID, initiator, None).and_then(|_| {
+            let module = self.module_by_key(module_key)?;
+            let pid = self.resolve_signal(signal)?;
+            let (values, evidence) = self.sample(&module, pid)?;
+            Ok(Payload {
+                values,
+                data: Some(serde_json::json!({
+                    "module": module_key,
+                    "pid": pid,
+                    "hex": format!("{pid:02X}"),
+                })),
+                evidence,
+                module: Some(module_key.to_string()),
+                ..Default::default()
+            })
+        });
         self.finish("read_pid", capabilities::READ_PID, t0, outcome)
     }
 
@@ -1900,10 +1808,7 @@ impl DiagnosticService {
                     values.append(&mut decoded);
                 }
                 Err(e) => {
-                    if matches!(
-                        e.code,
-                        ErrorCode::AdapterError | ErrorCode::VehicleNotResponding
-                    ) {
+                    if matches!(e.code, ErrorCode::AdapterError | ErrorCode::VehicleNotResponding) {
                         bus_errors += 1;
                     }
                     warnings.push(Warning::caution(
@@ -1981,12 +1886,7 @@ impl DiagnosticService {
         let outcome = self
             .authorize(capabilities::SCAN_ALL_MODULES, initiator, None)
             .and_then(|_| self.scan_all_inner());
-        self.finish(
-            "scan_all_modules",
-            capabilities::SCAN_ALL_MODULES,
-            t0,
-            outcome,
-        )
+        self.finish("scan_all_modules", capabilities::SCAN_ALL_MODULES, t0, outcome)
     }
 
     fn scan_all_inner(&mut self) -> AimResult<Payload> {
@@ -2210,9 +2110,7 @@ impl DiagnosticService {
         }
 
         if per_module.is_empty() {
-            return Err(AimError::no_data(
-                "no module reported emissions readiness",
-            ));
+            return Err(AimError::no_data("no module reported emissions readiness"));
         }
 
         // Do any two modules disagree about how far the vehicle has gone since
@@ -2275,8 +2173,11 @@ impl DiagnosticService {
             if let Some(e) = evidence {
                 value.provenance = value.provenance.clone().with_evidence_ref(e);
             }
-            self.store
-                .record_measurement(&measurement_from(&self.session.id, &module.id, value))?;
+            self.store.record_measurement(&measurement_from(
+                &self.session.id,
+                &module.id,
+                value,
+            ))?;
             let _ = self.store.append_event(
                 &self.session.id,
                 EventKind::MeasurementRecorded {
@@ -2340,10 +2241,7 @@ impl DiagnosticService {
         let t = signal.trim();
         let parsed = match t.strip_prefix("0x").or_else(|| t.strip_prefix("0X")) {
             Some(hex) => u8::from_str_radix(hex, 16).ok(),
-            None => t
-                .parse::<u8>()
-                .ok()
-                .or_else(|| u8::from_str_radix(t, 16).ok()),
+            None => t.parse::<u8>().ok().or_else(|| u8::from_str_radix(t, 16).ok()),
         };
         parsed.ok_or_else(|| {
             AimError::new(
@@ -2439,14 +2337,8 @@ mod tests {
         // used-car buyer most needs and rebuilding them costs 50 to 100 miles.
         let registry = CapabilityRegistry::phase1();
         let cap = registry.get(capabilities::CLEAR_DTCS).unwrap();
-        assert!(
-            cap.level <= aim_safety::MAX_ENABLED_LEVEL,
-            "a person must be able to clear codes"
-        );
-        assert!(
-            cap.level.requires_confirmation(),
-            "and never without saying so explicitly"
-        );
+        assert!(cap.level <= aim_safety::MAX_ENABLED_LEVEL, "a person must be able to clear codes");
+        assert!(cap.level.requires_confirmation(), "and never without saying so explicitly");
         assert!(cap.mutating, "it changes the vehicle and must be audited as such");
     }
 }

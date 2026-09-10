@@ -195,12 +195,7 @@ pub fn encode_pid(pid: u8, s: &VehicleState) -> Option<Vec<u8>> {
         // Monitor status. Bit 7 of A is the MIL; the low seven bits are the
         // confirmed DTC count. Bytes B..D are monitor availability bits, left
         // at a plain "compression ignition monitors supported" pattern.
-        0x01 => vec![
-            (if s.mil_on { 0x80 } else { 0x00 }) | (s.dtc_count & 0x7F),
-            0x07,
-            0xE1,
-            0x00,
-        ],
+        0x01 => vec![(if s.mil_on { 0x80 } else { 0x00 }) | (s.dtc_count & 0x7F), 0x07, 0xE1, 0x00],
         // Fuel system status: a compression-ignition engine has no closed-loop
         // fuelling in the spark-ignition sense, so both loops report 0.
         0x03 => vec![0x00, 0x00],
@@ -258,10 +253,7 @@ mod tests {
         assert_eq!(enc_temp(88.0), 128);
         // (256A + B) / 4
         assert_eq!(enc_rpm(1200.0), [0x12, 0xC0]);
-        assert_eq!(
-            (u16::from_be_bytes(enc_rpm(1200.0)) as f64) / 4.0,
-            1200.0
-        );
+        assert_eq!((u16::from_be_bytes(enc_rpm(1200.0)) as f64) / 4.0, 1200.0);
         // A * 100 / 255
         let load = enc_percent(40.0);
         assert!(((load as f64) * 100.0 / 255.0 - 40.0).abs() < 0.5);

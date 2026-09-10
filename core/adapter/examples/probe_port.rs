@@ -9,10 +9,7 @@
 use std::time::Duration;
 
 fn main() {
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::DEBUG)
-        .with_target(true)
-        .init();
+    tracing_subscriber::fmt().with_max_level(tracing::Level::DEBUG).with_target(true).init();
 
     let port = std::env::args().nth(1).unwrap_or_else(|| "COM5".into());
 
@@ -49,13 +46,17 @@ fn main() {
         }
     }
 
-    println!("
---- raw bytes at 500000, and how the parser classifies them ---");
+    println!(
+        "
+--- raw bytes at 500000, and how the parser classifies them ---"
+    );
     raw_dump(&port, 500_000);
 
     println!("\n--- find_baud, exactly as connect calls it ---");
     match aim_adapter::probe::find_baud(&port, Duration::from_millis(1_200)) {
-        Ok((id, baud)) => println!("  baud={baud:?} responded={} banner={:?}", id.responded, id.banner),
+        Ok((id, baud)) => {
+            println!("  baud={baud:?} responded={} banner={:?}", id.responded, id.banner)
+        }
         Err(e) => println!("  ERROR {:?} {}", e.code, e.message),
     }
 }
@@ -81,13 +82,9 @@ fn raw_dump(port: &str, baud: u32) {
         }
         match aim_transport::read_until(&mut t, b'>', std::time::Duration::from_millis(1_200)) {
             Ok((bytes, terminated)) => {
-                let text = String::from_utf8_lossy(&bytes)
-                    .replace('\r', "<CR>")
-                    .replace('\n', "<LF>");
-                println!(
-                    "  {cmd:<5} terminated={terminated} {} bytes: {text}",
-                    bytes.len()
-                );
+                let text =
+                    String::from_utf8_lossy(&bytes).replace('\r', "<CR>").replace('\n', "<LF>");
+                println!("  {cmd:<5} terminated={terminated} {} bytes: {text}", bytes.len());
                 let parsed = aim_adapter::response::parse(
                     cmd,
                     &String::from_utf8_lossy(&bytes),

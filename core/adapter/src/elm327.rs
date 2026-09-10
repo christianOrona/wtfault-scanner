@@ -227,10 +227,8 @@ impl Elm327Adapter {
         if r.class.is_success() {
             Ok(true)
         } else {
-            self.caps.add_caveat(format!(
-                "device rejected {command} ({why}) with {}",
-                r.class.as_str()
-            ));
+            self.caps
+                .add_caveat(format!("device rejected {command} ({why}) with {}", r.class.as_str()));
             Ok(false)
         }
     }
@@ -576,8 +574,7 @@ impl Elm327Adapter {
             .and_then(|l| parse_protocol_number(l))
             .unwrap_or(ObdProtocol::Unknown);
         if self.protocol == ObdProtocol::Unknown {
-            self.caps
-                .add_caveat("adapter did not report a usable protocol number from ATDPN");
+            self.caps.add_caveat("adapter did not report a usable protocol number from ATDPN");
         }
         if !self.protocol.is_can() && self.protocol != ObdProtocol::Unknown {
             self.caps.add_caveat(format!(
@@ -590,11 +587,7 @@ impl Elm327Adapter {
         // are the only honest evidence available at connect time.
         let mean = self.mean_latency_ms();
         // The ceiling follows the hardware, not the product.
-        let ceiling = if self.stn_confirmed {
-            THROUGHPUT_CEILING_STN
-        } else {
-            THROUGHPUT_CEILING
-        };
+        let ceiling = if self.stn_confirmed { THROUGHPUT_CEILING_STN } else { THROUGHPUT_CEILING };
         self.caps.max_reliable_throughput = if self.latency_samples == 0 {
             0.0
         } else if mean <= 0.0 {
@@ -617,15 +610,12 @@ impl Elm327Adapter {
         if let Some(e) = r.error() {
             return Err(e);
         }
-        r.lines
-            .iter()
-            .find_map(|l| parse_voltage(l))
-            .ok_or_else(|| {
-                AimError::new(
-                    ErrorCode::ProtocolMalformedResponse,
-                    format!("ATRV returned {:?}, which is not a voltage", r.lines),
-                )
-            })
+        r.lines.iter().find_map(|l| parse_voltage(l)).ok_or_else(|| {
+            AimError::new(
+                ErrorCode::ProtocolMalformedResponse,
+                format!("ATRV returned {:?}, which is not a voltage", r.lines),
+            )
+        })
     }
 
     fn mean_latency_ms(&self) -> f64 {
@@ -659,10 +649,7 @@ impl Elm327Adapter {
         } else {
             Err(AimError::new(
                 ErrorCode::NoActiveSession,
-                format!(
-                    "adapter is {} and cannot service requests",
-                    self.state.name()
-                ),
+                format!("adapter is {} and cannot service requests", self.state.name()),
             )
             .with_capabilities(self.caps.clone()))
         }
@@ -702,10 +689,7 @@ impl Elm327Adapter {
                 self.config.max_reconnect_attempts
             ),
         );
-        self.set_state(ConnectionState::Failed {
-            code: err.code,
-            detail: err.message.clone(),
-        });
+        self.set_state(ConnectionState::Failed { code: err.code, detail: err.message.clone() });
         Err(err)
     }
 
@@ -778,30 +762,21 @@ impl DiagnosticAdapter for Elm327Adapter {
         self.caps = AdapterCapabilities::unknown(self.transport.kind());
 
         if let Err(e) = self.transport.open() {
-            self.set_state(ConnectionState::Failed {
-                code: e.code,
-                detail: e.message.clone(),
-            });
+            self.set_state(ConnectionState::Failed { code: e.code, detail: e.message.clone() });
             self.observer.on_failure(None, &e);
             return Err(e);
         }
 
         self.set_state(ConnectionState::Initializing);
         if let Err(e) = self.initialize() {
-            self.set_state(ConnectionState::Failed {
-                code: e.code,
-                detail: e.message.clone(),
-            });
+            self.set_state(ConnectionState::Failed { code: e.code, detail: e.message.clone() });
             self.observer.on_failure(None, &e);
             return Err(e);
         }
 
         self.set_state(ConnectionState::Identifying);
         if let Err(e) = self.identify() {
-            self.set_state(ConnectionState::Failed {
-                code: e.code,
-                detail: e.message.clone(),
-            });
+            self.set_state(ConnectionState::Failed { code: e.code, detail: e.message.clone() });
             self.observer.on_failure(None, &e);
             return Err(e);
         }
@@ -813,10 +788,7 @@ impl DiagnosticAdapter for Elm327Adapter {
         let answering = match self.negotiate_protocol() {
             Ok(v) => v,
             Err(e) => {
-                self.set_state(ConnectionState::Failed {
-                    code: e.code,
-                    detail: e.message.clone(),
-                });
+                self.set_state(ConnectionState::Failed { code: e.code, detail: e.message.clone() });
                 self.observer.on_failure(None, &e);
                 return Err(e);
             }
@@ -867,17 +839,12 @@ impl DiagnosticAdapter for Elm327Adapter {
 
         // ok_lines() converts NO DATA / ? / UNABLE TO CONNECT into structured
         // errors. Nothing is swallowed.
-        let lines = reply
-            .ok_lines()
-            .map_err(|e| e.with_capabilities(self.caps.clone()))?;
+        let lines = reply.ok_lines().map_err(|e| e.with_capabilities(self.caps.clone()))?;
 
         let messages = self.assemble(lines)?;
         if messages.is_empty() {
-            return Err(AimError::new(
-                ErrorCode::NoData,
-                format!("no ECU answered {command}"),
-            )
-            .with_capabilities(self.caps.clone()));
+            return Err(AimError::new(ErrorCode::NoData, format!("no ECU answered {command}"))
+                .with_capabilities(self.caps.clone()));
         }
         Ok(messages)
     }
@@ -1015,7 +982,11 @@ pub fn parse_voltage(line: &str) -> Option<f64> {
 /// the protocol is not yet known, the width is inferred from the line length
 /// (an 11-bit line has an odd number of hex digits, a 29-bit line an even one)
 /// and a line that fits neither is rejected rather than guessed at.
-fn split_header_line(line: &str, spaces: bool, protocol: ObdProtocol) -> AimResult<(String, Vec<u8>)> {
+fn split_header_line(
+    line: &str,
+    spaces: bool,
+    protocol: ObdProtocol,
+) -> AimResult<(String, Vec<u8>)> {
     let trimmed = line.trim();
     if spaces && trimmed.contains(' ') {
         let mut parts = trimmed.split_whitespace();
@@ -1044,11 +1015,7 @@ fn split_header_line(line: &str, spaces: bool, protocol: ObdProtocol) -> AimResu
     // number of hex digits can only have come from a 3-digit header.
     const HEADER_11_BIT: usize = 3;
     const HEADER_29_BIT: usize = 8;
-    let is_11_bit = if protocol.is_can() {
-        !protocol.is_29_bit()
-    } else {
-        hex.len() % 2 == 1
-    };
+    let is_11_bit = if protocol.is_can() { !protocol.is_29_bit() } else { hex.len() % 2 == 1 };
     let header_width = if is_11_bit { HEADER_11_BIT } else { HEADER_29_BIT };
     if hex.len() <= header_width {
         return Err(AimError::new(
@@ -1148,10 +1115,8 @@ pub fn assemble_can(
 pub fn assemble_non_can(lines: &[String]) -> Vec<EcuMessage> {
     let mut out: Vec<EcuMessage> = Vec::new();
     for line in lines {
-        let bytes: Vec<u8> = line
-            .split_whitespace()
-            .filter_map(|p| u8::from_str_radix(p, 16).ok())
-            .collect();
+        let bytes: Vec<u8> =
+            line.split_whitespace().filter_map(|p| u8::from_str_radix(p, 16).ok()).collect();
         if bytes.len() < 4 {
             continue;
         }
@@ -1162,11 +1127,7 @@ pub fn assemble_non_can(lines: &[String]) -> Vec<EcuMessage> {
                 prev.payload.extend_from_slice(&payload);
                 prev.raw_lines.push(line.clone());
             }
-            _ => out.push(EcuMessage {
-                address,
-                payload,
-                raw_lines: vec![line.clone()],
-            }),
+            _ => out.push(EcuMessage { address, payload, raw_lines: vec![line.clone()] }),
         }
     }
     out
@@ -1215,11 +1176,7 @@ pub fn assemble_headerless(lines: &[String]) -> AimResult<Vec<EcuMessage>> {
     if payload.is_empty() {
         return Ok(Vec::new());
     }
-    Ok(vec![EcuMessage {
-        address: String::from("unknown"),
-        payload,
-        raw_lines: used,
-    }])
+    Ok(vec![EcuMessage { address: String::from("unknown"), payload, raw_lines: used }])
 }
 
 #[cfg(test)]
@@ -1232,18 +1189,9 @@ mod tests {
 
     #[test]
     fn protocol_number_parsing_handles_the_auto_prefix() {
-        assert_eq!(
-            parse_protocol_number("A6"),
-            Some(ObdProtocol::Iso15765Can11_500)
-        );
-        assert_eq!(
-            parse_protocol_number("6"),
-            Some(ObdProtocol::Iso15765Can11_500)
-        );
-        assert_eq!(
-            parse_protocol_number("A7"),
-            Some(ObdProtocol::Iso15765Can29_500)
-        );
+        assert_eq!(parse_protocol_number("A6"), Some(ObdProtocol::Iso15765Can11_500));
+        assert_eq!(parse_protocol_number("6"), Some(ObdProtocol::Iso15765Can11_500));
+        assert_eq!(parse_protocol_number("A7"), Some(ObdProtocol::Iso15765Can29_500));
         assert_eq!(parse_protocol_number("A0"), None);
         assert_eq!(parse_protocol_number("nonsense"), None);
     }
@@ -1258,12 +1206,9 @@ mod tests {
 
     #[test]
     fn single_frame_can_response_assembles() {
-        let msgs = assemble_can(
-            &lines(&["7E8 04 41 0C 1A F8"]),
-            true,
-            ObdProtocol::Iso15765Can11_500,
-        )
-        .unwrap();
+        let msgs =
+            assemble_can(&lines(&["7E8 04 41 0C 1A F8"]), true, ObdProtocol::Iso15765Can11_500)
+                .unwrap();
         assert_eq!(msgs.len(), 1);
         assert_eq!(msgs[0].address, "7E8");
         assert_eq!(msgs[0].payload, vec![0x41, 0x0C, 0x1A, 0xF8]);
@@ -1286,10 +1231,7 @@ mod tests {
         assert_eq!(msgs.len(), 1);
         assert_eq!(msgs[0].payload.len(), 20);
         assert_eq!(&msgs[0].payload[..3], &[0x49, 0x02, 0x01]);
-        assert_eq!(
-            String::from_utf8_lossy(&msgs[0].payload[3..]),
-            "1FTBF2B69KEC00001"
-        );
+        assert_eq!(String::from_utf8_lossy(&msgs[0].payload[3..]), "1FTBF2B69KEC00001");
         assert_eq!(msgs[0].raw_lines.len(), 3);
     }
 
@@ -1345,33 +1287,21 @@ mod tests {
 
     #[test]
     fn unspaced_lines_are_split_by_protocol_header_width() {
-        let msgs = assemble_can(
-            &lines(&["7E804410C1AF8"]),
-            false,
-            ObdProtocol::Iso15765Can11_500,
-        )
-        .unwrap();
+        let msgs = assemble_can(&lines(&["7E804410C1AF8"]), false, ObdProtocol::Iso15765Can11_500)
+            .unwrap();
         assert_eq!(msgs[0].address, "7E8");
         assert_eq!(msgs[0].payload, vec![0x41, 0x0C, 0x1A, 0xF8]);
 
-        let msgs = assemble_can(
-            &lines(&["18DAF11004410C1AF8"]),
-            false,
-            ObdProtocol::Iso15765Can29_500,
-        )
-        .unwrap();
+        let msgs =
+            assemble_can(&lines(&["18DAF11004410C1AF8"]), false, ObdProtocol::Iso15765Can29_500)
+                .unwrap();
         assert_eq!(msgs[0].address, "18DAF110");
         assert_eq!(msgs[0].payload, vec![0x41, 0x0C, 0x1A, 0xF8]);
     }
 
     #[test]
     fn garbage_lines_are_rejected_rather_than_guessed() {
-        assert!(assemble_can(
-            &lines(&["NO DATA"]),
-            true,
-            ObdProtocol::Iso15765Can11_500
-        )
-        .is_err());
+        assert!(assemble_can(&lines(&["NO DATA"]), true, ObdProtocol::Iso15765Can11_500).is_err());
         assert!(assemble_can(
             &lines(&["7E8 04 41 ZZ 1A F8"]),
             true,
@@ -1398,10 +1328,7 @@ mod tests {
         .unwrap();
         assert_eq!(msgs.len(), 1);
         assert_eq!(&msgs[0].payload[..3], &[0x49, 0x02, 0x01]);
-        assert_eq!(
-            String::from_utf8_lossy(&msgs[0].payload[3..]),
-            "1FTBF2B69KEC00001"
-        );
+        assert_eq!(String::from_utf8_lossy(&msgs[0].payload[3..]), "1FTBF2B69KEC00001");
     }
 
     #[test]
@@ -1414,14 +1341,8 @@ mod tests {
 
     #[test]
     fn link_faults_are_distinguished_from_request_faults() {
-        assert!(is_link_fault(&AimError::new(
-            ErrorCode::TransportDisconnected,
-            "x"
-        )));
+        assert!(is_link_fault(&AimError::new(ErrorCode::TransportDisconnected, "x")));
         assert!(!is_link_fault(&AimError::no_data("x")));
-        assert!(!is_link_fault(&AimError::new(
-            ErrorCode::AdapterRejectedCommand,
-            "x"
-        )));
+        assert!(!is_link_fault(&AimError::new(ErrorCode::AdapterRejectedCommand, "x")));
     }
 }

@@ -237,11 +237,7 @@ pub trait LlmProvider: Send + Sync {
 }
 
 /// Shared helper: turn a `reqwest` failure into the right [`AgentError`].
-pub(crate) fn transport_error(
-    provider: &str,
-    endpoint: &str,
-    e: reqwest::Error,
-) -> AgentError {
+pub(crate) fn transport_error(provider: &str, endpoint: &str, e: reqwest::Error) -> AgentError {
     AgentError::Unreachable {
         provider: provider.to_string(),
         endpoint: endpoint.to_string(),
@@ -250,7 +246,12 @@ pub(crate) fn transport_error(
 }
 
 /// Shared helper: classify a non-2xx response.
-pub(crate) fn status_error(provider: &str, status: u16, body: &str, retry_after: Option<u64>) -> AgentError {
+pub(crate) fn status_error(
+    provider: &str,
+    status: u16,
+    body: &str,
+    retry_after: Option<u64>,
+) -> AgentError {
     match status {
         401 | 403 => AgentError::Unauthorized { provider: provider.to_string(), status },
         429 => AgentError::RateLimited {
@@ -298,7 +299,9 @@ mod tests {
     #[test]
     fn extracts_nested_provider_messages() {
         assert_eq!(
-            extract_message(r#"{"error":{"type":"invalid_request_error","message":"max_tokens too large"}}"#),
+            extract_message(
+                r#"{"error":{"type":"invalid_request_error","message":"max_tokens too large"}}"#
+            ),
             "max_tokens too large"
         );
         assert_eq!(extract_message(r#"{"error":"model not found"}"#), "model not found");
@@ -312,10 +315,7 @@ mod tests {
 
     #[test]
     fn status_maps_to_the_right_variant() {
-        assert!(matches!(
-            status_error("p", 401, "", None),
-            AgentError::Unauthorized { .. }
-        ));
+        assert!(matches!(status_error("p", 401, "", None), AgentError::Unauthorized { .. }));
         assert!(matches!(
             status_error("p", 429, "", Some(30)),
             AgentError::RateLimited { retry_after_secs: Some(30), .. }

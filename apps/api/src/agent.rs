@@ -57,10 +57,8 @@ impl ToolExecutor for CoreExecutor {
             confirmation: None,
         };
 
-        let result = self
-            .state
-            .with_service(move |svc| aim_tools::execute(svc, &registry, &call))
-            .await;
+        let result =
+            self.state.with_service(move |svc| aim_tools::execute(svc, &registry, &call)).await;
 
         match result {
             Ok(r) => serde_json::to_value(r).unwrap_or_else(|e| {
@@ -118,8 +116,8 @@ pub async fn describe_context(state: &AppState) -> String {
         .ok()
         .flatten();
 
-    let (descriptor, conn_state, vin, modules) = snapshot
-        .unwrap_or_else(|| ("none".into(), "disconnected".into(), None, Vec::new()));
+    let (descriptor, conn_state, vin, modules) =
+        snapshot.unwrap_or_else(|| ("none".into(), "disconnected".into(), None, Vec::new()));
 
     prompts::context_block(&descriptor, &conn_state, vin.as_deref(), None, &modules)
 }
@@ -166,10 +164,8 @@ pub async fn run_inspection(
     request: &str,
     sink: &mut dyn EventSink,
 ) -> Result<AgentOutcome, AgentError> {
-    let ActiveProvider { provider, max_steps, max_tokens, purpose, tone } =
-        active_provider(state)?;
-    let system =
-        prompts::inspection_system_prompt(&describe_context(state).await, purpose, tone);
+    let ActiveProvider { provider, max_steps, max_tokens, purpose, tone } = active_provider(state)?;
+    let system = prompts::inspection_system_prompt(&describe_context(state).await, purpose, tone);
     let mut executor = CoreExecutor::new(state);
     let mut agent = Agent::new(provider.as_ref());
     if let Some(n) = max_steps {
@@ -187,8 +183,7 @@ pub async fn run_chat(
     history: Vec<Message>,
     sink: &mut dyn EventSink,
 ) -> Result<AgentOutcome, AgentError> {
-    let ActiveProvider { provider, max_steps, max_tokens, purpose, tone } =
-        active_provider(state)?;
+    let ActiveProvider { provider, max_steps, max_tokens, purpose, tone } = active_provider(state)?;
     let system = prompts::chat_system_prompt(&describe_context(state).await, purpose, tone);
     let mut executor = CoreExecutor::new(state);
     let mut agent = Agent::new(provider.as_ref());

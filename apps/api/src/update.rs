@@ -291,8 +291,16 @@ mod tests {
     #[test]
     fn the_windows_installer_is_preferred_over_the_msi() {
         let assets = vec![
-            Asset { name: "app.msi".into(), browser_download_url: "https://objects.githubusercontent.com/m".into(), size: 2 },
-            Asset { name: "app-setup.exe".into(), browser_download_url: "https://objects.githubusercontent.com/e".into(), size: 1 },
+            Asset {
+                name: "app.msi".into(),
+                browser_download_url: "https://objects.githubusercontent.com/m".into(),
+                size: 2,
+            },
+            Asset {
+                name: "app-setup.exe".into(),
+                browser_download_url: "https://objects.githubusercontent.com/e".into(),
+                size: 1,
+            },
         ];
         assert_eq!(installer(&assets).unwrap().name, "app-setup.exe");
     }

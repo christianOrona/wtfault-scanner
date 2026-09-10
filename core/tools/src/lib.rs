@@ -498,10 +498,7 @@ pub fn execute(
             0,
             AimError::new(
                 ErrorCode::PermissionLevelDisabled,
-                format!(
-                    "{} is not available through the tool interface in this build",
-                    call.tool
-                ),
+                format!("{} is not available through the tool interface in this build", call.tool),
             )
             .with_details(serde_json::json!({
                 "tool": call.tool,
@@ -512,13 +509,7 @@ pub fn execute(
     }
 
     if let Err(e) = validate::validate(&call.tool, &schema.parameters, &call.arguments) {
-        return ToolResult::failure(
-            call.tool.clone(),
-            session,
-            schema.capability.clone(),
-            0,
-            e,
-        );
+        return ToolResult::failure(call.tool.clone(), session, schema.capability.clone(), 0, e);
     }
 
     let module = call.arguments.get("module").and_then(Value::as_str);
@@ -528,15 +519,9 @@ pub fn execute(
         "identify_vehicle" => service.identify_vehicle(initiator),
         "scan_modules" => service.scan_modules(initiator),
         "adapter_health" => service.adapter_health(initiator),
-        "get_module_identity" => {
-            service.get_module_identity(module.unwrap_or_default(), initiator)
-        }
-        "read_supported_pids" => {
-            service.read_supported_pids(module.unwrap_or_default(), initiator)
-        }
-        "read_monitor_tests" => {
-            service.read_monitor_tests(module.unwrap_or_default(), initiator)
-        }
+        "get_module_identity" => service.get_module_identity(module.unwrap_or_default(), initiator),
+        "read_supported_pids" => service.read_supported_pids(module.unwrap_or_default(), initiator),
+        "read_monitor_tests" => service.read_monitor_tests(module.unwrap_or_default(), initiator),
         "scan_all_modules" => service.scan_all_modules(initiator),
         "list_vehicle_features" => service.list_features(initiator),
         "preview_configuration_change" => {
@@ -544,11 +529,8 @@ pub fn execute(
             // could say would be accepted here, which is the point: there is no
             // parameter on this call that carries a module, an address or a
             // byte offset.
-            let feature = call
-                .arguments
-                .get("feature_id")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
+            let feature =
+                call.arguments.get("feature_id").and_then(Value::as_str).unwrap_or_default();
             let desired = match call.arguments.get("desired").and_then(Value::as_str) {
                 Some("off") => aim_diagnostics::DesiredValue::Off,
                 _ => aim_diagnostics::DesiredValue::On,
@@ -557,19 +539,11 @@ pub fn execute(
         }
         "read_dtcs" => service.read_dtcs(module, initiator),
         "read_freeze_frame" => {
-            let frame = call
-                .arguments
-                .get("frame")
-                .and_then(Value::as_u64)
-                .unwrap_or(0) as u8;
+            let frame = call.arguments.get("frame").and_then(Value::as_u64).unwrap_or(0) as u8;
             service.read_freeze_frame(module.unwrap_or_default(), frame, initiator)
         }
         "read_pid" => {
-            let signal = call
-                .arguments
-                .get("signal")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
+            let signal = call.arguments.get("signal").and_then(Value::as_str).unwrap_or_default();
             service.read_pid(module.unwrap_or_default(), signal, initiator)
         }
         "read_live_data" => {
@@ -577,12 +551,7 @@ pub fn execute(
                 .arguments
                 .get("signals")
                 .and_then(Value::as_array)
-                .map(|a| {
-                    a.iter()
-                        .filter_map(Value::as_str)
-                        .map(String::from)
-                        .collect()
-                })
+                .map(|a| a.iter().filter_map(Value::as_str).map(String::from).collect())
                 .unwrap_or_default();
             service.read_live_data(module.unwrap_or_default(), &signals, initiator)
         }
@@ -713,10 +682,7 @@ mod tests {
         assert_eq!(v["name"], "read_pid");
         assert_eq!(v["permission_level"], "L0");
         assert_eq!(v["parameters"]["required"], json!(["module", "signal"]));
-        assert_eq!(
-            v["parameters"]["properties"]["signal"]["type"],
-            "string"
-        );
+        assert_eq!(v["parameters"]["properties"]["signal"]["type"], "string");
     }
 
     #[test]

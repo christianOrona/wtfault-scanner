@@ -270,20 +270,14 @@ mod tests {
     fn opening_a_nonexistent_port_reports_a_structured_error() {
         let mut t = SerialTransport::new(SerialConfig::usb("/dev/definitely-not-a-port"));
         let err = t.open().unwrap_err();
-        assert!(matches!(
-            err.code,
-            ErrorCode::TransportNotFound | ErrorCode::TransportOpenFailed
-        ));
+        assert!(matches!(err.code, ErrorCode::TransportNotFound | ErrorCode::TransportOpenFailed));
         assert_eq!(err.details.unwrap()["port"], "/dev/definitely-not-a-port");
     }
 
     #[test]
     fn operations_on_a_closed_port_are_disconnect_errors() {
         let mut t = SerialTransport::new(SerialConfig::usb("/dev/null-port"));
-        assert_eq!(
-            t.write_all(b"ATZ\r").unwrap_err().code,
-            ErrorCode::TransportDisconnected
-        );
+        assert_eq!(t.write_all(b"ATZ\r").unwrap_err().code, ErrorCode::TransportDisconnected);
         let mut buf = [0u8; 8];
         assert_eq!(
             t.read(&mut buf, Duration::from_millis(1)).unwrap_err().code,

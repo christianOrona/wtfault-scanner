@@ -138,11 +138,8 @@ impl ElmEmulator {
             };
         }
 
-        let command: String = raw
-            .chars()
-            .filter(|c| !c.is_whitespace())
-            .collect::<String>()
-            .to_ascii_uppercase();
+        let command: String =
+            raw.chars().filter(|c| !c.is_whitespace()).collect::<String>().to_ascii_uppercase();
 
         if command.is_empty() {
             return self.finish(out, &[]);
@@ -167,12 +164,7 @@ impl ElmEmulator {
     }
 
     fn handle_at(&mut self, rest: &str, full: &str) -> Vec<String> {
-        if self
-            .personality
-            .unsupported
-            .iter()
-            .any(|u| u.eq_ignore_ascii_case(full))
-        {
+        if self.personality.unsupported.iter().any(|u| u.eq_ignore_ascii_case(full)) {
             return vec![String::from("?")];
         }
 
@@ -277,11 +269,7 @@ impl ElmEmulator {
         // A trailing odd digit is the optional "expected responses" hint. We
         // accept it and ignore it, as a real adapter effectively does once the
         // responses have arrived.
-        let hex = if command.len() % 2 == 1 {
-            &command[..command.len() - 1]
-        } else {
-            command
-        };
+        let hex = if command.len() % 2 == 1 { &command[..command.len() - 1] } else { command };
         if hex.is_empty() {
             return vec![String::from("?")];
         }
@@ -311,11 +299,8 @@ impl ElmEmulator {
 
         // The first successful exchange is what establishes the protocol.
         if self.protocol.is_none() {
-            self.protocol = Some(if self.requested_protocol == 0 {
-                6
-            } else {
-                self.requested_protocol
-            });
+            self.protocol =
+                Some(if self.requested_protocol == 0 { 6 } else { self.requested_protocol });
         }
 
         for reply in replies {
@@ -384,10 +369,7 @@ mod tests {
     use crate::scenario::ScenarioId;
 
     fn emu(id: ScenarioId) -> ElmEmulator {
-        ElmEmulator::new(
-            VirtualVehicle::f250_2019(id),
-            AdapterPersonality::genuine_v1_5(),
-        )
+        ElmEmulator::new(VirtualVehicle::f250_2019(id), AdapterPersonality::genuine_v1_5())
     }
 
     /// Run the handshake the real adapter runs, returning the emulator ready
@@ -404,10 +386,7 @@ mod tests {
     fn every_reply_ends_with_a_prompt() {
         let mut e = emu(ScenarioId::Healthy);
         for cmd in ["ATZ", "ATE0", "ATI", "0100", "NONSENSE"] {
-            assert!(
-                e.handle_line(cmd).ends_with('>'),
-                "{cmd} did not end with a prompt"
-            );
+            assert!(e.handle_line(cmd).ends_with('>'), "{cmd} did not end with a prompt");
         }
     }
 
@@ -480,11 +459,8 @@ mod tests {
         let reply = e.handle_line("0902");
         // Linefeeds are off after ATL0, so the reply is separated by bare
         // carriage returns and `str::lines` would see it as one line.
-        let data: Vec<&str> = reply
-            .split(['\r', '\n'])
-            .map(|l| l.trim())
-            .filter(|l| l.starts_with("7E8"))
-            .collect();
+        let data: Vec<&str> =
+            reply.split(['\r', '\n']).map(|l| l.trim()).filter(|l| l.starts_with("7E8")).collect();
         assert_eq!(data.len(), 3, "VIN needs a first frame and two more: {reply:?}");
         assert!(data[0].contains("10 14"), "first frame declares 20 bytes");
         assert!(data[1].contains("21"));

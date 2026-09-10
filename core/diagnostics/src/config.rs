@@ -197,10 +197,7 @@ pub fn plan_change(
         ));
         return finish(request, None, checks);
     };
-    checks.push(Check::pass(
-        "feature_known",
-        "Is this a feature this build knows about?",
-    ));
+    checks.push(Check::pass("feature_known", "Is this a feature this build knows about?"));
 
     // 1. Risk class. Checked before anything else, because for some classes the
     //    answer is no regardless of how good the rest of the situation is.
@@ -240,17 +237,14 @@ pub fn plan_change(
             "A mapping exists but has not been verified against a real vehicle. \
              It can be used to read the current setting and never to change it.",
         )),
-        FeatureSupport::Writable => checks.push(Check::pass(
-            "mapping_known",
-            "Do we know where this setting lives?",
-        )),
+        FeatureSupport::Writable => {
+            checks.push(Check::pass("mapping_known", "Do we know where this setting lives?"))
+        }
     }
 
     // 3. Is the owning module actually on this vehicle?
     let module_present = f.modules.is_empty()
-        || f.modules
-            .iter()
-            .any(|m| ctx.modules_present.iter().any(|p| p.contains(m.as_str())));
+        || f.modules.iter().any(|m| ctx.modules_present.iter().any(|p| p.contains(m.as_str())));
     if module_present {
         checks.push(Check::pass(
             "module_present",
@@ -271,10 +265,7 @@ pub fn plan_change(
     // 4. Can the adapter actually do it?
     let can_transmit = ctx.adapter.map(|a| a.supports_transmit).unwrap_or(false);
     if can_transmit {
-        checks.push(Check::pass(
-            "adapter_can_write",
-            "Can the adapter send, not just listen?",
-        ));
+        checks.push(Check::pass("adapter_can_write", "Can the adapter send, not just listen?"));
     } else {
         checks.push(Check::fail(
             "adapter_can_write",
@@ -359,10 +350,8 @@ pub fn plan_change(
 
 fn finish(request: &ChangeRequest, f: Option<&FeatureDef>, checks: Vec<Check>) -> ChangePlan {
     let failed: Vec<&Check> = checks.iter().filter(|c| !c.passed).collect();
-    let blocked_reason = failed
-        .first()
-        .and_then(|c| c.detail.clone())
-        .filter(|_| !failed.is_empty());
+    let blocked_reason =
+        failed.first().and_then(|c| c.detail.clone()).filter(|_| !failed.is_empty());
     ChangePlan {
         feature_id: request.feature_id.clone(),
         feature_name: f.map(|f| f.name.clone()),
@@ -467,11 +456,7 @@ mod tests {
 
     #[test]
     fn an_unverified_mapping_reads_but_never_writes() {
-        let f = feature(
-            RiskClass::Convenience,
-            verified_mapping(),
-            VerificationStatus::Unverified,
-        );
+        let f = feature(RiskClass::Convenience, verified_mapping(), VerificationStatus::Unverified);
         let modules = vec!["DDM_740".to_string()];
         let plan = plan_change(&request(), Some(&f), &perfect_context(&modules));
         assert!(!check(&plan, "mapping_known").passed);
@@ -487,11 +472,8 @@ mod tests {
         // The case that matters most: everything is in place and the answer is
         // still no, permanently, and the plan says so rather than listing it as
         // a fixable prerequisite.
-        let f = feature(
-            RiskClass::SafetyCritical,
-            verified_mapping(),
-            VerificationStatus::Verified,
-        );
+        let f =
+            feature(RiskClass::SafetyCritical, verified_mapping(), VerificationStatus::Verified);
         let modules = vec!["DDM_740".to_string()];
         let plan = plan_change(&request(), Some(&f), &perfect_context(&modules));
         assert!(!plan.can_apply);
@@ -515,11 +497,7 @@ mod tests {
         // Measured, not assumed. The truck's own service 09 reply arrived
         // truncated on a real cable during development; that is exactly the
         // condition this refuses on.
-        let f = feature(
-            RiskClass::Convenience,
-            verified_mapping(),
-            VerificationStatus::Verified,
-        );
+        let f = feature(RiskClass::Convenience, verified_mapping(), VerificationStatus::Verified);
         let modules = vec!["DDM_740".to_string()];
         let mut ctx = perfect_context(&modules);
         ctx.saw_truncated_response = true;
@@ -530,30 +508,19 @@ mod tests {
 
     #[test]
     fn a_sagging_battery_blocks_the_write() {
-        let f = feature(
-            RiskClass::Convenience,
-            verified_mapping(),
-            VerificationStatus::Verified,
-        );
+        let f = feature(RiskClass::Convenience, verified_mapping(), VerificationStatus::Verified);
         let modules = vec!["DDM_740".to_string()];
         let mut ctx = perfect_context(&modules);
         ctx.battery_voltage = Some(11.9);
         let plan = plan_change(&request(), Some(&f), &ctx);
         assert!(!check(&plan, "battery_healthy").passed);
-        assert!(check(&plan, "battery_healthy")
-            .detail
-            .as_ref()
-            .unwrap()
-            .contains("charger"));
+        assert!(check(&plan, "battery_healthy").detail.as_ref().unwrap().contains("charger"));
     }
 
     #[test]
     fn a_feature_on_a_second_bus_needs_an_adapter_that_reaches_it() {
-        let mut f = feature(
-            RiskClass::Convenience,
-            verified_mapping(),
-            VerificationStatus::Verified,
-        );
+        let mut f =
+            feature(RiskClass::Convenience, verified_mapping(), VerificationStatus::Verified);
         f.requires = vec!["ms_can".into()];
         let modules = vec!["DDM_740".to_string()];
         let mut ctx = perfect_context(&modules);
@@ -567,11 +534,7 @@ mod tests {
     fn a_verified_convenience_change_is_now_allowed_end_to_end() {
         // The shipped configuration. Everything passes, and the answer is yes -
         // this is the case the whole seam was built for.
-        let f = feature(
-            RiskClass::Convenience,
-            verified_mapping(),
-            VerificationStatus::Verified,
-        );
+        let f = feature(RiskClass::Convenience, verified_mapping(), VerificationStatus::Verified);
         let modules = vec!["DDM_740".to_string()];
         let mut ctx = perfect_context(&modules);
         ctx.max_level = aim_safety::MAX_ENABLED_LEVEL;
@@ -594,11 +557,8 @@ mod tests {
     /// The risk ceiling refuses on consequence, and says so in those words.
     #[test]
     fn a_safety_critical_change_is_refused_as_policy_not_as_a_gap() {
-        let f = feature(
-            RiskClass::SafetyCritical,
-            verified_mapping(),
-            VerificationStatus::Verified,
-        );
+        let f =
+            feature(RiskClass::SafetyCritical, verified_mapping(), VerificationStatus::Verified);
         let modules = vec!["DDM_740".to_string()];
         let mut ctx = perfect_context(&modules);
         ctx.max_level = aim_safety::MAX_ENABLED_LEVEL;
@@ -635,11 +595,8 @@ mod tests {
 
     #[test]
     fn the_preview_reports_every_failure_at_once() {
-        let f = feature(
-            RiskClass::SafetyCritical,
-            verified_mapping(),
-            VerificationStatus::Verified,
-        );
+        let f =
+            feature(RiskClass::SafetyCritical, verified_mapping(), VerificationStatus::Verified);
         let modules = vec!["DDM_740".to_string()];
         let mut ctx = perfect_context(&modules);
         ctx.max_level = aim_safety::MAX_ENABLED_LEVEL;

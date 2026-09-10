@@ -30,11 +30,7 @@ pub struct SessionRecorder {
 impl SessionRecorder {
     /// Record into `session_id` of `store`.
     pub fn new(store: SessionStore, session_id: SessionId) -> Self {
-        SessionRecorder {
-            store,
-            session_id,
-            last_response_event: AtomicI64::new(0),
-        }
+        SessionRecorder { store, session_id, last_response_event: AtomicI64::new(0) }
     }
 
     /// The session being recorded.
@@ -67,9 +63,7 @@ impl SessionRecorder {
 
 impl AdapterObserver for SessionRecorder {
     fn on_request(&self, command: &str) {
-        self.record(EventKind::AdapterRequest {
-            command: command.to_string(),
-        });
+        self.record(EventKind::AdapterRequest { command: command.to_string() });
     }
 
     fn on_response(&self, response: &AdapterResponse) {
@@ -99,9 +93,7 @@ impl AdapterObserver for SessionRecorder {
     }
 
     fn on_identified(&self, capabilities: &AdapterCapabilities) {
-        self.record(EventKind::AdapterIdentified {
-            capabilities: capabilities.clone(),
-        });
+        self.record(EventKind::AdapterIdentified { capabilities: capabilities.clone() });
     }
 }
 
@@ -132,10 +124,7 @@ mod tests {
 
         let events = store.events_since(&session, 0, 10).unwrap();
         let kinds: Vec<&str> = events.iter().map(|e| e.kind.name()).collect();
-        assert_eq!(
-            kinds,
-            vec!["session_started", "adapter_request", "adapter_response"]
-        );
+        assert_eq!(kinds, vec!["session_started", "adapter_request", "adapter_response"]);
     }
 
     #[test]
@@ -204,9 +193,7 @@ mod tests {
     fn state_transitions_and_identification_land_in_the_log() {
         let (store, recorder, session) = setup();
         recorder.on_state_change(&ConnectionState::Connecting, &ConnectionState::Ready);
-        recorder.on_identified(&AdapterCapabilities::unknown(
-            aim_types::TransportKind::Bluetooth,
-        ));
+        recorder.on_identified(&AdapterCapabilities::unknown(aim_types::TransportKind::Bluetooth));
 
         let events = store.events_since(&session, 0, 10).unwrap();
         let kinds: Vec<&str> = events.iter().map(|e| e.kind.name()).collect();
