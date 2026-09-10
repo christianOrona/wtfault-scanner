@@ -430,20 +430,34 @@ impl Elm327Adapter {
         //
         // The second is a hardware fact and is reported as one, rather than as
         // something the app has not got round to.
-        if !self.caps.multiple_can_buses {
-            let probe = self.send_raw("ATPB 01 05", self.config.at_timeout)?;
-            self.caps.multiple_can_buses = probe.class.is_success();
-        }
+        // Only STN hardware, which said so when asked, is recorded as able to
+        // reach a second bus.
+        //
+        // There used to be an `ATPB` probe here for everything else. It was
+        // wrong twice over. It wrote programmable protocol parameters into a
+        // device on every single connect, to establish a capability nothing in
+        // this app uses yet - the second bus is detected and never selected.
+        // And it proved less than it appeared to: an ELM327 answering `OK` to a
+        // parameter write has said the command parsed, not that a second bus
+        // exists or that the cable reaches pins 3 and 11.
+        //
+        // So the question is left open rather than answered badly. When
+        // something actually selects a second bus, it can probe then, on a
+        // vehicle, where the answer means something.
         if self.caps.multiple_can_buses {
             self.caps.add_caveat(
-                "this adapter can be switched to a second CAN bus (125 kbit/s). Whether anything \
-                 answers there also depends on the cable being wired to pins 3 and 11, which no \
-                 adapter can report",
+                "this adapter reports being able to reach a second CAN bus (125 kbit/s). Whether \
+                 anything answers there also depends on the cable being wired to pins 3 and 11, \
+                 which no adapter can report",
             );
         } else {
             self.caps.add_caveat(
-                "single CAN bus: this adapter did not accept the commands needed to change bus \
-                 speed, so only the high-speed bus is reachable with it",
+                "second CAN bus not established by software: this device did not identify as one \
+                 that can switch buses on command. That is not the same as being unable to reach \
+                 one - some cables carry a physical HS-CAN/MS-CAN switch, which no adapter can \
+                 report and no software can detect or move. If yours has one, the bus you are on \
+                 is whichever way the switch is set. Nothing in this build selects a second bus \
+                 yet, so it costs you nothing today",
             );
         }
 
@@ -508,7 +522,10 @@ impl Elm327Adapter {
             // A failure to even set the protocol is a broken adapter, not a
             // wrong guess, so it stops the sweep rather than being skipped.
             self.configure(&format!("ATSP{id}"), "protocol sweep")?;
-            self.set_header(&RequestTarget::Functional)?;
+            // Each candidate is asked in its own addressing scheme. Carrying
+            // one protocol's header into the next is what makes a sweep report
+            // that a vehicle answered nothing when it would have answered.
+            self.apply_functional_header(ObdProtocol::from_elm_id(id))?;
 
             let r = self.send_raw(&probe.to_elm_command(), self.config.request_timeout)?;
             // Only actual data proves a protocol. `is_success()` also admits
@@ -526,7 +543,12 @@ impl Elm327Adapter {
                 tracing::info!(protocol = %found.label(), "protocol sweep succeeded");
                 return Ok(Some(r));
             }
-            tracing::debug!(atsp = id, class = r.class.as_str(), "protocol did not answer");
+            tracing::debug!(
+                atsp = id,
+                class = r.class.as_str(),
+                lines = ?r.lines,
+                "protocol did not answer"
+            );
         }
 
         // Leave the adapter as we found it so a later retry starts clean.
@@ -544,6 +566,7 @@ impl Elm327Adapter {
         let probe = ObdRequest::current_data(0x00);
         self.set_header(&RequestTarget::Functional)?;
         let r = self.send_raw(&probe.to_elm_command(), self.config.request_timeout)?;
+        tracing::debug!(class = r.class.as_str(), lines = ?r.lines, "ATSP0 auto-detect probe");
 
         // Automatic detection failing is not the same as the vehicle being
         // silent, and a cheap clone is bad enough at `ATSP0` that treating it
@@ -603,6 +626,13 @@ impl Elm327Adapter {
             ));
         }
 
+        // Now that the protocol is known, put its broadcast header in place
+        // while still connecting. Leaving it until the first request would make
+        // that one request carry an extra command, and the failure of an `ATSH`
+        // would then surface as a failure of whatever the caller happened to
+        // ask for first.
+        self.apply_functional_header(self.protocol)?;
+
         // Throughput is measured, not declared: the round trips we just made
         // are the only honest evidence available at connect time.
         let mean = self.mean_latency_ms();
@@ -646,13 +676,77 @@ impl Elm327Adapter {
         }
     }
 
+    /// Set the broadcast header belonging to `protocol`, whatever the adapter
+    /// is currently negotiated to.
+    ///
+    /// Used by the sweep, where the protocol under test is not yet the
+    /// connection's protocol.
+    /// Write a request header to the adapter, in the form that adapter accepts.
+    ///
+    /// A 29-bit header is four bytes, and the ELM327 does not take all four in
+    /// one command: the leading priority byte goes to `ATCP` and the remaining
+    /// three to `ATSH`. The one-command form is documented for v1.3 and later,
+    /// but that is a claim about firmware and this is a market full of clones —
+    /// measured on a device whose banner reads `ELM327 v1.5`, `ATSH18DB33F1`
+    /// came back as an error while the split form worked. Splitting always is
+    /// correct on every version, so there is nothing to detect and nothing to
+    /// fall back from.
+    ///
+    /// Returns whether the adapter accepted it.
+    fn send_header(&mut self, header: &str) -> AimResult<bool> {
+        if header.len() == 8 {
+            let (priority, rest) = header.split_at(2);
+            let cp = self.send_raw(&format!("ATCP{priority}"), self.config.at_timeout)?;
+            if !cp.class.is_success() {
+                return Ok(false);
+            }
+            let sh = self.send_raw(&format!("ATSH{rest}"), self.config.at_timeout)?;
+            return Ok(sh.class.is_success());
+        }
+        let r = self.send_raw(&format!("ATSH{header}"), self.config.at_timeout)?;
+        Ok(r.class.is_success())
+    }
+
+    fn apply_functional_header(&mut self, protocol: ObdProtocol) -> AimResult<()> {
+        let Some(header) = protocol.functional_header() else {
+            return Ok(());
+        };
+        if self.current_header.as_deref() == Some(header) {
+            return Ok(());
+        }
+        if self.send_header(header)? {
+            self.current_header = Some(String::from(header));
+        } else {
+            // An adapter that refuses a header for a protocol it has just been
+            // set to is telling us it cannot speak that protocol. That is a
+            // reason to move on to the next candidate, not to abandon the
+            // sweep, so the header is forgotten rather than the error raised.
+            self.current_header = None;
+        }
+        Ok(())
+    }
+
+    /// Point the adapter at a broadcast or a single module.
+    ///
+    /// A functional (broadcast) header is a property of the *protocol*, not of
+    /// the request, so it is looked up from the negotiated protocol rather than
+    /// hardcoded. Forcing the 11-bit `7DF` onto a 29-bit vehicle sends a
+    /// malformed request that no module answers.
     fn set_header(&mut self, target: &RequestTarget) -> AimResult<()> {
-        let header = target.header();
+        let header = match target {
+            RequestTarget::Functional => match self.protocol.functional_header() {
+                Some(h) => String::from(h),
+                // No protocol established yet, so there is no right header to
+                // set. The adapter's own per-protocol default is correct and a
+                // guess is not, so leave it alone.
+                None => return Ok(()),
+            },
+            RequestTarget::Physical(h) => h.clone(),
+        };
         if self.current_header.as_deref() == Some(header.as_str()) {
             return Ok(());
         }
-        let r = self.send_raw(&format!("ATSH{header}"), self.config.at_timeout)?;
-        if !r.class.is_success() {
+        if !self.send_header(&header)? {
             return Err(AimError::new(
                 ErrorCode::AdapterRejectedCommand,
                 format!("adapter refused to set request header {header}"),
@@ -780,6 +874,7 @@ impl DiagnosticAdapter for Elm327Adapter {
     fn connect(&mut self) -> AimResult<()> {
         self.set_state(ConnectionState::Connecting);
         self.caps = AdapterCapabilities::unknown(self.transport.kind());
+        self.caps.baud = self.transport.baud();
 
         if let Err(e) = self.transport.open() {
             self.set_state(ConnectionState::Failed { code: e.code, detail: e.message.clone() });
@@ -1020,10 +1115,34 @@ fn split_header_line(
 ) -> AimResult<(String, Vec<u8>)> {
     let trimmed = line.trim();
     if spaces && trimmed.contains(' ') {
-        let mut parts = trimmed.split_whitespace();
-        let header = parts.next().unwrap_or_default().to_string();
+        let parts: Vec<&str> = trimmed.split_whitespace().collect();
+        // With spaces on, an 11-bit header arrives as a single three-digit
+        // token (`7E8 06 41 ...`) but a 29-bit one arrives as four separate
+        // byte tokens (`18 DA F1 10 06 41 ...`). Taking the first token either
+        // way reads `18` as the whole identifier and rejects the line.
+        //
+        // With no protocol established, the width of the first token says
+        // which it is: three hex digits can only be an 11-bit identifier.
+        let header_tokens = if protocol.is_can() {
+            if protocol.is_29_bit() {
+                4
+            } else {
+                1
+            }
+        } else if parts.first().is_some_and(|t| t.len() == 3) {
+            1
+        } else {
+            4
+        };
+        if parts.len() <= header_tokens {
+            return Err(AimError::new(
+                ErrorCode::ProtocolMalformedResponse,
+                format!("adapter line {trimmed:?} is too short to contain a header and data"),
+            ));
+        }
+        let header = parts[..header_tokens].concat();
         let mut data = Vec::new();
-        for p in parts {
+        for p in &parts[header_tokens..] {
             data.push(u8::from_str_radix(p, 16).map_err(|e| {
                 AimError::new(
                     ErrorCode::ProtocolMalformedResponse,

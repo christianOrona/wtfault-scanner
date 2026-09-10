@@ -51,8 +51,8 @@ fn the_cheap_clone_produces_capability_caveats_not_assumptions() {
     assert!(caveats.contains("v2.x"), "missing clone-version caveat: {caveats}");
     assert!(caveats.contains("AT@1"), "missing AT@1 caveat: {caveats}");
     assert!(
-        caveats.contains("single CAN bus"),
-        "a device that cannot reach a second bus must say so: {caveats}"
+        caveats.contains("second CAN bus not established by software"),
+        "a device that has not shown it can reach a second bus must say so: {caveats}"
     );
     assert_eq!(caps.vendor, "unknown");
 }
