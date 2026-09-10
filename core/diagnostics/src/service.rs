@@ -1452,7 +1452,7 @@ impl DiagnosticService {
             });
         };
 
-        let addr = RequestTarget::Physical(format!("{:03X}", target.module));
+        let addr = RequestTarget::Physical(target.module.clone());
         let request = aim_protocols::UdsRequest::read_data_by_identifier(target.did).to_bytes();
         let record = self.read_did(&request, &addr, Duration::from_millis(2000), target.did)?;
         let state = target.current(&record);
@@ -1481,7 +1481,7 @@ impl DiagnosticService {
                 "known": true,
                 "readable": true,
                 "state": state,
-                "module": format!("{:03X}", target.module),
+                "module": target.module,
                 "did": format!("{:04X}", target.did),
                 "record": aim_types::hex(&record),
                 "owning_modules": modules,
@@ -1510,7 +1510,7 @@ impl DiagnosticService {
     /// Read-only. L0, and the assistant may use it.
     pub fn capture_configuration(
         &mut self,
-        module: u16,
+        module: &str,
         dids: &[u16],
         label: Option<String>,
         initiator: &str,
@@ -1519,7 +1519,7 @@ impl DiagnosticService {
         self.record_invocation(
             "capture_configuration",
             initiator,
-            serde_json::json!({ "module": format!("{module:03X}"), "identifiers": dids.len() }),
+            serde_json::json!({ "module": module, "identifiers": dids.len() }),
         );
         let outcome = self
             .authorize(capabilities::READ_FEATURE, initiator, None)
@@ -1529,7 +1529,7 @@ impl DiagnosticService {
 
     fn capture_inner(
         &mut self,
-        module: u16,
+        module: &str,
         dids: &[u16],
         label: Option<String>,
     ) -> AimResult<Payload> {
@@ -1549,7 +1549,7 @@ impl DiagnosticService {
             ));
         }
 
-        let addr = RequestTarget::Physical(format!("{module:03X}"));
+        let addr = RequestTarget::Physical(module.to_string());
         let request_budget = Duration::from_millis(2000);
         let mut records = std::collections::BTreeMap::new();
         let mut missing = Vec::new();
@@ -1570,7 +1570,7 @@ impl DiagnosticService {
             return Err(AimError::new(
                 ErrorCode::NoData,
                 format!(
-                    "the module at {module:03X} returned none of the {} identifiers asked for. \
+                    "the module at {module} returned none of the {} identifiers asked for. \
                      Either it holds no configuration, or it keeps it somewhere else.",
                     dids.len()
                 ),
@@ -1578,7 +1578,7 @@ impl DiagnosticService {
         }
 
         let capture = crate::capture::ConfigCapture {
-            module,
+            module: module.to_string(),
             records: records.clone(),
             taken_at: aim_types::now().0.to_string(),
             label,
@@ -1606,7 +1606,7 @@ impl DiagnosticService {
                 .record_capture(
                     &self.session.id,
                     self.session.vehicle_id.as_ref().map(|v| v.as_str()),
-                    &format!("ECU_{module:03X}"),
+                    &format!("ECU_{module}"),
                     capture.label.as_deref(),
                     &capture.taken_at,
                     &json,
@@ -1769,7 +1769,7 @@ impl DiagnosticService {
             (target, feature.verification)
         };
         let want_on = matches!(desired, crate::config::DesiredValue::On);
-        let addr = RequestTarget::Physical(format!("{:03X}", target.module));
+        let addr = RequestTarget::Physical(target.module.clone());
         let budget = Duration::from_millis(2000);
 
         // 3. An extended session. Most modules refuse writes in the default
@@ -1847,7 +1847,7 @@ impl DiagnosticService {
                 "feature_id": feature_id,
                 "changed": verified,
                 "verified": verified,
-                "module": format!("{:03X}", target.module),
+                "module": target.module,
                 "did": format!("{:04X}", target.did),
                 "before": aim_types::hex(&before),
                 "after": aim_types::hex(&verify),

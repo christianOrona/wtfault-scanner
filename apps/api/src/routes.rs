@@ -772,7 +772,7 @@ async fn update_apply() -> ApiResult<Json<Value>> {
 #[derive(Debug, Deserialize)]
 struct CaptureBody {
     /// Module diagnostic request address, e.g. 1830 for 0x726.
-    module: u16,
+    module: String,
     /// Data identifiers to read.
     identifiers: Vec<u16>,
     #[serde(default)]
@@ -789,7 +789,7 @@ async fn capture_configuration(
     Ok(Json(
         state
             .with_service(move |s| {
-                s.capture_configuration(body.module, &body.identifiers, body.label, "user:api")
+                s.capture_configuration(&body.module, &body.identifiers, body.label, "user:api")
             })
             .await?,
     ))
@@ -881,7 +881,7 @@ async fn diff_captures(
     let after = resolve(&state, body.after, body.after_id, "after")?;
     let after_is_on = body.after_is_on;
     let d = aim_diagnostics::capture::diff(&before, &after);
-    let proposal = d.is_unambiguous().then(|| d.changes[0].as_mapping(before.module, after_is_on));
+    let proposal = d.is_unambiguous().then(|| d.changes[0].as_mapping(&before.module, after_is_on));
     Ok(Json(json!({
         "diff": d,
         "comparable": d.is_comparable(),

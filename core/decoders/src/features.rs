@@ -71,9 +71,19 @@ pub enum Mapping {
     /// identifier a given block corresponds to. That translation is exactly the
     /// kind of unverified guess this project refuses to make in code.
     DataIdentifierBits {
-        /// Diagnostic request address of the module that owns the setting,
-        /// e.g. `0x726`.
-        module: u16,
+        /// Diagnostic request address of the module that owns the setting.
+        ///
+        /// A string — `"726"` on an 11-bit vehicle, `"18DA10F1"` on a 29-bit
+        /// one. It was a `u16`, which silently could not express the second and
+        /// meant a configuration write on a 29-bit vehicle went to a truncated
+        /// address. That is the same assumption that made the whole app behave
+        /// like a single-make scanner, surviving here because this path is the
+        /// least travelled.
+        ///
+        /// Still accepts the number that older profile files were written with,
+        /// because people have those files on disk. See [`module_address`].
+        #[serde(deserialize_with = "module_address")]
+        module: String,
         /// The data identifier holding the record.
         did: u16,
         /// Zero-based byte within the record.
@@ -94,20 +104,64 @@ impl Mapping {
     /// Returns `None` for a mapping this build can describe but not perform, so
     /// callers must handle that case rather than discovering it mid-write.
     pub fn as_data_identifier(&self) -> Option<DataIdentifierTarget> {
-        match *self {
+        match self {
             Mapping::DataIdentifierBits { module, did, byte, mask, on, off } => {
-                Some(DataIdentifierTarget { module, did, byte, mask, on, off })
+                Some(DataIdentifierTarget {
+                    module: module.clone(),
+                    did: *did,
+                    byte: *byte,
+                    mask: *mask,
+                    on: *on,
+                    off: *off,
+                })
             }
             Mapping::AsBuiltBits { .. } => None,
         }
     }
 }
 
+/// Read a module address written either as a string or as a number.
+///
+/// Profile files predating 29-bit support wrote `module: 0x7A0`, and people
+/// have those files on their own machines. Refusing them to gain a cleaner
+/// schema would break a mapping somebody measured on their own vehicle, which
+/// is exactly the work this project exists to encourage.
+///
+/// Numbers render as at least three hex digits, matching how 11-bit addresses
+/// have always been written. Strings are taken as given, upper-cased, and
+/// checked to be hexadecimal — an address that is not is a mistake worth
+/// refusing when the file loads rather than when somebody writes to a module.
+fn module_address<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error;
+
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum Written {
+        Number(u64),
+        Text(String),
+    }
+
+    let address = match Written::deserialize(deserializer)? {
+        Written::Number(n) => format!("{n:03X}"),
+        Written::Text(s) => s.trim().to_ascii_uppercase(),
+    };
+    if address.is_empty() || !address.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(D::Error::custom(format!(
+            "{address:?} is not a module address: expected hex digits such as \"726\" or \
+             \"18DA10F1\""
+        )));
+    }
+    Ok(address)
+}
+
 /// A mapping resolved to something a UDS request can be built from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DataIdentifierTarget {
-    /// Module diagnostic request address.
-    pub module: u16,
+    /// Module diagnostic request address, e.g. `726` or `18DA10F1`.
+    pub module: String,
     /// Data identifier holding the record.
     pub did: u16,
     /// Zero-based byte within the record.
@@ -495,6 +549,95 @@ mod tests {
         FeatureCatalog::embedded().unwrap()
     }
 
+    fn mapping_from(module_field: &str) -> Mapping {
+        let y = format!(
+            r#"
+version: 1
+source: test
+features:
+  - id: f
+    name: "F"
+    easy: "e"
+    technical: "t"
+    risk: convenience
+    modules: [BODY]
+    mapping:
+      kind: data_identifier_bits
+      module: {module_field}
+      did: 0xDE01
+      byte: 0
+      mask: 0x01
+      on: 0x01
+      off: 0x00
+"#
+        );
+        let mut cat = FeatureCatalog::default();
+        cat.load_yaml(&y, "test").expect("loads");
+        cat.get("f").unwrap().mapping.clone().unwrap()
+    }
+
+    /// A write has to reach a 29-bit module. The address was a `u16`, which
+    /// silently could not hold one — the same assumption that made the whole
+    /// app behave like a single-make scanner, surviving on the least-travelled
+    /// path.
+    #[test]
+    fn a_configuration_write_can_address_a_29_bit_module() {
+        let target = mapping_from(r#""18DA10F1""#).as_data_identifier().unwrap();
+        assert_eq!(target.module, "18DA10F1");
+    }
+
+    /// Profile files predating this were written with a number, and people have
+    /// those files on their own machines. Breaking them to gain a cleaner
+    /// schema would discard a mapping somebody measured on their own vehicle.
+    #[test]
+    fn a_module_address_written_as_a_number_still_loads() {
+        assert_eq!(mapping_from("0x726").as_data_identifier().unwrap().module, "726");
+        assert_eq!(mapping_from("1830").as_data_identifier().unwrap().module, "726");
+        // Three digits minimum, matching how 11-bit addresses have always been
+        // written, so `7E0` does not become `7E0` in one file and `07E0` in
+        // another.
+        assert_eq!(mapping_from("0x7E0").as_data_identifier().unwrap().module, "7E0");
+    }
+
+    #[test]
+    fn a_module_address_is_normalised_and_checked() {
+        assert_eq!(
+            mapping_from(r#"" 18da10f1 ""#).as_data_identifier().unwrap().module,
+            "18DA10F1"
+        );
+    }
+
+    /// An address that is not hexadecimal is a mistake worth refusing when the
+    /// file loads, rather than when somebody writes to a module.
+    #[test]
+    fn a_module_address_that_is_not_hexadecimal_is_refused_at_load_time() {
+        let y = r#"
+version: 1
+source: test
+features:
+  - id: f
+    name: "F"
+    easy: "e"
+    technical: "t"
+    risk: convenience
+    modules: [BODY]
+    mapping:
+      kind: data_identifier_bits
+      module: "the door module"
+      did: 0xDE01
+      byte: 0
+      mask: 0x01
+      on: 0x01
+      off: 0x00
+"#;
+        let mut cat = FeatureCatalog::default();
+        let err = cat.load_yaml(y, "test").unwrap_err();
+        assert!(
+            format!("{err:?}").contains("module address"),
+            "the failure should name the problem: {err:?}"
+        );
+    }
+
     #[test]
     fn the_shipped_catalogue_loads() {
         let c = catalog();
@@ -632,7 +775,7 @@ mod mapping_tests {
     fn target() -> DataIdentifierTarget {
         // Bit 2 of byte 3: on = 0b100, off = 0b000.
         DataIdentifierTarget {
-            module: 0x726,
+            module: String::from("726"),
             did: 0xDE01,
             byte: 3,
             mask: 0b0000_0100,
@@ -667,7 +810,7 @@ mod mapping_tests {
     #[test]
     fn a_value_outside_its_mask_is_refused() {
         let bad = DataIdentifierTarget {
-            module: 0x726,
+            module: String::from("726"),
             did: 0xDE01,
             byte: 0,
             mask: 0x0F,
@@ -687,8 +830,14 @@ mod mapping_tests {
         assert_eq!(t.current(&record), Some(false));
 
         // A masked value matching neither on nor off is not guessed at.
-        let odd =
-            DataIdentifierTarget { module: 1, did: 2, byte: 0, mask: 0b11, on: 0b01, off: 0b00 };
+        let odd = DataIdentifierTarget {
+            module: String::from("001"),
+            did: 2,
+            byte: 0,
+            mask: 0b11,
+            on: 0b01,
+            off: 0b00,
+        };
         assert_eq!(odd.current(&[0b10]), None);
         assert_eq!(odd.current(&[]), None);
     }
