@@ -14,6 +14,7 @@
 
 #![warn(missing_docs)]
 
+pub mod catalog;
 pub mod dtc;
 pub mod explain;
 pub mod expr;
@@ -52,6 +53,8 @@ pub struct DecoderSet {
     pub profiles: ProfileReport,
     /// Service 06 on-board monitor names and scalings.
     pub monitors: MonitorCatalog,
+    /// Community signal definitions, by vehicle. Claims, never measurements.
+    pub catalog: catalog::SignalCatalog,
 }
 
 impl DecoderSet {
@@ -64,6 +67,7 @@ impl DecoderSet {
             explanations: ExplanationCatalog::generic_obd()?,
             features: FeatureCatalog::embedded()?,
             profiles: ProfileReport::default(),
+            catalog: catalog::SignalCatalog::embedded(),
         })
     }
 
@@ -77,6 +81,21 @@ impl DecoderSet {
     /// person diagnosing their vehicle.
     pub fn with_profiles(dir: &std::path::Path) -> aim_types::AimResult<DecoderSet> {
         let mut set = DecoderSet::generic_obd()?;
+
+        // Community signalsets live beside the user's own profiles, in their
+        // own directory because they are under a different licence. A missing
+        // directory is a normal state: this build simply has nothing extra to
+        // offer for a vehicle, which is the situation for most vehicles.
+        let (community, warnings) = catalog::SignalCatalog::load_dir(dir.join("catalog/obdb"));
+        for w in &warnings {
+            tracing::warn!(detail = %w, "a community signalset could not be loaded");
+        }
+        if !community.is_empty() {
+            tracing::info!(vehicles = community.len(), "loaded local community signal definitions");
+        }
+        // Local files win over the shipped copies.
+        set.catalog.merge(community);
+
         profiles::ensure_directory(dir);
         set.profiles = profiles::load_directory(
             dir,

@@ -41,6 +41,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/config/capture", post(capture_configuration))
         .route("/api/v1/config/diff", post(diff_captures))
         .route("/api/v1/config/captures", get(list_captures))
+        .route("/api/v1/catalog/signals", get(catalog_signals))
+        .route("/api/v1/catalog/signals/{signal}", post(read_catalog_signal))
         .route("/api/v1/features/{id}/preview", post(preview_feature_change))
         .route("/api/v1/features/{id}/apply", post(apply_feature_change))
         .route("/api/v1/tools", get(tools))
@@ -791,6 +793,25 @@ async fn capture_configuration(
             })
             .await?,
     ))
+}
+
+/// Community signal definitions that might apply to this vehicle.
+///
+/// A lookup: this touches no vehicle. Everything it returns is somebody else's
+/// recorded claim, and an empty answer is the common case.
+async fn catalog_signals(State(state): State<AppState>) -> ApiResult<Json<ToolResult>> {
+    Ok(Json(state.with_service(|s| s.list_catalog_signals("user:api")).await?))
+}
+
+/// Ask the vehicle one community-defined signal and report what it answered.
+///
+/// `POST` rather than `GET` because it puts a request on the bus, even though
+/// that request is a read.
+async fn read_catalog_signal(
+    State(state): State<AppState>,
+    Path(signal): Path<String>,
+) -> ApiResult<Json<ToolResult>> {
+    Ok(Json(state.with_service(move |s| s.read_catalog_signal(&signal, "user:api")).await?))
 }
 
 /// Captures already stored for this vehicle, newest first.

@@ -67,6 +67,10 @@ pub mod capabilities {
     pub const SCAN_ALL_MODULES: &str = "obd2.scan_all_modules";
     /// Measure what one module supports, without writing to it.
     pub const PROBE_MODULE_CAPABILITIES: &str = "obd2.probe_module_capabilities";
+    /// List community signal definitions that might apply to this vehicle.
+    pub const LIST_CATALOG_SIGNALS: &str = "obd2.list_catalog_signals";
+    /// Ask the vehicle one community-defined signal and report what it says.
+    pub const READ_CATALOG_SIGNAL: &str = "obd2.read_catalog_signal";
     /// List configurable features applicable to this vehicle.
     pub const LIST_FEATURES: &str = "config.list_features";
     /// Read one feature's current setting from the vehicle. L0.
@@ -2674,6 +2678,278 @@ impl DiagnosticService {
              code is called.",
             info.structural_summary
         )
+    }
+
+    /// Community signal definitions that might apply to this vehicle.
+    ///
+    /// Touches no vehicle: this is a lookup.
+    pub fn list_catalog_signals(&mut self, initiator: &str) -> ToolResult {
+        let t0 = Instant::now();
+        self.record_invocation("list_catalog_signals", initiator, serde_json::json!({}));
+        let outcome = self
+            .authorize(capabilities::LIST_CATALOG_SIGNALS, initiator, None)
+            .and_then(|_| self.list_catalog_inner());
+        self.finish("list_catalog_signals", capabilities::LIST_CATALOG_SIGNALS, t0, outcome)
+    }
+
+    fn list_catalog_inner(&mut self) -> AimResult<Payload> {
+        let vehicle = self.vehicle().cloned();
+        let (make, model, year) = match &vehicle {
+            Some(v) => (v.make.clone(), v.model.clone(), v.year),
+            None => (None, None, None),
+        };
+
+        let candidates = self.decoders.catalog.candidates(make.as_deref(), model.as_deref(), year);
+        let mut warnings = Vec::new();
+
+        if make.is_none() {
+            warnings.push(Warning::info(
+                "vehicle_not_identified",
+                "No manufacturer is known for this vehicle, so no community definitions can be \
+                 matched to it. Run identify_vehicle first.",
+            ));
+        } else if candidates.is_empty() {
+            warnings.push(Warning::info(
+                "no_community_definitions",
+                format!(
+                    "This build has no community signal definitions for {}. That is the normal \
+                     case: the catalogue covers a few hundred vehicles and many entries are \
+                     still empty. Nothing is wrong with your vehicle or your adapter.",
+                    make.as_deref().unwrap_or("this make")
+                ),
+            ));
+        }
+        if year.is_none() && !candidates.is_empty() {
+            warnings.push(Warning::caution(
+                "model_year_unknown",
+                "The model year is not known, so definitions scoped to particular years are \
+                 being withheld. That is usually most of them - of 116 definitions recorded for \
+                 one vehicle, only 7 carried no year range.",
+            ));
+        }
+
+        let related = candidates
+            .iter()
+            .filter(|c| c.relevance == aim_decoders::catalog::Relevance::RelatedModel)
+            .count();
+        if related > 0 {
+            warnings.push(Warning::caution(
+                "definitions_from_another_model",
+                format!(
+                    "{related} of these come from a DIFFERENT model by the same manufacturer. \
+                     {}",
+                    aim_decoders::catalog::Relevance::RelatedModel.explain()
+                ),
+            ));
+        }
+
+        let signals: Vec<serde_json::Value> = candidates
+            .iter()
+            .flat_map(|c| {
+                c.command.signals.iter().map(move |s| {
+                    serde_json::json!({
+                        "signal_id": s.id,
+                        "name": s.name,
+                        "group": s.path,
+                        "unit": s.fmt.unit,
+                        "suggested_metric": s.suggested_metric,
+                        "module": c.command.hdr,
+                        "asks": c.command.describe(),
+                        "from_catalog": c.source_key,
+                        "relevance": c.relevance.as_str(),
+                        // Said on every entry rather than once at the top,
+                        // because these get read one at a time.
+                        "verification": "unverified",
+                    })
+                })
+            })
+            .collect();
+
+        Ok(Payload {
+            data: Some(serde_json::json!({
+                "make": make,
+                "model": model,
+                "year": year,
+                "count": signals.len(),
+                "signals": signals,
+                "note":
+                    "These are community-recorded claims about what this vehicle answers, not \
+                     measurements and not a standard. Reading one is safe - it is a read, and a \
+                     module that does not have the identifier says so. What comes back is a \
+                     reading to check, never a fact about your vehicle.",
+            })),
+            warnings,
+            ..Default::default()
+        })
+    }
+
+    /// Ask the vehicle one community-defined signal.
+    pub fn read_catalog_signal(&mut self, signal_id: &str, initiator: &str) -> ToolResult {
+        let t0 = Instant::now();
+        self.record_invocation(
+            "read_catalog_signal",
+            initiator,
+            serde_json::json!({ "signal": signal_id }),
+        );
+        let outcome = self
+            .authorize(capabilities::READ_CATALOG_SIGNAL, initiator, None)
+            .and_then(|_| self.read_catalog_inner(signal_id));
+        self.finish("read_catalog_signal", capabilities::READ_CATALOG_SIGNAL, t0, outcome)
+    }
+
+    fn read_catalog_inner(&mut self, signal_id: &str) -> AimResult<Payload> {
+        self.require_usable()?;
+        let vehicle = self.vehicle().cloned();
+        let (make, model, year) = match &vehicle {
+            Some(v) => (v.make.clone(), v.model.clone(), v.year),
+            None => (None, None, None),
+        };
+
+        // Resolved and copied out before touching the adapter, so nothing holds
+        // a borrow of the decoder set across the request.
+        let found =
+            self.decoders
+                .catalog
+                .candidates(make.as_deref(), model.as_deref(), year)
+                .into_iter()
+                .find_map(|c| {
+                    c.command.signals.iter().find(|s| s.id == signal_id).map(|s| {
+                        (c.command.clone(), s.clone(), c.relevance, c.source_key.to_string())
+                    })
+                });
+        let Some((command, signal, relevance, source_key)) = found else {
+            return Err(AimError::not_found(format!(
+                "no community definition {signal_id:?} applies to this vehicle. \
+                 list_catalog_signals shows the ones that do."
+            )));
+        };
+
+        let Some(request) = command.request_bytes() else {
+            return Err(AimError::new(
+                ErrorCode::PreconditionFailed,
+                format!("the catalogue entry for {signal_id:?} is malformed and cannot be sent"),
+            ));
+        };
+
+        let target = RequestTarget::Physical(command.hdr.clone());
+        let budget = self.adapter.capabilities().discovery_budget().read;
+        let replies = self.adapter.request_pdu(&request, &target, budget)?;
+
+        // A positive response echoes the service with 0x40 added, then the
+        // parameter. Anything else is not an answer to this question.
+        let expected_service = request[0].wrapping_add(0x40);
+        let echo_len = request.len();
+        let answer = replies.iter().find(|m| {
+            m.payload.first() == Some(&expected_service)
+                && m.payload.len() > echo_len
+                && m.payload[1..echo_len] == request[1..]
+        });
+
+        let Some(answer) = answer else {
+            // Say which of the two it was. A module that refused has told us
+            // something; a module that said nothing has not.
+            let refusal =
+                replies.iter().find_map(|m| match aim_protocols::UdsResponse::parse(&m.payload) {
+                    Ok(aim_protocols::UdsResponse::Negative { nrc, .. }) => Some(nrc.refusal()),
+                    _ => None,
+                });
+            let detail = match refusal {
+                Some(kind) => format!(" The module refused: {}", kind.explain()),
+                None => String::new(),
+            };
+            return Ok(Payload {
+                data: Some(serde_json::json!({
+                    "signal_id": signal_id,
+                    "answered": false,
+                    "from_catalog": source_key,
+                    "relevance": relevance.as_str(),
+                    "refused_because": refusal.map(|r| r.code()),
+                })),
+                warnings: vec![Warning::info(
+                    "definition_did_not_apply",
+                    format!(
+                        "The module at {} did not answer service {}.{detail} That is a real \
+                         result rather than a failure: it is evidence this definition does not \
+                         describe this vehicle.",
+                        command.hdr,
+                        command
+                            .cmd
+                            .iter()
+                            .next()
+                            .map(|(s, p)| format!("{s} parameter {p}"))
+                            .unwrap_or_else(|| String::from("?")),
+                    ),
+                )],
+                evidence: self.recorder.last_response_event(),
+                ..Default::default()
+            });
+        };
+
+        let data = &answer.payload[echo_len..];
+        let Some(reading) = signal.decode(data, 0) else {
+            return Ok(Payload {
+                data: Some(serde_json::json!({
+                    "signal_id": signal_id,
+                    "answered": true,
+                    "decoded": false,
+                    "bytes": aim_types::hex(data),
+                })),
+                warnings: vec![Warning::caution(
+                    "definition_does_not_fit_the_reply",
+                    format!(
+                        "The module answered with {} bytes, which is too few for this \
+                         definition. The definition describes a different vehicle, or a \
+                         different model year of this one.",
+                        data.len()
+                    ),
+                )],
+                evidence: self.recorder.last_response_event(),
+                ..Default::default()
+            });
+        };
+
+        let mut warnings = vec![Warning::caution(
+            "reading_from_a_community_definition",
+            format!(
+                "The bytes are measured; what they mean is not. {} This value should be treated \
+                 as a reading to check - does it look plausible for this vehicle right now? - \
+                 rather than as something the vehicle reported.",
+                relevance.explain()
+            ),
+        )];
+        if reading.out_of_stated_range {
+            warnings.push(Warning::caution(
+                "outside_the_definitions_own_range",
+                format!(
+                    "{} decoded to {:.3}, which is outside the range the definition itself \
+                     states. The definition and this vehicle disagree, so this number should \
+                     not be used.",
+                    signal.name, reading.value
+                ),
+            ));
+        }
+
+        Ok(Payload {
+            data: Some(serde_json::json!({
+                "signal_id": reading.id,
+                "name": reading.name,
+                "answered": true,
+                "decoded": true,
+                "value": reading.value,
+                "unit": reading.unit,
+                "label": reading.label,
+                "out_of_stated_range": reading.out_of_stated_range,
+                "bytes": aim_types::hex(data),
+                "module": answer.address,
+                "from_catalog": source_key,
+                "relevance": relevance.as_str(),
+                "source": "profile_data",
+                "verification": "unverified",
+            })),
+            warnings,
+            evidence: self.recorder.last_response_event(),
+            ..Default::default()
+        })
     }
 
     /// Classify the first usable UDS reply in a batch.
