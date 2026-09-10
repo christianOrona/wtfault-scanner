@@ -1918,7 +1918,7 @@ impl DiagnosticService {
                     if info.description.is_none() {
                         warnings.push(Warning::caution(
                             "dtc_not_in_catalog",
-                            format!("{code} has no description in the generic SAE catalog"),
+                            Self::unknown_dtc_next_steps(&code, &module.module_key, &info),
                         ));
                     }
                     self.store.record_dtc(&DtcRecord {
@@ -2317,7 +2317,7 @@ impl DiagnosticService {
 
             let outcome = match reply {
                 Ok(messages) => match messages.into_iter().find(|m| &m.address == response_addr) {
-                    Some(m) => self.decode_uds_dtcs(&m.payload),
+                    Some(m) => self.decode_uds_dtcs(&m.payload, &format!("ECU_{response_addr}")),
                     None => DtcReadOutcome::refused(
                         String::from("did not answer the fault request"),
                         None,
@@ -2568,6 +2568,39 @@ impl DiagnosticService {
         })
     }
 
+    /// Turn an uncatalogued code into the next thing that can be measured.
+    ///
+    /// "No description for U0284" ends a session. Working out the undocumented
+    /// parts is the whole point of this application, so stopping at the edge of
+    /// the catalogue is a strange place to stop.
+    ///
+    /// Every suggestion here is something this build can actually do and that
+    /// produces a *measurement*. None of them is a guess at what the code
+    /// means: a manufacturer-specific code has no generic meaning, and the
+    /// structural decoding below is all that can be said without inventing one.
+    fn unknown_dtc_next_steps(
+        code: &str,
+        module_key: &str,
+        info: &aim_decoders::DtcInfo,
+    ) -> String {
+        let origin = if info.is_generic {
+            "It is a generic code, so it should have a standard meaning; this build's catalogue \
+             simply does not carry it."
+        } else {
+            "It is manufacturer-specific, which means no generic catalogue defines it. Its \
+             meaning comes from the carmaker, and this build will not guess one."
+        };
+        format!(
+            "{code} has no description in the generic SAE catalog. What is known structurally: \
+             {}. {origin} What can be measured next: read the freeze frame from {module_key} to \
+             see the conditions recorded when it set; run probe_module_capabilities on \
+             {module_key} to see what that module can be asked; and compare against a capture \
+             from when the vehicle was behaving, which shows what changed rather than what the \
+             code is called.",
+            info.structural_summary
+        )
+    }
+
     /// Classify the first usable UDS reply in a batch.
     fn first_uds_outcome(replies: &[aim_adapter::EcuMessage]) -> UdsOutcome {
         use aim_protocols::UdsResponse;
@@ -2592,7 +2625,7 @@ impl DiagnosticService {
         Some(String::from_utf8_lossy(bytes).trim().to_string())
     }
 
-    fn decode_uds_dtcs(&self, payload: &[u8]) -> DtcReadOutcome {
+    fn decode_uds_dtcs(&self, payload: &[u8], module_key: &str) -> DtcReadOutcome {
         use aim_protocols::UdsResponse;
         let parsed = match UdsResponse::parse(payload) {
             Ok(p) => p,
@@ -2631,6 +2664,15 @@ impl DiagnosticService {
                         "base_code": d.base_code,
                         "description": info.as_ref().and_then(|i| i.description.clone()),
                         "structural_summary": info.as_ref().map(|i| i.structural_summary.clone()),
+                        // An uncatalogued code carries what can be done about
+                        // it rather than ending the trail. This is the case
+                        // that matters most here: a body or chassis code from
+                        // a module nobody legislated is exactly where this
+                        // build is most likely to have nothing to say.
+                        "next_steps": info
+                            .as_ref()
+                            .filter(|i| i.description.is_none())
+                            .map(|i| Self::unknown_dtc_next_steps(&d.code, module_key, i)),
                         "is_generic": info.as_ref().map(|i| i.is_generic),
                         "status": d.status,
                         "status_summary": d.status_summary(),
