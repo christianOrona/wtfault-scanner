@@ -547,6 +547,10 @@ button.mini {
 
 .splash-status { color: var(--text-dim); font-size: 13px; min-height: 20px; }
 .splash-slow { color: var(--caution); }
+/* Shown once the core is up and the splash is only being looked at. Cursor
+   included: an element that dismisses on click should look like one. */
+.splash-skip { color: var(--text-dim); opacity: 0.85; }
+.splash { cursor: pointer; }
 
 /* The wordmark, matching the artwork: "WTF" light, the rest in the accent. */
 .topbar .brand .brand-accent {

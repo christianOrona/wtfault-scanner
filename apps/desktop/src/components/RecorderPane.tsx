@@ -8,6 +8,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { SessionEvent } from "../api/types";
+import { saveFile, scanFilename, toCsv } from "./exportFile";
 import { Spinner, localTime } from "./primitives";
 
 const KINDS = [
@@ -32,6 +33,7 @@ export function RecorderPane({
 }) {
   const [filter, setFilter] = useState<Filter>("all");
   const [follow, setFollow] = useState(true);
+  const [savedTo, setSavedTo] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const rowRefs = useRef(new Map<number, HTMLDivElement>());
 
@@ -77,8 +79,34 @@ export function RecorderPane({
             <input type="checkbox" checked={follow} onChange={(e) => setFollow(e.target.checked)} />
             follow
           </label>
+          <button
+            disabled={!shown.length}
+            title="Write these events to a file, including the raw adapter lines"
+            onClick={() =>
+              void saveFile(
+                // The filter is in the name. A file holding a filtered view and
+                // called "recorder" would read as the whole recording, which is
+                // the sort of quiet lie this pane exists to prevent.
+                scanFilename(filter === "all" ? "recorder" : `recorder-${filter}`, null, "csv"),
+                toCsv(
+                  ["seq", "timestamp", "kind", "detail", "raw"],
+                  shown.map((e) => [e.seq, e.timestamp, e.kind.kind, plain(e), raw(e)]),
+                ),
+              )
+                .then((r) => setSavedTo(r.path))
+                .catch(() => setSavedTo("could not save"))
+            }
+          >
+            Export
+          </button>
         </div>
       </div>
+      {savedTo && (
+        <div className="faint" style={{ padding: "6px 16px" }}>
+          {savedTo === "could not save" ? savedTo : `Saved to ${savedTo}`}
+          {filter !== "all" && savedTo !== "could not save" && ` — ${filter} events only`}
+        </div>
+      )}
 
       <div className="events" ref={listRef} style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
         {!shown.length && <div className="empty">No events yet.</div>}
@@ -181,4 +209,35 @@ function describe(e: SessionEvent): React.ReactNode {
     default:
       return <span className="faint">{JSON.stringify(k)}</span>;
   }
+}
+
+/** The same content as `describe`, as text rather than as elements.
+ *
+ * Deliberately a second function rather than a stringified render: `describe`
+ * returns React nodes for the screen, and coaxing text out of those would give
+ * a file whose content depended on how the row happened to be marked up. */
+function plain(e: SessionEvent): string {
+  const k = e.kind as Record<string, unknown> & { kind: string };
+  switch (k.kind) {
+    case "adapter_request":
+      return `> ${String(k.command)}`;
+    case "adapter_response":
+      return `< ${String(k.command)} [${String(k.classification)}]`;
+    default:
+      return Object.entries(k)
+        .filter(([key]) => key !== "kind")
+        .map(([key, v]) => `${key}=${typeof v === "object" ? JSON.stringify(v) : String(v)}`)
+        .join(" ");
+  }
+}
+
+/** The literal adapter lines, when the event has any.
+ *
+ * Kept in their own column and unsummarised. These lines are the evidence every
+ * `raw_evidence_ref` in the application points at, and a file that paraphrased
+ * them would not be worth exporting. */
+function raw(e: SessionEvent): string {
+  const k = e.kind as Record<string, unknown> & { kind: string };
+  const lines = k.lines as string[] | undefined;
+  return lines?.length ? lines.join(" | ") : "";
 }
