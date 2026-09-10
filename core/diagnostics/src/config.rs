@@ -95,6 +95,22 @@ impl Check {
         }
     }
 
+    /// A check that passed but whose reason a person still needs to read.
+    ///
+    /// A pass is not always the end of the story: the first write on a vehicle
+    /// passes on evidence that permits an attempt, not evidence that it works,
+    /// and hiding that distinction behind a green tick would be the whole
+    /// problem.
+    fn pass_with_detail(id: &str, question: &str, detail: &str) -> Self {
+        Check {
+            id: id.into(),
+            question: question.into(),
+            passed: true,
+            detail: Some(detail.into()),
+            blocking_by_design: false,
+        }
+    }
+
     fn fail(id: &str, question: &str, detail: impl Into<String>) -> Self {
         Check {
             id: id.into(),
@@ -114,6 +130,19 @@ impl Check {
             blocking_by_design: true,
         }
     }
+}
+
+/// Whether the module owning this feature has been shown to accept writes.
+///
+/// Compares the mapping's module address against the gates measured open this
+/// session. Address comparison is deliberate: a gate measured on one module
+/// says nothing about another, and a body module accepting writes is not a
+/// reason to believe the engine controller will.
+fn gate_measured_open(f: &FeatureDef, ctx: &ChangeContext<'_>) -> bool {
+    let Some(target) = f.mapping.as_ref().and_then(|m| m.as_data_identifier()) else {
+        return false;
+    };
+    ctx.write_gate_open_modules.iter().any(|m| m.eq_ignore_ascii_case(&target.module))
 }
 
 /// The result of evaluating a proposed change without performing it.
@@ -166,6 +195,27 @@ pub struct ChangeContext<'a> {
     pub battery_voltage: Option<f64>,
     /// The highest permission level this build will execute.
     pub max_level: aim_types::PermissionLevel,
+    /// Module request addresses whose write gate was measured open this
+    /// session, by asking them to write to an identifier they had just
+    /// reported as absent.
+    ///
+    /// This exists to resolve a real deadlock. A mapping is only writable once
+    /// somebody has established that writing works, and establishing that
+    /// requires writing — so the first change on any vehicle could never
+    /// happen. The way out is not to relax the rule but to notice that it
+    /// conflates two different facts:
+    ///
+    /// * **The gate is open**: this module accepts `WriteDataByIdentifier` in
+    ///   the session available, rather than refusing it for security or
+    ///   session. Measurable without writing anything, and that is what this
+    ///   field records.
+    /// * **The write works**: this identifier, these bits, on this vehicle,
+    ///   changed and stayed changed. Only a read-back establishes that.
+    ///
+    /// An open gate permits an *attempt*. It never counts as verification, and
+    /// a change made on this basis is reported as a first attempt rather than
+    /// as a known-good operation.
+    pub write_gate_open_modules: &'a [String],
 }
 
 /// The voltage below which no module write is attempted.
@@ -231,6 +281,24 @@ pub fn plan_change(
              and supplied as a profile file before anything can be read or \
              changed.",
         )),
+        // A mapping measured on this vehicle, whose owning module has been
+        // shown to accept writes, is the first-write case. It is allowed to be
+        // attempted and is never called verified: the read-back decides.
+        FeatureSupport::ReadOnly
+            if f.verification == aim_types::VerificationStatus::Verified
+                && gate_measured_open(f, ctx) =>
+        {
+            checks.push(Check::pass_with_detail(
+                "mapping_known",
+                "Do we know where this setting lives, and that it can be changed?",
+                "Where this setting lives was measured on this vehicle, and the module that \
+                 owns it has been shown to accept writes in the session available - it \
+                 refused a write to a non-existent identifier for the identifier rather than \
+                 for security. Nobody has yet written *this* setting, so this is a first \
+                 attempt: it will be read back afterwards, and only what the module reports \
+                 then counts as having happened.",
+            ));
+        }
         FeatureSupport::ReadOnly => checks.push(Check::fail(
             "mapping_known",
             "Do we know where this setting lives, and that it can be changed?",
@@ -238,8 +306,8 @@ pub fn plan_change(
                 "Where this setting lives has been verified, so it can be read. Whether it \
                  can be *changed* this way has not been: a module that will show you a \
                  record does not necessarily accept a write to it, and some want an \
-                 extended session or security access first. That has to be established on \
-                 a vehicle and recorded before this app will attempt it."
+                 extended session or security access first. Probe the module's write gate \
+                 first - it establishes that without writing anything."
                     .to_string()
             } else {
                 "A mapping exists but has not been verified against a real vehicle. It can \
@@ -396,7 +464,11 @@ mod tests {
     use aim_decoders::{Applicability, Mapping};
     use aim_types::{PermissionLevel, VerificationStatus};
 
-    fn feature(risk: RiskClass, mapping: Option<Mapping>, v: VerificationStatus) -> FeatureDef {
+    pub(super) fn feature(
+        risk: RiskClass,
+        mapping: Option<Mapping>,
+        v: VerificationStatus,
+    ) -> FeatureDef {
         FeatureDef {
             id: "f".into(),
             name: "F".into(),
@@ -427,7 +499,7 @@ mod tests {
         }
     }
 
-    fn verified_mapping() -> Option<Mapping> {
+    pub(super) fn verified_mapping() -> Option<Mapping> {
         Some(Mapping::AsBuiltBits {
             block: "740-01".into(),
             byte: 2,
@@ -437,7 +509,7 @@ mod tests {
         })
     }
 
-    fn perfect_context(modules: &[String]) -> ChangeContext<'_> {
+    pub(super) fn perfect_context(modules: &[String]) -> ChangeContext<'_> {
         ChangeContext {
             vehicle: None,
             adapter: None,
@@ -447,14 +519,17 @@ mod tests {
             // A hypothetical build that permits writes, so the other checks are
             // the ones under test.
             max_level: PermissionLevel::L2,
+            // Empty by default so the deadlock this resolves stays visible in
+            // tests: a first write is refused unless the gate was measured.
+            write_gate_open_modules: &[],
         }
     }
 
-    fn request() -> ChangeRequest {
+    pub(super) fn request() -> ChangeRequest {
         ChangeRequest { feature_id: "f".into(), desired: DesiredValue::On }
     }
 
-    fn check<'a>(plan: &'a ChangePlan, id: &str) -> &'a Check {
+    pub(super) fn check<'a>(plan: &'a ChangePlan, id: &str) -> &'a Check {
         plan.checks.iter().find(|c| c.id == id).expect(id)
     }
 
@@ -644,5 +719,106 @@ mod tests {
         // fail loudly if a field is ever added.
         let json = serde_json::to_string(&request()).unwrap();
         assert_eq!(json, r#"{"feature_id":"f","desired":"on"}"#);
+    }
+}
+
+#[cfg(test)]
+mod first_write {
+    use super::tests::*;
+    use super::*;
+    use aim_decoders::Mapping;
+    use aim_types::VerificationStatus;
+
+    /// An executable mapping, which `verified_mapping` deliberately is not:
+    /// an as-built mapping cannot be performed until somebody establishes
+    /// which identifier its block corresponds to.
+    fn did_mapping() -> Option<Mapping> {
+        Some(Mapping::DataIdentifierBits {
+            module: String::from("726"),
+            did: 0xDE0E,
+            byte: 4,
+            mask: 0x01,
+            on: 0x01,
+            off: 0x00,
+        })
+    }
+
+    /// The deadlock this resolves: a mapping is only writable once somebody
+    /// established writing works, and establishing that requires writing. So
+    /// the first change on any vehicle could never happen.
+    #[test]
+    fn a_measured_mapping_alone_is_still_not_enough_to_write() {
+        let f = feature(RiskClass::Convenience, did_mapping(), VerificationStatus::Verified);
+        let mut f = f;
+        // Where it lives was measured; whether it can be changed was not.
+        f.write_verification = None;
+
+        let modules: Vec<String> = Vec::new();
+        let mut ctx = perfect_context(&modules);
+        ctx.write_gate_open_modules = &[];
+        let plan = plan_change(&request(), Some(&f), &ctx);
+        assert!(!plan.can_apply);
+        assert!(!check(&plan, "mapping_known").passed);
+    }
+
+    /// With the gate measured open on the owning module, the attempt is
+    /// permitted - and the check says out loud that it is an attempt.
+    #[test]
+    fn a_measured_gate_permits_a_first_attempt_and_says_so() {
+        let mut f = feature(RiskClass::Convenience, did_mapping(), VerificationStatus::Verified);
+        f.write_verification = None;
+
+        let owning = f
+            .mapping
+            .as_ref()
+            .and_then(|m| m.as_data_identifier())
+            .map(|t| t.module)
+            .expect("the fixture has an executable mapping");
+        let gates = vec![owning];
+
+        let modules: Vec<String> = Vec::new();
+        let mut ctx = perfect_context(&modules);
+        ctx.write_gate_open_modules = &gates;
+        let plan = plan_change(&request(), Some(&f), &ctx);
+
+        let c = check(&plan, "mapping_known");
+        assert!(c.passed, "a measured gate should permit the attempt");
+        let detail = c.detail.as_ref().expect("a pass that needs reading still carries its reason");
+        assert!(detail.contains("first attempt"), "{detail}");
+        assert!(detail.contains("read back"), "{detail}");
+    }
+
+    /// A gate measured on one module says nothing about another. A body module
+    /// accepting writes is not a reason to believe the engine controller will.
+    #[test]
+    fn a_gate_measured_on_another_module_does_not_count() {
+        let mut f = feature(RiskClass::Convenience, did_mapping(), VerificationStatus::Verified);
+        f.write_verification = None;
+
+        let gates = vec![String::from("7E0")];
+        let modules: Vec<String> = Vec::new();
+        let mut ctx = perfect_context(&modules);
+        ctx.write_gate_open_modules = &gates;
+        let plan = plan_change(&request(), Some(&f), &ctx);
+        assert!(!check(&plan, "mapping_known").passed);
+    }
+
+    /// An open gate never rescues a mapping nobody measured.
+    #[test]
+    fn an_open_gate_does_not_rescue_an_undid_mapping() {
+        let mut f = feature(RiskClass::Convenience, did_mapping(), VerificationStatus::Unverified);
+        f.write_verification = None;
+
+        let owning =
+            f.mapping.as_ref().and_then(|m| m.as_data_identifier()).map(|t| t.module).unwrap();
+        let gates = vec![owning];
+        let modules: Vec<String> = Vec::new();
+        let mut ctx = perfect_context(&modules);
+        ctx.write_gate_open_modules = &gates;
+        let plan = plan_change(&request(), Some(&f), &ctx);
+        assert!(
+            !check(&plan, "mapping_known").passed,
+            "knowing a module takes writes is not knowing where the setting lives"
+        );
     }
 }

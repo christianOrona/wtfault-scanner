@@ -297,6 +297,9 @@ pub struct DiagnosticService {
     /// Set when any reply this session arrived incomplete. Evidence about the
     /// adapter, consumed by the configuration-change checks.
     saw_truncated_response: bool,
+    /// Module request addresses whose write gate has been measured open this
+    /// session. Evidence that a write may be *attempted*, never that one works.
+    write_gate_open: std::collections::BTreeSet<String>,
     /// Consecutive timeouts per module and signal, so a parameter that has
     /// repeatedly failed to answer stops being asked.
     ///
@@ -337,6 +340,7 @@ impl DiagnosticService {
             supported_mids: BTreeMap::new(),
             vehicle: None,
             saw_truncated_response: false,
+            write_gate_open: std::collections::BTreeSet::new(),
             signal_timeouts: BTreeMap::new(),
             reference_year: 2026,
         })
@@ -1414,6 +1418,7 @@ impl DiagnosticService {
     ) -> AimResult<Payload> {
         let modules: Vec<String> =
             self.store.modules(&self.session.id)?.into_iter().map(|m| m.module_key).collect();
+        let gates: Vec<String> = self.write_gate_open.iter().cloned().collect();
         let caps = self.adapter.capabilities();
         let request = crate::config::ChangeRequest { feature_id: feature_id.to_string(), desired };
         let ctx = crate::config::ChangeContext {
@@ -1423,6 +1428,7 @@ impl DiagnosticService {
             saw_truncated_response: self.saw_truncated_response,
             battery_voltage: self.conditions.battery_voltage,
             max_level: aim_safety::MAX_ENABLED_LEVEL,
+            write_gate_open_modules: &gates,
         };
         let plan =
             crate::config::plan_change(&request, self.decoders.features.get(feature_id), &ctx);
@@ -1891,11 +1897,40 @@ impl DiagnosticService {
                 == Some(&aim_protocols::UdsService::WriteDataByIdentifier.response_id())
         });
         if !wrote_ok {
+            // Why it refused is the whole point. A module that says
+            // `securityAccessDenied` has told us something completely
+            // different from one that says `requestOutOfRange`, and reporting
+            // both as "did not accept the write" throws away the only useful
+            // part of the answer - which is what this project built
+            // `RefusalKind` to stop happening.
+            let refusal =
+                write_reply.iter().find_map(|m| {
+                    match aim_protocols::UdsResponse::parse(&m.payload) {
+                        Ok(aim_protocols::UdsResponse::Negative { nrc, .. }) => {
+                            Some((nrc.description(), nrc.refusal()))
+                        }
+                        _ => None,
+                    }
+                });
+            let detail = match refusal {
+                Some((name, kind)) => format!(" It refused with {name}: {}", kind.explain()),
+                None => String::from(
+                    " It did not answer the write at all, which is different from refusing it.",
+                ),
+            };
             return Err(AimError::new(
                 ErrorCode::VehicleNotResponding,
-                "the module did not accept the write. Nothing about the earlier read suggests \
-                 the setting changed, but verify it before assuming so.",
-            ));
+                format!(
+                    "the module did not accept the write.{detail} Nothing about the earlier \
+                     read suggests the setting changed, but verify it before assuming so."
+                ),
+            )
+            .with_details(serde_json::json!({
+                "module": target.module,
+                "did": format!("{:04X}", target.did),
+                "refused_because": refusal.map(|(_, k)| k.code()),
+                "bytes_offered": aim_types::hex(&after_bytes),
+            })));
         }
 
         // 6. Read it back. A write is not believed until it is seen.
@@ -3040,6 +3075,15 @@ impl DiagnosticService {
             _ => None,
         };
         let writes_open = matches!(refusal, Some(aim_protocols::RefusalKind::NotPresent));
+        if writes_open {
+            // Recorded so a first write on this vehicle can be attempted. This
+            // is evidence the module takes writes at all, and deliberately not
+            // evidence that any particular write works - only a read-back
+            // establishes that.
+            if let RequestTarget::Physical(a) = &addr {
+                self.write_gate_open.insert(a.clone());
+            }
+        }
 
         let verdict = match refusal {
             Some(aim_protocols::RefusalKind::NotPresent) => {
