@@ -20,12 +20,84 @@ use serde_json::{json, Value};
 pub enum Source {
     /// Read from the vehicle in this session. Traceable to a raw exchange.
     Measured,
+    /// Derived from something measured, by arithmetic this build performed.
+    ///
+    /// A fuel trim compared against a threshold, a readiness conclusion drawn
+    /// from monitor states. The inputs are traceable; the conclusion is this
+    /// project's, not the vehicle's, and saying so is the difference between
+    /// "your truck reported this" and "we worked this out from what it
+    /// reported".
+    IndirectlyMeasured,
+    /// A mapping from a vehicle profile: which bits hold which setting.
+    ///
+    /// Not measured this session and not a public standard either. It is
+    /// somebody's recorded observation of a vehicle, carrying its own source
+    /// and verification count, and it deserves its own label rather than being
+    /// filed under either neighbour.
+    Profile,
     /// The SAE catalogue description of a code this build shipped.
     Catalog,
     /// The model's general automotive knowledge. **Not verified against this
     /// vehicle, this session, or any dataset this project owns.** Cost
     /// estimates and failure predictions are always this.
     ModelKnowledge,
+    /// Not enough to attribute. A finding that reaches here should usually not
+    /// have been made.
+    Unknown,
+}
+
+/// How much the evidence supports a finding.
+///
+/// Deliberately **not** severity. "How bad is this if true" and "how sure are
+/// we that it is true" are different axes, and collapsing them is how a
+/// tentative guess about a serious problem gets rendered as a serious problem.
+/// A finding can be critical and low-confidence at once; that combination is
+/// exactly the one a person most needs to see labelled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfidenceClass {
+    /// Read from this vehicle, with the exchange to prove it.
+    High,
+    /// Derived from measurement, or a standard description of something
+    /// measured. Sound reasoning over real inputs.
+    Moderate,
+    /// General knowledge, or a mapping nobody has verified. Plausible, and not
+    /// established for this vehicle.
+    Low,
+    /// No supporting evidence at all.
+    None,
+}
+
+/// Why a finding has the confidence it has.
+///
+/// Machine-readable so the interface can explain a rating rather than assert
+/// it, and so a test can prove the rating follows from the evidence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfidenceBasis {
+    /// Read from this vehicle this session, with an event-log row behind it.
+    MeasuredThisSession,
+    /// Measured, but with no event-log row to point at.
+    ClaimedMeasuredWithoutEvidence,
+    /// Computed by this build from measured inputs.
+    DerivedFromMeasurement,
+    /// The published description of a standard code.
+    StandardCatalogue,
+    /// A vehicle profile mapping, which carries its own verification record.
+    ProfileMapping,
+    /// The model reasoning from general automotive knowledge.
+    ModelReasoning,
+    /// Nothing supports this.
+    NoEvidence,
+}
+
+/// A confidence rating and the reasons for it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Confidence {
+    /// The rating.
+    pub class: ConfidenceClass,
+    /// What produced it, in order.
+    pub basis: Vec<ConfidenceBasis>,
 }
 
 /// How much it matters, in words a driver understands.
@@ -98,6 +170,35 @@ impl Finding {
     /// Whether this finding rests on something actually read from the vehicle.
     pub fn is_evidenced(&self) -> bool {
         self.source == Source::Measured && !self.evidence_refs.is_empty()
+    }
+
+    /// How much the evidence supports this, **derived rather than asserted**.
+    ///
+    /// This is the whole point. A model asked how confident it is will answer,
+    /// fluently, and that answer is a property of the model rather than of the
+    /// vehicle. So the report type has nowhere for the model to put one: the
+    /// rating is computed here from what the finding actually cites.
+    ///
+    /// A claim of `Measured` with no event-log row behind it is the case worth
+    /// noticing. It is not treated as measured, because the whole meaning of
+    /// that word here is "there is a raw exchange you can go and look at".
+    pub fn confidence(&self) -> Confidence {
+        let (class, basis) = match self.source {
+            Source::Measured if !self.evidence_refs.is_empty() => {
+                (ConfidenceClass::High, ConfidenceBasis::MeasuredThisSession)
+            }
+            Source::Measured => {
+                (ConfidenceClass::Low, ConfidenceBasis::ClaimedMeasuredWithoutEvidence)
+            }
+            Source::IndirectlyMeasured => {
+                (ConfidenceClass::Moderate, ConfidenceBasis::DerivedFromMeasurement)
+            }
+            Source::Catalog => (ConfidenceClass::Moderate, ConfidenceBasis::StandardCatalogue),
+            Source::Profile => (ConfidenceClass::Low, ConfidenceBasis::ProfileMapping),
+            Source::ModelKnowledge => (ConfidenceClass::Low, ConfidenceBasis::ModelReasoning),
+            Source::Unknown => (ConfidenceClass::None, ConfidenceBasis::NoEvidence),
+        };
+        Confidence { class, basis: vec![basis] }
     }
 }
 
@@ -354,8 +455,9 @@ pub fn submit_report_schema() -> Value {
                 "description": "critical = do not drive or do not buy. serious = needs attention soon. caution = worth knowing. info = context." },
             "plain_english": { "type": "string",
                 "description": "What this means for whoever drives the car, in two or three sentences. No code numbers, no acronyms, no jargon. Assume the reader has never opened a bonnet." },
-            "source": { "type": "string", "enum": ["measured", "catalog", "model_knowledge"],
-                "description": "measured = read from this vehicle in this session. catalog = the standard description of a code. model_knowledge = your own general automotive knowledge, NOT checked against this vehicle. Cost estimates and predictions are ALWAYS model_knowledge." },
+            "source": { "type": "string",
+                "enum": ["measured", "indirectly_measured", "profile", "catalog", "model_knowledge", "unknown"],
+                "description": "Where this claim comes from. measured = read from this vehicle in this session, and you must give evidence_refs. indirectly_measured = worked out from measured values, such as comparing a reading against a threshold. profile = a vehicle profile mapping, which is somebody's recorded observation rather than a standard. catalog = the standard description of a code. model_knowledge = your own general automotive knowledge, NOT checked against this vehicle; cost estimates and predictions are ALWAYS this. unknown = you cannot attribute it, in which case reconsider whether to state it at all. Do not rate your own confidence anywhere: it is derived from this field and from evidence_refs, and a rating you supply would be a fact about you rather than about the vehicle." },
             "evidence": { "type": "array", "items": { "type": "string" },
                 "description": "The specific observations behind this, e.g. 'P2463 confirmed on ECU_7E8'." },
             "evidence_refs": { "type": "array", "items": { "type": "integer" },
@@ -674,5 +776,85 @@ mod tests {
         let req = s["properties"]["findings"]["items"]["required"].as_array().unwrap();
         assert!(req.iter().any(|v| v == "source"));
         assert!(req.iter().any(|v| v == "plain_english"));
+    }
+}
+
+#[cfg(test)]
+mod confidence_tests {
+    use super::*;
+
+    fn finding(source: Source, severity: Severity, refs: Vec<i64>) -> Finding {
+        Finding {
+            title: "t".into(),
+            severity,
+            plain_english: "p".into(),
+            source,
+            evidence: Vec::new(),
+            evidence_refs: refs,
+            what_to_do: None,
+            estimated_cost: None,
+        }
+    }
+
+    /// The rule the whole type exists to enforce: a model cannot state its own
+    /// confidence, because there is nowhere on the type to put one.
+    #[test]
+    fn confidence_is_derived_and_not_settable_by_the_model() {
+        let json =
+            serde_json::to_string(&finding(Source::Measured, Severity::Info, vec![7])).unwrap();
+        assert!(
+            !json.contains("confidence"),
+            "the serialised finding must have no confidence field for a model to fill in: {json}"
+        );
+    }
+
+    #[test]
+    fn measured_with_a_raw_exchange_is_high() {
+        let c = finding(Source::Measured, Severity::Serious, vec![42]).confidence();
+        assert_eq!(c.class, ConfidenceClass::High);
+        assert_eq!(c.basis, vec![ConfidenceBasis::MeasuredThisSession]);
+    }
+
+    /// The case worth catching. "Measured" means there is an exchange you can
+    /// go and look at; a claim of measurement with nothing to point at is not
+    /// a measurement, and must not inherit its authority.
+    #[test]
+    fn claiming_measured_without_evidence_does_not_get_measured_confidence() {
+        let c = finding(Source::Measured, Severity::Critical, vec![]).confidence();
+        assert_eq!(c.class, ConfidenceClass::Low);
+        assert_eq!(c.basis, vec![ConfidenceBasis::ClaimedMeasuredWithoutEvidence]);
+    }
+
+    #[test]
+    fn the_other_sources_land_where_their_evidence_puts_them() {
+        for (source, expected) in [
+            (Source::IndirectlyMeasured, ConfidenceClass::Moderate),
+            (Source::Catalog, ConfidenceClass::Moderate),
+            (Source::Profile, ConfidenceClass::Low),
+            (Source::ModelKnowledge, ConfidenceClass::Low),
+            (Source::Unknown, ConfidenceClass::None),
+        ] {
+            let c = finding(source, Severity::Info, vec![1]).confidence();
+            assert_eq!(c.class, expected, "{source:?}");
+        }
+    }
+
+    /// Severity and confidence are independent axes, and the combination that
+    /// matters most is the one a single "how serious is this" number destroys:
+    /// a potentially critical problem that the evidence does not establish.
+    #[test]
+    fn a_critical_finding_can_be_low_confidence_and_says_both() {
+        let f = finding(Source::ModelKnowledge, Severity::Critical, vec![]);
+        assert_eq!(f.severity, Severity::Critical, "how bad it would be");
+        assert_eq!(f.confidence().class, ConfidenceClass::Low, "how sure we are");
+        assert!(!f.is_evidenced());
+    }
+
+    /// And the reverse: something certain and unimportant.
+    #[test]
+    fn an_informational_finding_can_be_high_confidence() {
+        let f = finding(Source::Measured, Severity::Info, vec![3]);
+        assert_eq!(f.severity, Severity::Info);
+        assert_eq!(f.confidence().class, ConfidenceClass::High);
     }
 }
