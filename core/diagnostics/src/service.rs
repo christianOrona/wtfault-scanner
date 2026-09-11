@@ -2399,6 +2399,28 @@ impl DiagnosticService {
                 "This mapping has not been verified against a known-good tool on this model.",
             ));
         }
+        // The thing that nearly read as a failed write, and the reason this is
+        // said on every successful one.
+        //
+        // Measured on a 2019 F-250 (2026-09-11): the module accepted the write,
+        // the read-back returned the new value, nothing reverted — and the dash
+        // menu still showed the old setting. Every machine-checkable signal
+        // said it had worked and the vehicle behaved as though it had not. It
+        // took an ignition cycle for the module to latch the configuration.
+        //
+        // Somebody who checks the menu straight afterwards, sees no change and
+        // concludes the mapping is wrong has been misled by this app's own
+        // silence. A write is not finished when the bytes come back; it is
+        // finished when the vehicle acts on it.
+        if verified {
+            warnings.push(Warning::info(
+                "cycle_the_key_to_see_it",
+                "The module has the new value. Many modules only act on a configuration change \
+                 at power-up, so turn the ignition off, wait a few seconds and turn it back on \
+                 before checking. Until then the vehicle may well still behave the old way, and \
+                 that is expected rather than a sign the write failed.",
+            ));
+        }
 
         Ok(Payload {
             data: Some(serde_json::json!({
@@ -2411,6 +2433,9 @@ impl DiagnosticService {
                 "after": aim_types::hex(&verify),
                 "state_before": before_state,
                 "state_after": now_state,
+                // Said in the data as well as the warnings, so an interface can
+                // put it next to the result rather than in a list of caveats.
+                "cycle_ignition_to_apply": verified,
             })),
             warnings,
             ..Default::default()

@@ -69,20 +69,39 @@ features:
 
     # Evidence for writing is a separate fact and this project does not conflate
     # them. Knowing which bit holds the setting is not knowing that writing it
-    # works, and nobody has written this bit from this application yet.
+    # works. This one has now been written, on this vehicle, and confirmed by
+    # the owner reading the dash menu afterwards.
     #
-    # What IS established: this module accepts WriteDataByIdentifier in the
-    # extended session and does not gate it behind security access. That makes a
-    # write reachable; it does not make it demonstrated.
+    #   Adapter    OBDLink MX+ (STN2255 v5.12.4), Bluetooth
+    #   Session    extended (0x10 0x03), no security access required
+    #   Write      DE0E byte 4: 0x01 -> 0x00
+    #   Read-back  immediately afterwards: 0x00, and again after the key cycle
+    #   Confirmed  owner checked the dash menu: AutoLock reads off
+    #
+    # THE PART THAT NEARLY LOOKED LIKE A FAILURE, and the reason the note below
+    # exists at all: immediately after the write the dash menu still said ON.
+    # Every machine-checkable signal said the write had worked — the module
+    # accepted it, the read-back showed the new value, nothing reverted — and
+    # the vehicle still behaved as though nothing had changed. It took a key
+    # cycle for the module to latch the new configuration.
+    #
+    # Without that written down, the next person does exactly what happened
+    # here: writes the bit, checks the menu, sees no change, and concludes the
+    # mapping is wrong. It is not wrong. It is deferred.
     write_verification:
-      verification: unverified
-      verified_on_vehicles: 0
-      source: "not yet written from this application"
+      verification: verified
+      verified_on_vehicles: 1
+      source: >-
+        written from this application on 2026-09-11 with an OBDLink MX+, read
+        back, and confirmed against the dash menu by the vehicle's owner after
+        a key cycle
+      last_verified: "2026-09-11"
       notes: >-
-        The write path has not been exercised on this vehicle. Before it is,
-        the read-back must be checked against the dash menu: a write that
-        reports success and leaves the menu unchanged means the mapping is
-        wrong, and that is the case worth catching.
+        The change does not appear until the ignition has been cycled. Turn the
+        key off, wait a few seconds, turn it back on, and then check - the
+        module latches this configuration at power-up. Immediately after the
+        write the menu will still show the old value, and that is expected
+        rather than a sign the write failed.
 
     mapping:
       kind: data_identifier_bits

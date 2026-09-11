@@ -1110,21 +1110,52 @@ mod measured_on_a_real_vehicle {
         assert_eq!(target.off, 0x00);
     }
 
-    /// Knowing where a setting lives is not knowing that writing it works, and
-    /// the catalogue must keep saying so until somebody has written it.
+    /// Reading and writing are separate claims, and both are now established
+    /// for this one bit on this one vehicle.
+    ///
+    /// Written from this application on 2026-09-11 with an OBDLink MX+ and
+    /// confirmed by the owner against the dash menu. The count matters as much
+    /// as the status: one vehicle is one vehicle, and the applicability is
+    /// still a single VIN.
     #[test]
-    fn knowing_where_it_lives_is_not_permission_to_write_it() {
+    fn writing_this_bit_has_been_demonstrated_on_exactly_one_vehicle() {
         let catalog = FeatureCatalog::embedded().unwrap();
         let feature = catalog.get("autolock_doors_when_driving").unwrap();
 
         assert_eq!(feature.verification, VerificationStatus::Verified, "reading was measured");
         let write = feature.write_verification.as_ref().expect("write evidence is stated");
-        assert_eq!(
-            write.verification,
-            VerificationStatus::Unverified,
-            "nobody has written this bit from this application yet"
+        assert_eq!(write.verification, VerificationStatus::Verified);
+        assert_eq!(write.verified_on_vehicles, 1, "one truck is one truck");
+        assert!(write.is_verified(), "which is what promotes this to writable");
+    }
+
+    /// The finding that nearly cost us this mapping, pinned so it cannot be
+    /// edited away.
+    ///
+    /// Immediately after the write the dash menu still showed the old value.
+    /// Every machine-checkable signal said the write had worked — the module
+    /// accepted it, the read-back returned the new bytes, nothing reverted —
+    /// and the vehicle behaved as though nothing had changed. It took an
+    /// ignition cycle for the module to latch it.
+    ///
+    /// A profile that records the mapping without recording that has set the
+    /// next person up to write the bit, check the menu, see no change, and
+    /// conclude the mapping is broken.
+    #[test]
+    fn the_note_says_the_change_needs_a_key_cycle() {
+        let catalog = FeatureCatalog::embedded().unwrap();
+        let feature = catalog.get("autolock_doors_when_driving").unwrap();
+        let notes = feature
+            .write_verification
+            .as_ref()
+            .and_then(|w| w.notes.as_deref())
+            .expect("the write evidence carries notes");
+
+        let lower = notes.to_ascii_lowercase();
+        assert!(
+            lower.contains("ignition") || lower.contains("key"),
+            "the key-cycle requirement must survive: {notes}"
         );
-        assert_eq!(write.verified_on_vehicles, 0);
     }
 
     /// Scoped to one VIN, and failing closed is the whole reason this is safe
