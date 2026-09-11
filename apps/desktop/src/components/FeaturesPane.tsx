@@ -47,6 +47,7 @@ export function FeaturesPane({ connected }: { connected: boolean }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<{ code: string; message: string } | null>(null);
   const [open, setOpen] = useState<string | null>(null);
+  const [why, setWhy] = useState(false);
 
   const load = useCallback(async () => {
     setBusy(true);
@@ -78,6 +79,19 @@ export function FeaturesPane({ connected }: { connected: boolean }) {
               {features.length} known for trucks like yours
             </span>
           )}
+          {/* The answer, at the top, in a line. This screen used to open with
+              several paragraphs about why a mapping is needed and what
+              verification means — good writing, and not what somebody wanting
+              to fold their mirrors came to find out. */}
+          {result?.data && !!features.length && (
+            <span className="tag" style={{ color: countOf(features, "writable") ? "var(--ok)" : "var(--text-faint)" }}>
+              {countOf(features, "writable")} changeable
+              {" · "}
+              {countOf(features, "read_only")} readable
+              {" · "}
+              {countOf(features, "described_only")} not measured yet
+            </span>
+          )}
         </div>
         <button onClick={() => void load()} disabled={busy}>
           {busy ? <Spinner label="Reading" /> : "Refresh"}
@@ -89,39 +103,44 @@ export function FeaturesPane({ connected }: { connected: boolean }) {
           being read as a scan of the vehicle. It is not — it is a reference
           list filtered by make and year, and saying so up front is the
           difference between a useful reference and a broken promise. */}
+      {/* One line by default, the reasoning behind a toggle.
+          Both of these blocks say something true and necessary, and having both
+          open permanently meant the screen began with two full-width walls of
+          text before a single feature was visible. The claim stays where
+          somebody will read it; the argument moves to where somebody can ask
+          for it. */}
       <div className="banner caution">
         <span className="b-code">read this first</span>
-        <div>
-          <strong>This is a reference list, not a scan of your truck.</strong>
-          <div style={{ marginTop: 6 }}>
-            These are settings that exist on vehicles of this make and year. Nothing here has
-            been read from your vehicle, so a feature appearing in this list does not mean yours
-            was built with the hardware — and one missing does not mean it wasn't. Use it to know
-            what to ask for; do not treat it as a diagnosis.
+        <div style={{ minWidth: 0 }}>
+          <div className="row" style={{ gap: 10, justifyContent: "space-between" }}>
+            <strong>A reference list, not a scan of your truck.</strong>
+            <button className="mini" onClick={() => setWhy((w) => !w)}>
+              {why ? "Less" : "Why?"}
+            </button>
           </div>
+          {why && (
+            <div style={{ marginTop: 6 }}>
+              These are settings that exist on vehicles of this make and year. Nothing here has
+              been read from your vehicle, so a feature appearing in this list does not mean yours
+              was built with the hardware — and one missing does not mean it wasn't. Use it to know
+              what to ask for; do not treat it as a diagnosis.
+              <div style={{ marginTop: 10 }}>
+                <strong>And this app will not guess where a setting lives.</strong> Which bits
+                inside a module hold something like auto-folding mirrors is not published by any
+                manufacturer. Getting it wrong writes the wrong thing into a door module, so
+                nothing is written until somebody has measured it on a real vehicle. Any feature
+                below that says <em>not measured yet</em> tells you how to close that gap
+                yourself, and everything loaded from a profile file is labelled with the file it
+                came from.
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
       <ErrorBanner error={error} />
       {result && !result.success && <FailedResult result={result} />}
       {result && <Warnings warnings={result.warnings} />}
-
-      {/* The single most important sentence on this screen. Without it the page
-          reads as a feature list that is inexplicably all disabled. */}
-      <div className="banner info">
-        <span className="b-code">how this works</span>
-        <div>
-          <strong>This app will not guess where a setting lives.</strong>
-          <div style={{ marginTop: 6 }}>
-            Which bits inside a module hold a setting like auto-folding mirrors is not
-            published by any manufacturer. Getting it wrong writes the wrong thing into a
-            door module, so nothing here is written until somebody has measured it on a
-            real vehicle and supplied it as a profile file. Settings → Vehicle profiles
-            explains how, and everything loaded that way is labelled with the file it came
-            from.
-          </div>
-        </div>
-      </div>
 
       {!connected && (
         <div className="banner caution">
@@ -209,6 +228,33 @@ function FeatureCard({
             </div>
           )}
 
+          {/* The screen used to explain why nothing could be done and stop
+              there, which on a vehicle where every mapping is null is a wall of
+              text ending in "no". This is the other half: nobody has measured
+              it *yet*, and measuring it is a procedure rather than a mystery.
+
+              Only shown where it is true. A feature refused on risk grounds
+              gets the banner above and no encouragement, because no amount of
+              measuring changes that answer. */}
+          {feature.support === "described_only" && feature.writable_in_principle && (
+            <div className="banner info" style={{ marginTop: 10, marginBottom: 0 }}>
+              <span className="b-code">not measured yet</span>
+              <span>
+                Nobody has recorded which bits hold this on your vehicle — that is a gap, not a
+                refusal, and you can close it without waiting for a new version:
+                <ol style={{ margin: "6px 0 0", paddingLeft: 18 }}>
+                  <li>Capture the module's configuration from the Settings tab.</li>
+                  <li>Change the setting once, using the vehicle's own menu or a tool that
+                      already does it.</li>
+                  <li>Capture again. The app reports only the bits that moved — that is the
+                      mapping.</li>
+                  <li>Do it once more in reverse, which is what separates the real bit from a
+                      coincidence.</li>
+                </ol>
+              </span>
+            </div>
+          )}
+
           <div className="row" style={{ marginTop: 10, gap: 6 }}>
             <button className="mini" onClick={() => void preview("on")} disabled={busy}>
               {busy ? <Spinner /> : "What would turning it on involve?"}
@@ -267,4 +313,13 @@ function PlanChecks({ plan }: { plan: ChangePlan }) {
       </table>
     </div>
   );
+}
+
+/** How many features are in one support state.
+ *
+ * The header answers "what can I actually do here" before any explanation of
+ * why. On most vehicles the honest answer is "none yet", and saying so in a
+ * line beats burying it under the reasoning. */
+function countOf(features: FeatureView[], support: FeatureView["support"]): number {
+  return features.filter((f) => f.support === support).length;
 }
