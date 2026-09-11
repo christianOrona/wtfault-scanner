@@ -279,11 +279,7 @@ impl VehicleIdentity {
         // ISO 9141, and it narrows what could possibly apply. Recorded once
         // even though every module carries it.
         if let Some(first) = modules.first() {
-            id.observe(Evidence::new(
-                "protocol",
-                first.protocol.label(),
-                EvidenceSource::Protocol,
-            ));
+            id.observe(Evidence::new("protocol", first.protocol.label(), EvidenceSource::Protocol));
         }
 
         id.note_gaps();
@@ -428,6 +424,24 @@ impl VehicleIdentity {
     /// Observations about one subject, in the order they were gathered.
     pub fn observations_about(&self, about: &str) -> Vec<&Evidence> {
         self.observations.iter().filter(|e| e.about == about).collect()
+    }
+}
+
+/// What the knowledge providers get to ask about.
+///
+/// **Only settled fields cross over.** A contested field arrives as unknown
+/// rather than as whichever candidate happened to be first, because a provider
+/// asked with the wrong VIN answers confidently about a different vehicle —
+/// which is worse than answering nothing. The providers are built to handle
+/// not knowing; they are not built to handle being told something false.
+impl From<&VehicleIdentity> for aim_decoders::VehicleContext {
+    fn from(id: &VehicleIdentity) -> Self {
+        aim_decoders::VehicleContext {
+            make: id.settled("make").map(String::from),
+            model: id.settled("model").map(String::from),
+            year: id.settled("model_year").and_then(|y| y.parse().ok()),
+            vin: id.settled("vin").map(String::from),
+        }
     }
 }
 
@@ -594,6 +608,30 @@ mod tests {
         let id = VehicleIdentity::assemble(None, &[m]);
         let found = id.observations_about("module");
         assert!(found[0].value.contains("listens at 726"), "{}", found[0].value);
+    }
+
+    /// The bridge to the knowledge providers, and the one thing it must not do.
+    ///
+    /// A provider given the wrong VIN answers confidently about a different
+    /// vehicle. A provider given no VIN says it has nothing. The second is the
+    /// failure worth having, so a contested field crosses over as unknown.
+    #[test]
+    fn a_contested_field_reaches_the_providers_as_unknown() {
+        let mut id = VehicleIdentity::assemble(Some(&truck()), &[]);
+        let settled: aim_decoders::VehicleContext = (&id).into();
+        assert_eq!(settled.vin.as_deref(), Some("1FT7W2BT7KEF78036"));
+        assert_eq!(settled.year, Some(2019));
+
+        id.record_identifiers(
+            "ECU_7E8",
+            &BTreeMap::from([(0xF190u16, String::from("1FT7W2BT7KEF99999"))]),
+        );
+        let contested: aim_decoders::VehicleContext = (&id).into();
+        assert_eq!(contested.vin, None, "neither VIN may be passed off as the answer");
+        // Everything else it does know still goes through — one disagreement
+        // does not blind the providers to the rest.
+        assert_eq!(contested.year, Some(2019));
+        assert!(contested.make.is_some());
     }
 
     #[test]

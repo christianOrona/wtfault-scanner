@@ -21,7 +21,7 @@
 use crate::identity::VehicleIdentity;
 use crate::recorder::SessionRecorder;
 use aim_adapter::{DiagnosticAdapter, EcuMessage, RequestTarget};
-use aim_decoders::DecoderSet;
+use aim_decoders::{Authority, DecoderSet, KnowledgeProvider};
 use aim_protocols::{
     decode_dtc_list, decode_monitor_response, decode_supported_pids, strip_dtc_count, ObdRequest,
     ObdResponse, Service,
@@ -422,6 +422,17 @@ impl DiagnosticService {
             identity.record_supported_parameters(module_key, pids);
         }
         identity
+    }
+
+    /// What the knowledge providers are told about this vehicle.
+    ///
+    /// Derived from [`DiagnosticService::identity`] rather than from the
+    /// vehicle record directly, so that a field two sources disagree about is
+    /// passed as unknown instead of as one side's answer. A provider given the
+    /// wrong VIN answers confidently about a different vehicle; a provider
+    /// given no VIN says it has nothing, which is the failure worth having.
+    pub fn knowledge_context(&self) -> aim_decoders::VehicleContext {
+        (&self.identity()).into()
     }
 
     /// Vehicle conditions as currently believed, used by precondition checks.
@@ -3200,7 +3211,10 @@ impl DiagnosticService {
             None => (None, None, None),
         };
 
-        let candidates = self.decoders.catalog.candidates(make.as_deref(), model.as_deref(), year);
+        // Asked through the knowledge interface rather than reaching into the
+        // catalogue directly. One source today; the ordering and the licence
+        // handling are the same the moment there are three.
+        let candidates = self.decoders.catalog.signals(&self.knowledge_context());
         let mut warnings = Vec::new();
 
         if make.is_none() {
@@ -3229,35 +3243,46 @@ impl DiagnosticService {
             ));
         }
 
-        let related = candidates
-            .iter()
-            .filter(|c| c.relevance == aim_decoders::catalog::Relevance::RelatedModel)
-            .count();
+        let related =
+            candidates.iter().filter(|c| c.authority == Authority::CommunityRelatedModel).count();
         if related > 0 {
             warnings.push(Warning::caution(
                 "definitions_from_another_model",
                 format!(
                     "{related} of these come from a DIFFERENT model by the same manufacturer. \
                      {}",
-                    aim_decoders::catalog::Relevance::RelatedModel.explain()
+                    Authority::CommunityRelatedModel.explain()
                 ),
             ));
+        }
+
+        // Credit where the licence requires it, taken from the answers rather
+        // than written into this string by hand — the obligation belongs to the
+        // content, so it has to follow the content.
+        for credit in candidates
+            .iter()
+            .filter_map(|c| c.provider.licence.attribution())
+            .collect::<std::collections::BTreeSet<_>>()
+        {
+            warnings.push(Warning::info("definition_attribution", credit));
         }
 
         let signals: Vec<serde_json::Value> = candidates
             .iter()
             .flat_map(|c| {
-                c.command.signals.iter().map(move |s| {
+                let command = c.answer.command;
+                command.signals.iter().map(move |s| {
                     serde_json::json!({
                         "signal_id": s.id,
                         "name": s.name,
                         "group": s.path,
                         "unit": s.fmt.unit,
                         "suggested_metric": s.suggested_metric,
-                        "module": c.command.hdr,
-                        "asks": c.command.describe(),
-                        "from_catalog": c.source_key,
-                        "relevance": c.relevance.as_str(),
+                        "module": command.hdr,
+                        "asks": command.describe(),
+                        "from_catalog": c.source,
+                        "authority": c.authority.as_str(),
+                        "licence": c.provider.licence.as_str(),
                         // Said on every entry rather than once at the top,
                         // because these get read one at a time.
                         "verification": "unverified",
@@ -3300,25 +3325,22 @@ impl DiagnosticService {
 
     fn read_catalog_inner(&mut self, signal_id: &str) -> AimResult<Payload> {
         self.require_usable()?;
-        let vehicle = self.vehicle().cloned();
-        let (make, model, year) = match &vehicle {
-            Some(v) => (v.make.clone(), v.model.clone(), v.year),
-            None => (None, None, None),
-        };
+        let context = self.knowledge_context();
 
         // Resolved and copied out before touching the adapter, so nothing holds
-        // a borrow of the decoder set across the request.
-        let found =
-            self.decoders
-                .catalog
-                .candidates(make.as_deref(), model.as_deref(), year)
-                .into_iter()
-                .find_map(|c| {
-                    c.command.signals.iter().find(|s| s.id == signal_id).map(|s| {
-                        (c.command.clone(), s.clone(), c.relevance, c.source_key.to_string())
-                    })
-                });
-        let Some((command, signal, relevance, source_key)) = found else {
+        // a borrow of the decoder set across the request. The first match wins
+        // because the answers arrive in authority order — the only place that
+        // ordering is allowed to decide anything on a person's behalf, and only
+        // between claims of the same kind about the same signal.
+        let found = self.decoders.catalog.signals(&context).into_iter().find_map(|c| {
+            c.answer
+                .command
+                .signals
+                .iter()
+                .find(|s| s.id == signal_id)
+                .map(|s| (c.answer.command.clone(), s.clone(), c.authority, c.source.clone()))
+        });
+        let Some((command, signal, authority, source_key)) = found else {
             return Err(AimError::not_found(format!(
                 "no community definition {signal_id:?} applies to this vehicle. \
                  list_catalog_signals shows the ones that do."
@@ -3363,7 +3385,7 @@ impl DiagnosticService {
                     "signal_id": signal_id,
                     "answered": false,
                     "from_catalog": source_key,
-                    "relevance": relevance.as_str(),
+                    "authority": authority.as_str(),
                     "refused_because": refusal.map(|r| r.code()),
                 })),
                 warnings: vec![Warning::info(
@@ -3415,7 +3437,7 @@ impl DiagnosticService {
                 "The bytes are measured; what they mean is not. {} This value should be treated \
                  as a reading to check - does it look plausible for this vehicle right now? - \
                  rather than as something the vehicle reported.",
-                relevance.explain()
+                authority.explain()
             ),
         )];
         if reading.out_of_stated_range {
@@ -3443,7 +3465,7 @@ impl DiagnosticService {
                 "bytes": aim_types::hex(data),
                 "module": answer.address,
                 "from_catalog": source_key,
-                "relevance": relevance.as_str(),
+                "authority": authority.as_str(),
                 "source": "profile_data",
                 "verification": "unverified",
             })),

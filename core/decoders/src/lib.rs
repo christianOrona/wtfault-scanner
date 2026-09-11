@@ -20,6 +20,7 @@ pub mod dtc;
 pub mod explain;
 pub mod expr;
 pub mod features;
+pub mod knowledge;
 pub mod monitors;
 pub mod pids;
 pub mod profiles;
@@ -32,6 +33,10 @@ pub use expr::Formula;
 pub use features::{
     Applicability, DataIdentifierTarget, FeatureCatalog, FeatureDef, FeatureSupport, Mapping,
     OperationEvidence,
+};
+pub use knowledge::{
+    Authority, ConfigurationAnswer, Knowledge, KnowledgeBase, KnowledgeProvider, Licence,
+    MappingAnswer, ProviderInfo, SignalAnswer, VehicleContext,
 };
 pub use monitors::{MonitorCatalog, MonitorReading, RawCounts};
 pub use pids::{PidDefinition, PidKind, PidRegistry};
