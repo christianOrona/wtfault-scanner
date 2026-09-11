@@ -12,6 +12,14 @@ import { LINKS, PRODUCT_NAME, TAGLINE } from "../branding";
 import appIcon from "../assets/icon.png";
 import { ErrorBanner, Spinner } from "./primitives";
 
+/** Where a key lives, in three words. The full sentence is on the title. */
+const KEY_SOURCE_LABEL: Record<ProviderView["key_source"], string> = {
+  operating_system: "in the credential store",
+  environment: "from the environment",
+  plain_file: "in a plain text file",
+  none: "",
+};
+
 const BLANK: ProviderInput = {
   kind: "ollama",
   label: "",
@@ -202,6 +210,18 @@ export function SettingsPane({
               <span>model {p.model}</span>
               {p.base_url && <span>{p.base_url}</span>}
               <span>{p.has_key ? `key ${p.key_hint}` : "no key"}</span>
+              {/* Where the key actually is, next to the key itself. The only
+                  one worth colouring is the plaintext file: everything else is
+                  "stored properly", and that one is "anything running as you
+                  can read this". */}
+              {p.has_key && (
+                <span
+                  title={p.key_source_explanation}
+                  style={{ color: p.key_source === "plain_file" ? "var(--caution)" : undefined }}
+                >
+                  {KEY_SOURCE_LABEL[p.key_source]}
+                </span>
+              )}
               {p.speed_supported && <span>thinking {p.speed === "fast" ? "fast" : "full"}</span>}
               <span>{p.max_steps ?? 14} steps</span>
               {p.context_supported && <span>{(p.context_tokens ?? 16384).toLocaleString()} ctx</span>}
@@ -311,7 +331,7 @@ export function SettingsPane({
               />
               {data && (
                 <span className="faint">
-                  {data.storage_note} Stored at <code>{data.settings_path}</code>.
+                  {data.storage_note} The file itself is at <code>{data.settings_path}</code>.
                 </span>
               )}
             </div>
@@ -684,10 +704,12 @@ function AboutDialog({ health, onClose }: { health: Health | null; onClose: () =
           </p>
           <p>
             <strong>Where your data is.</strong> Scans are stored on this machine only. API
-            keys sit in a file in your own profile, in plain text, readable by your Windows
-            account — the OS credential store would be better and is not implemented.
-            Nothing is uploaded anywhere except the questions you ask a hosted model, if you
-            have configured one.
+            keys go to your operating system's credential store — the same place your
+            browser keeps saved passwords — and not into any file this app writes. On a
+            machine with no credential store a key stays in the settings file in plain text,
+            and the Settings screen says so against that key rather than leaving you to
+            assume otherwise. Nothing is uploaded anywhere except the questions you ask a
+            hosted model, if you have configured one.
           </p>
         </details>
 

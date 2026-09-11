@@ -28,6 +28,7 @@
 
 #![warn(missing_docs)]
 
+pub mod credentials;
 pub mod error;
 pub mod prompts;
 pub mod provider;

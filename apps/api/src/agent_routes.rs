@@ -42,13 +42,19 @@ fn agent_error(e: AgentError) -> ApiError {
 pub async fn list_providers(State(state): State<AppState>) -> ApiResult<Json<Value>> {
     let settings = state.settings.load().map_err(agent_error)?;
     Ok(Json(json!({
-        "providers": settings.views(),
+        "providers": state.settings.views(&settings),
         "purpose": settings.purpose,
         "tone": settings.tone,
         "settings_path": state.settings.path().display().to_string(),
         // Said plainly rather than buried: the user is about to paste a key.
-        "storage_note": "Keys are stored in this file in plain text, readable only by your \
-                         Windows account. This build does not use the OS credential store.",
+        // Describes where keys go on *this* machine rather than where they go
+        // in principle, because on a machine with no credential store those
+        // are different answers and the difference is the whole point.
+        "storage_note": format!(
+            "The settings themselves are kept in this file. Keys are not — they go to {}. \
+             Each provider below says where its own key is actually being read from.",
+            state.settings.credential_location()
+        ),
         "kinds": [
             { "id": "anthropic", "label": "Anthropic (Claude)", "requires_key": true,
               "default_base_url": "https://api.anthropic.com",
@@ -127,7 +133,7 @@ pub async fn add_provider(
     }
     state.settings.save(&settings).map_err(agent_error)?;
 
-    Ok(Json(json!({ "providers": settings.views(), "added": id })))
+    Ok(Json(json!({ "providers": state.settings.views(&settings), "added": id })))
 }
 
 /// `PUT /api/v1/settings/providers/{id}`
@@ -165,7 +171,7 @@ pub async fn update_provider(
         settings.selected = Some(id.clone());
     }
     state.settings.save(&settings).map_err(agent_error)?;
-    Ok(Json(json!({ "providers": settings.views() })))
+    Ok(Json(json!({ "providers": state.settings.views(&settings) })))
 }
 
 /// `DELETE /api/v1/settings/providers/{id}`
@@ -186,7 +192,12 @@ pub async fn delete_provider(
         settings.selected = settings.providers.first().map(|p| p.id.clone());
     }
     state.settings.save(&settings).map_err(agent_error)?;
-    Ok(Json(json!({ "providers": settings.views() })))
+    // Saving cannot reach a key whose provider is no longer in the list —
+    // nothing iterates over it to notice it should go — so removing it from
+    // the credential store is a separate step. Without this, deleting a
+    // provider would leave the key in Credential Manager for good.
+    state.settings.forget(&id);
+    Ok(Json(json!({ "providers": state.settings.views(&settings) })))
 }
 
 /// `POST /api/v1/settings/providers/{id}/select`
@@ -203,7 +214,7 @@ pub async fn select_provider(
     }
     settings.selected = Some(id);
     state.settings.save(&settings).map_err(agent_error)?;
-    Ok(Json(json!({ "providers": settings.views() })))
+    Ok(Json(json!({ "providers": state.settings.views(&settings) })))
 }
 
 /// `POST /api/v1/settings/providers/{id}/test`

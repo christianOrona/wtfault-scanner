@@ -398,6 +398,10 @@ export interface ProviderView {
   has_key: boolean;
   /** Enough of the key to recognise it, never enough to use it. */
   key_hint: string | null;
+  /** Where this provider's key is actually kept: operating_system, environment, plain_file, none. */
+  key_source: "operating_system" | "environment" | "plain_file" | "none";
+  /** That, in a sentence meant for a person. */
+  key_source_explanation: string;
   speed: Speed;
   /** Step ceiling for one inspection, or null for the built-in default. */
   max_steps: number | null;

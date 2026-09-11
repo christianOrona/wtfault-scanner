@@ -4,11 +4,19 @@
 //! vehicle history and is the thing you would hand to a mechanic or attach to a
 //! report; an API key has no business travelling with it.
 //!
-//! Keys are stored in plaintext in the user's own profile directory, readable
-//! only by that user. That is an honest trade rather than a hidden one: the OS
-//! keychain would be better, and it is three different platform integrations
-//! that this build does not have. The UI says so where the key is entered.
+//! Keys are not in that file either. They go to the operating system's own
+//! credential store — Credential Manager, Keychain, the Secret Service — and
+//! the file holds only the configuration around them. A key written by an
+//! older build is migrated on the next save and then removed from the file,
+//! because a migration that leaves a copy behind has improved nothing while
+//! looking like it had.
+//!
+//! Where there is no credential store, the key stays in the file and the
+//! interface says so. See [`crate::credentials`]: the fallback exists because
+//! refusing to work on a machine with no Secret Service would be choosing a
+//! principle over the person using it, and it is never silent.
 
+use crate::credentials::{CredentialStore, KeySource, OsCredentialStore};
 use crate::error::{AgentError, Secret};
 use crate::provider::{
     anthropic::AnthropicProvider, ollama::OllamaProvider, openai::OpenAiProvider, LlmProvider,
@@ -164,6 +172,14 @@ pub struct ProviderView {
     pub has_key: bool,
     /// Enough of the key to recognise it. Never enough to use it.
     pub key_hint: Option<String>,
+    /// Where the key is actually kept on this machine.
+    ///
+    /// On the view rather than looked up by the interface, because "in a
+    /// plain text file" is something a person should be told next to the key
+    /// it describes and not on a different screen.
+    pub key_source: String,
+    /// That, in a sentence meant for a person.
+    pub key_source_explanation: String,
     /// How much the model should deliberate.
     pub speed: Speed,
     /// Step ceiling, or null for the default.
@@ -182,7 +198,7 @@ pub struct ProviderView {
 
 impl ProviderConfig {
     /// Redact for display.
-    pub fn view(&self, selected: bool) -> ProviderView {
+    pub fn view(&self, selected: bool, key_source: KeySource) -> ProviderView {
         ProviderView {
             id: self.id.clone(),
             kind: self.kind,
@@ -194,6 +210,8 @@ impl ProviderConfig {
             model: self.model.clone(),
             has_key: self.api_key.as_ref().is_some_and(|k| !k.is_empty()),
             key_hint: self.api_key.as_ref().filter(|k| !k.is_empty()).map(|k| k.hint()),
+            key_source: key_source.as_str().to_string(),
+            key_source_explanation: key_source.explain().to_string(),
             speed: self.speed,
             max_steps: self.max_steps,
             max_tokens: self.max_tokens,
@@ -326,21 +344,48 @@ impl ProviderSettings {
     }
 
     /// Redacted view of everything, for the settings UI.
-    pub fn views(&self) -> Vec<ProviderView> {
+    ///
+    /// `source_of` answers where each provider's key is being read from. It is
+    /// a parameter rather than something this type works out, because the
+    /// answer depends on the credential store and these settings do not know
+    /// about one — [`SettingsStore::views`] is the version that does.
+    pub fn views_with(&self, source_of: impl Fn(&str) -> KeySource) -> Vec<ProviderView> {
         let active = self.active().map(|p| p.id.clone());
-        self.providers.iter().map(|p| p.view(active.as_ref() == Some(&p.id))).collect()
+        self.providers
+            .iter()
+            .map(|p| p.view(active.as_ref() == Some(&p.id), source_of(&p.id)))
+            .collect()
     }
 }
 
 /// Reads and writes [`ProviderSettings`] on disk.
+///
+/// The settings themselves are configuration and belong in a file. The API
+/// keys are not, and by default go to the operating system's credential store
+/// instead — see [`crate::credentials`] for the order of preference and why
+/// the fallback is never silent.
 pub struct SettingsStore {
     path: PathBuf,
+    credentials: Box<dyn CredentialStore>,
 }
 
 impl SettingsStore {
-    /// Point at a settings file. The file need not exist yet.
+    /// Point at a settings file, keeping keys in the OS credential store.
+    ///
+    /// The file need not exist yet.
     pub fn new(path: impl Into<PathBuf>) -> Self {
-        SettingsStore { path: path.into() }
+        SettingsStore { path: path.into(), credentials: Box::new(OsCredentialStore) }
+    }
+
+    /// Point at a settings file with a particular credential store.
+    ///
+    /// Used by the tests, which must never touch the credential store of
+    /// whatever machine runs them.
+    pub fn with_credentials(
+        path: impl Into<PathBuf>,
+        credentials: Box<dyn CredentialStore>,
+    ) -> Self {
+        SettingsStore { path: path.into(), credentials }
     }
 
     /// Where the settings live.
@@ -348,29 +393,108 @@ impl SettingsStore {
         &self.path
     }
 
+    /// Where keys go on this machine, in one line for the interface.
+    pub fn credential_location(&self) -> &'static str {
+        self.credentials.describe()
+    }
+
+    /// Redacted views, each saying where its key actually lives.
+    ///
+    /// Resolving the source needs both halves: the credential store knows what
+    /// it holds, and only the loaded settings can distinguish "the file still
+    /// has it" from "nobody has it". Saying "in your credential store" about a
+    /// key that is in fact sitting in a text file would be the one lie this
+    /// whole change exists to stop telling.
+    pub fn views(&self, settings: &ProviderSettings) -> Vec<ProviderView> {
+        settings.views_with(|id| match self.credentials.source(id) {
+            KeySource::None => {
+                let in_file = settings
+                    .providers
+                    .iter()
+                    .any(|p| p.id == id && p.api_key.as_ref().is_some_and(|k| !k.is_empty()));
+                if in_file {
+                    KeySource::PlainFile
+                } else {
+                    KeySource::None
+                }
+            }
+            found => found,
+        })
+    }
+
     /// Load, treating "no file yet" as "nothing configured".
     ///
     /// A corrupt file is an error rather than a silent reset: quietly
     /// discarding someone's configuration, keys included, is worse than
     /// refusing to start until they look at it.
+    ///
+    /// Keys come from the credential store where it has them, and from the
+    /// file where it does not — which is how a settings file written before
+    /// this existed keeps working until the next save migrates it.
     pub fn load(&self) -> Result<ProviderSettings, AgentError> {
-        match std::fs::read_to_string(&self.path) {
+        let mut settings: ProviderSettings = match std::fs::read_to_string(&self.path) {
             Ok(s) => serde_json::from_str(&s).map_err(|e| {
                 AgentError::Settings(format!(
                     "{} is not valid settings JSON: {e}. Move it aside to start fresh.",
                     self.path.display()
                 ))
-            }),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(ProviderSettings::default()),
+            })?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => ProviderSettings::default(),
             Err(e) => {
-                Err(AgentError::Settings(format!("cannot read {}: {e}", self.path.display())))
+                return Err(AgentError::Settings(format!(
+                    "cannot read {}: {e}",
+                    self.path.display()
+                )))
+            }
+        };
+
+        for p in &mut settings.providers {
+            // The store wins over the file. They disagree only during a
+            // migration that was interrupted, and the store is the half that
+            // was written most recently.
+            if let Some(key) = self.credentials.get(&p.id) {
+                p.api_key = Some(key);
             }
         }
+        Ok(settings)
     }
 
     /// Save, replacing the file atomically so a crash mid-write cannot leave
     /// a half-written file where the credentials used to be.
+    ///
+    /// Every key is offered to the credential store first. One the store
+    /// accepts is **removed from what gets written**, which is the whole point
+    /// — a migration that left a copy of the key in the file would have
+    /// improved nothing while looking like it had, and somebody told their key
+    /// is now in the credential store would reasonably stop worrying about the
+    /// file.
     pub fn save(&self, settings: &ProviderSettings) -> Result<(), AgentError> {
+        let mut settings = settings.clone();
+        for p in &mut settings.providers {
+            match &p.api_key {
+                Some(key) if !key.is_empty() => {
+                    if self.credentials.set(&p.id, key) {
+                        p.api_key = None;
+                    }
+                }
+                // A provider whose key was cleared must lose it from the store
+                // too, or the next load would resurrect it from there.
+                _ => self.credentials.delete(&p.id),
+            }
+        }
+        self.write(&settings)
+    }
+
+    /// Forget everything stored for a provider that is being removed.
+    ///
+    /// Separate from [`SettingsStore::save`] because removing a provider from
+    /// the list makes its key unreachable through the normal path — nothing
+    /// would iterate over it again to notice it should go.
+    pub fn forget(&self, provider_id: &str) {
+        self.credentials.delete(provider_id);
+    }
+
+    fn write(&self, settings: &ProviderSettings) -> Result<(), AgentError> {
         if let Some(dir) = self.path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| {
                 AgentError::Settings(format!("cannot create {}: {e}", dir.display()))
@@ -409,6 +533,7 @@ fn restrict_permissions(_path: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::credentials::MemoryCredentialStore;
 
     fn cfg(id: &str, kind: ProviderKind) -> ProviderConfig {
         ProviderConfig {
@@ -427,7 +552,7 @@ mod tests {
 
     #[test]
     fn a_view_never_carries_the_key() {
-        let v = cfg("p1", ProviderKind::Anthropic).view(true);
+        let v = cfg("p1", ProviderKind::Anthropic).view(true, KeySource::OperatingSystem);
         let json = serde_json::to_string(&v).unwrap();
         assert!(!json.contains("abcdefghijklmnop"));
         assert!(v.has_key);
@@ -457,7 +582,10 @@ mod tests {
     #[test]
     fn round_trips_through_disk_with_the_key_intact() {
         let dir = tempfile::tempdir().unwrap();
-        let store = SettingsStore::new(dir.path().join("providers.json"));
+        let store = SettingsStore::with_credentials(
+            dir.path().join("providers.json"),
+            Box::new(crate::credentials::MemoryCredentialStore::default()),
+        );
         assert!(store.load().unwrap().providers.is_empty());
 
         let s = ProviderSettings {
@@ -521,7 +649,10 @@ mod tests {
         c.base_url = None;
         assert!(c.build().is_ok());
         // And the view shows the endpoint it will actually use.
-        assert_eq!(c.view(true).base_url.as_deref(), Some(XAI_BASE_URL));
+        assert_eq!(
+            c.view(true, KeySource::OperatingSystem).base_url.as_deref(),
+            Some(XAI_BASE_URL)
+        );
     }
 
     #[test]
@@ -531,5 +662,168 @@ mod tests {
         // `Box<dyn LlmProvider>` is not Debug, so match rather than unwrap_err.
         let Err(e) = c.build() else { panic!("expected a configuration error") };
         assert!(e.to_string().contains("needs a base URL"));
+    }
+    // -------------------------------------------- keys leave the settings file
+
+    fn store_with(
+        dir: &tempfile::TempDir,
+    ) -> (SettingsStore, std::sync::Arc<MemoryCredentialStore>) {
+        let creds = std::sync::Arc::new(MemoryCredentialStore::default());
+        let store = SettingsStore::with_credentials(
+            dir.path().join("providers.json"),
+            Box::new(SharedStore(creds.clone())),
+        );
+        (store, creds)
+    }
+
+    /// A handle onto the same in-memory store the test can inspect.
+    struct SharedStore(std::sync::Arc<MemoryCredentialStore>);
+    impl CredentialStore for SharedStore {
+        fn get(&self, id: &str) -> Option<Secret> {
+            self.0.get(id)
+        }
+        fn set(&self, id: &str, k: &Secret) -> bool {
+            self.0.set(id, k)
+        }
+        fn delete(&self, id: &str) {
+            self.0.delete(id)
+        }
+        fn source(&self, id: &str) -> KeySource {
+            self.0.source(id)
+        }
+        fn describe(&self) -> &'static str {
+            self.0.describe()
+        }
+    }
+
+    /// The whole point. A key goes to the credential store and the file that
+    /// used to hold it no longer contains it anywhere.
+    #[test]
+    fn a_saved_key_goes_to_the_store_and_not_into_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, creds) = store_with(&dir);
+
+        let mut settings = ProviderSettings::default();
+        settings.providers.push(cfg("p1", ProviderKind::Anthropic));
+        store.save(&settings).unwrap();
+
+        let on_disk = std::fs::read_to_string(store.path()).unwrap();
+        assert!(
+            !on_disk.contains("sk-ant-api03-abcdefghijklmnop"),
+            "the key must not survive anywhere in the file:\n{on_disk}"
+        );
+        assert!(on_disk.contains("\"p1\""), "the configuration around it still does");
+        assert_eq!(creds.get("p1").unwrap().expose(), "sk-ant-api03-abcdefghijklmnop");
+
+        // And it comes back on the way in, so nothing downstream notices.
+        let back = store.load().unwrap();
+        assert_eq!(
+            back.providers[0].api_key.as_ref().unwrap().expose(),
+            "sk-ant-api03-abcdefghijklmnop"
+        );
+    }
+
+    /// The migration. A file written by an older build still has the key in
+    /// it; the next save moves it and the file stops holding it. Leaving a
+    /// copy behind would improve nothing while looking like it had.
+    #[test]
+    fn a_plaintext_key_from_an_older_build_is_migrated_and_then_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("providers.json");
+        std::fs::write(
+            &path,
+            r#"{"providers":[{"id":"p1","kind":"anthropic","label":"old","model":"m",
+                "api_key":"sk-ant-api03-abcdefghijklmnop"}],"selected":"p1"}"#,
+        )
+        .unwrap();
+
+        let (store, creds) = store_with(&dir);
+        // Before: the file is the only copy.
+        assert!(creds.get("p1").is_none());
+        let loaded = store.load().unwrap();
+        assert_eq!(
+            loaded.providers[0].api_key.as_ref().unwrap().expose(),
+            "sk-ant-api03-abcdefghijklmnop"
+        );
+
+        store.save(&loaded).unwrap();
+
+        assert_eq!(creds.get("p1").unwrap().expose(), "sk-ant-api03-abcdefghijklmnop");
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+        assert!(!on_disk.contains("sk-ant-api03"), "the plaintext copy must be gone:\n{on_disk}");
+    }
+
+    /// Clearing a key has to clear it in both places. Removing it from the
+    /// file alone would have the next load resurrect it from the store.
+    #[test]
+    fn clearing_a_key_clears_it_in_the_store_too() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, creds) = store_with(&dir);
+
+        let mut settings = ProviderSettings::default();
+        settings.providers.push(cfg("p1", ProviderKind::Anthropic));
+        store.save(&settings).unwrap();
+        assert!(creds.get("p1").is_some());
+
+        settings.providers[0].api_key = None;
+        store.save(&settings).unwrap();
+
+        assert!(creds.get("p1").is_none(), "the store must not keep it");
+        assert!(store.load().unwrap().providers[0].api_key.is_none());
+    }
+
+    /// Deleting a provider removes its key from the store. Saving cannot do
+    /// this, because nothing iterates over a provider that is no longer in the
+    /// list — without the separate step the key would stay in Credential
+    /// Manager for good.
+    #[test]
+    fn forgetting_a_provider_removes_its_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, creds) = store_with(&dir);
+
+        let mut settings = ProviderSettings::default();
+        settings.providers.push(cfg("p1", ProviderKind::Anthropic));
+        store.save(&settings).unwrap();
+
+        settings.providers.clear();
+        store.save(&settings).unwrap();
+        assert!(creds.get("p1").is_some(), "saving alone cannot reach it");
+
+        store.forget("p1");
+        assert!(creds.get("p1").is_none());
+    }
+
+    /// The interface must be able to tell a key in the credential store from
+    /// one still sitting in a text file. Saying "in your credential store"
+    /// about the second is the one lie this whole change exists to stop.
+    #[test]
+    fn the_view_says_which_of_the_two_places_a_key_is_in() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, _creds) = store_with(&dir);
+
+        let mut settings = ProviderSettings::default();
+        settings.providers.push(cfg("p1", ProviderKind::Anthropic));
+
+        // Not yet saved, so the store has nothing and the key is in hand from
+        // the file. That is plaintext and must be reported as such.
+        assert_eq!(store.views(&settings)[0].key_source, "plain_file");
+
+        store.save(&settings).unwrap();
+        let after = store.load().unwrap();
+        assert_eq!(store.views(&after)[0].key_source, "operating_system");
+        assert!(store.views(&after)[0].has_key);
+    }
+
+    /// A provider with no key at all is neither, and says so.
+    #[test]
+    fn no_key_is_reported_as_no_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, _creds) = store_with(&dir);
+        let mut settings = ProviderSettings::default();
+        let mut p = cfg("p1", ProviderKind::Ollama);
+        p.api_key = None;
+        settings.providers.push(p);
+        assert_eq!(store.views(&settings)[0].key_source, "none");
+        assert!(!store.views(&settings)[0].has_key);
     }
 }
