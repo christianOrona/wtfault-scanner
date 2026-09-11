@@ -364,40 +364,37 @@ impl Elm327Adapter {
         // waits per address — is derived from observed throughput, so an
         // adapter that reports itself as better is *tested* as better and earns
         // the benefit automatically. Nothing here hard-codes a device.
-        let vendor_upper = self.caps.vendor.to_ascii_uppercase();
-        let stn = upper.contains("STN")
-            || vendor_upper.contains("STN")
-            || vendor_upper.contains("OBDLINK")
-            || vendor_upper.contains("SCANTOOL");
-        if stn {
-            // ST is the STN command prefix. A device that answers `STI` with a
-            // version string is genuinely STN firmware rather than a clone that
-            // merely borrowed the name for its product page.
-            let sti = self.send_raw("STI", self.config.at_timeout)?;
-            if sti.class.is_success() && !sti.lines.is_empty() {
-                self.caps.add_caveat(format!(
-                    "STN-series firmware confirmed ({}); multi-frame handling and throughput \
-                     are materially better than a generic ELM327 clone",
-                    sti.lines.join(" ").trim()
-                ));
-                self.caps.supports_long_messages = true;
-                self.stn_confirmed = true;
+        // `STI` is asked of every device, unconditionally.
+        //
+        // It used to be gated on the banner or vendor string containing "STN",
+        // "OBDLINK" or "SCANTOOL", which sounds careful and is in fact a
+        // hard-coded device list wearing a disguise. Measured on a real
+        // OBDLink MX+ (2026-09-11): the banner is `ELM327 v1.4b` and `AT@1`
+        // answers `OBD SOLUTIONS LLC` — neither matches, so the flagship STN
+        // device this check exists to recognise failed all four tests and was
+        // treated as a clone. It was then told, in its own capability caveats,
+        // to go and buy an OBDLink MX+.
+        //
+        // Asking costs one command. A device without STN firmware answers `?`,
+        // which is a definite answer, and definite answers are what this
+        // project prefers to clever guesses about product names.
+        let sti = self.send_raw("STI", self.config.at_timeout)?;
+        if sti.class.is_success() && !sti.lines.is_empty() {
+            let firmware = sti.lines.join(" ").trim().to_string();
+            self.stn_confirmed = true;
 
-                // Ask, rather than assume, whether this is a dual-bus device.
-                // Reaching the second bus is what makes door, body and chassis
-                // modules addressable on vehicles that put them there, and it
-                // is the single capability that most changes what the product
-                // can do.
-                let buses = self.send_raw("STPX", self.config.at_timeout)?;
-                if buses.class.is_success() {
-                    self.caps.multiple_can_buses = true;
+            // `STDI` names the product properly. The banner is an ELM327
+            // compatibility story the device tells so that old software keeps
+            // working; this is what it actually is.
+            if let Ok(stdi) = self.send_raw("STDI", self.config.at_timeout) {
+                if stdi.class.is_success() && !stdi.lines.is_empty() {
+                    self.caps.model = stdi.lines.join(" ").trim().to_string();
                 }
-            } else {
-                self.caps.add_caveat(
-                    "the banner mentions STN but the device did not answer STI, so it is \
-                     treated as a generic ELM327-compatible device",
-                );
             }
+            self.caps.add_caveat(format!(
+                "STN-series firmware confirmed ({firmware}); multi-frame handling and \
+                 throughput are materially better than a generic ELM327 clone"
+            ));
         }
 
         // Version claims from ELM327-class hardware are not trustworthy: clone
@@ -1071,6 +1068,20 @@ impl Elm327Adapter {
 
         match reply.class {
             ResponseClass::NotUnderstood => {
+                // The ELM form was refused. That is not the end of the
+                // question, because it is not the only way to send a long
+                // request — STN firmware rejects this form too and segments
+                // perfectly well through `STPX`.
+                //
+                // Measured on an OBDLink MX+ (2026-09-11): the line above came
+                // back `?`, and `STPX h:7E0, d:22F190` returned a four-frame
+                // ISO-TP reply carrying the vehicle's VIN. Concluding "cannot
+                // write" from the first without asking the second told the
+                // owner of a perfectly capable adapter to go and buy the
+                // adapter they already had.
+                if self.stn_confirmed && self.measure_stn_long_messages() {
+                    return;
+                }
                 self.caps.supports_long_messages = false;
                 self.caps.add_caveat(
                     "this adapter will not send a request longer than one frame: an eight-byte \
@@ -1095,6 +1106,49 @@ impl Elm327Adapter {
                 );
             }
         }
+    }
+
+    /// Whether STN firmware will transmit a request longer than one frame.
+    ///
+    /// `STPX` takes the payload as a parameter and does the segmentation
+    /// itself, so it answers a question the ELM request form cannot: the ELM
+    /// form caps at seven data bytes on every device including this one, and
+    /// refusing it says nothing about whether the device can segment.
+    ///
+    /// The test is the same shape as the ELM one. Anything other than `?`
+    /// means the request left the adapter — including `FC RX TIMEOUT`, which
+    /// is the device reporting that it segmented, transmitted, and waited for a
+    /// flow-control frame that never came. Only a syntax refusal means it
+    /// cannot.
+    fn measure_stn_long_messages(&mut self) -> bool {
+        // No `h:` parameter. This runs before `ATDPN` has been asked, so the
+        // negotiated protocol is not known yet and there is no functional
+        // header to name — and it turns out not to be needed: measured on an
+        // OBDLink MX+ (2026-09-11), `STPX d:...` uses whatever header is
+        // already configured, which by this point is the one the successful
+        // `0100` just went out on.
+        //
+        // The first version of this asked for the header and returned early
+        // without it, so the probe silently never ran and the adapter was
+        // still reported as unable to write.
+        const STN_PROBE: &str = "STPX d:0100204060 80A0C0";
+        let Ok(reply) = self.send_raw(STN_PROBE, self.config.request_timeout) else {
+            return false;
+        };
+        if reply.class == ResponseClass::NotUnderstood {
+            return false;
+        }
+        self.caps.supports_long_messages = true;
+        self.caps.add_caveat(
+            "long requests are sent through this device's own `STPX` command rather than the \
+             ELM327 request form, which caps at seven data bytes on every device. Configuration \
+             writes are therefore possible with this adapter",
+        );
+        tracing::info!(
+            class = reply.class.as_str(),
+            "STN firmware segmented and transmitted a multi-frame request"
+        );
+        true
     }
 
     /// Record that nothing answered, saying what was ruled out along the way.
