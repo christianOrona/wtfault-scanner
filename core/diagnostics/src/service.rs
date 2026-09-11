@@ -782,10 +782,16 @@ impl DiagnosticService {
         self.record_invocation("adapter_health", initiator, serde_json::json!({}));
         let outcome = self.authorize(capabilities::HEALTH, initiator, None).map(|_| {
             let health = self.adapter.health();
+            let caps = self.adapter.capabilities();
             Payload::with_data(serde_json::json!({
                 "health": health,
-                "capabilities": self.adapter.capabilities(),
+                "capabilities": caps,
                 "descriptor": self.adapter.descriptor(),
+                // The counters turned into something a caller can act on.
+                // Reporting 345 timeouts is a fact nobody can use; reporting
+                // that a silence through this link is ambiguous changes what
+                // the next read should be.
+                "fitness": aim_types::AdapterFitness::assess(&health, &caps),
             }))
         });
         self.finish("adapter_health", capabilities::HEALTH, t0, outcome)

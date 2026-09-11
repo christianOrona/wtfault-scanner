@@ -376,6 +376,8 @@ async fn adapter(State(state): State<AppState>) -> ApiResult<Json<Value>> {
                 "descriptor": s.adapter_descriptor(),
                 "health": s.health(),
                 "capabilities": s.capabilities(),
+                // The counters turned into something a caller can act on.
+                "fitness": aim_types::AdapterFitness::assess(&s.health(), &s.capabilities()),
                 "session_id": s.session_id(),
                 "vehicle": s.vehicle(),
             })

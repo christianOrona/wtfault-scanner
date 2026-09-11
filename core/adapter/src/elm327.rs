@@ -140,6 +140,9 @@ pub struct Elm327Adapter {
     /// some path exists: a device that accepts a long request in the ordinary
     /// form needs no `STPX` and may not implement it at all.
     long_via_stpx: bool,
+    /// Capability probes sent. Excluded from the health counters because a
+    /// probe's refusal is the answer it went looking for.
+    probes: u64,
     battery_voltage: Option<f64>,
 }
 
@@ -171,6 +174,7 @@ impl Elm327Adapter {
             latency_samples: 0,
             stn_confirmed: false,
             long_via_stpx: false,
+            probes: 0,
             battery_voltage: None,
         }
     }
@@ -199,6 +203,30 @@ impl Elm327Adapter {
     /// as `Ok` with a failing [`ResponseClass`] — they are answers, and the
     /// caller decides what they mean. Only transport faults are `Err`.
     fn send_raw(&mut self, command: &str, timeout: Duration) -> AimResult<AdapterResponse> {
+        self.send_inner(command, timeout, true)
+    }
+
+    /// Ask the device a question about itself, without it counting as work.
+    ///
+    /// A capability probe.s refusal is the measurement, not a fault. `STI` on
+    /// a device without STN firmware answers `?`, and that `?` is precisely the
+    /// answer it was asked for. Counting those made the healthy simulator grade
+    /// itself marginal at 13.6% failure the first time link fitness was
+    /// measured: the handshake.s own questions were most of the failures, and
+    /// every connection would have looked worse than it was.
+    ///
+    /// A probe still reaches the flight recorder in full. What it does not do
+    /// is dirty the statistics used to judge the link.
+    fn send_probe(&mut self, command: &str, timeout: Duration) -> AimResult<AdapterResponse> {
+        self.send_inner(command, timeout, false)
+    }
+
+    fn send_inner(
+        &mut self,
+        command: &str,
+        timeout: Duration,
+        counts_as_work: bool,
+    ) -> AimResult<AdapterResponse> {
         if !self.transport.is_open() {
             return Err(AimError::new(
                 ErrorCode::TransportDisconnected,
@@ -237,11 +265,15 @@ impl Elm327Adapter {
 
         self.latency_total_ms += parsed.elapsed_ms;
         self.latency_samples += 1;
-        match parsed.class {
-            c if c.is_success() => self.responses += 1,
-            ResponseClass::NoData => self.no_data += 1,
-            ResponseClass::Timeout => self.timeouts += 1,
-            _ => self.adapter_errors += 1,
+        if counts_as_work {
+            match parsed.class {
+                c if c.is_success() => self.responses += 1,
+                ResponseClass::NoData => self.no_data += 1,
+                ResponseClass::Timeout => self.timeouts += 1,
+                _ => self.adapter_errors += 1,
+            }
+        } else {
+            self.probes += 1;
         }
         self.observer.on_response(&parsed);
         Ok(parsed)
@@ -250,7 +282,7 @@ impl Elm327Adapter {
     /// Send a configuration command, treating a rejection as a recorded caveat
     /// rather than a fatal error. Returns whether the device accepted it.
     fn configure(&mut self, command: &str, why: &str) -> AimResult<bool> {
-        let r = self.send_raw(command, self.config.at_timeout)?;
+        let r = self.send_probe(command, self.config.at_timeout)?;
         if r.class.is_success() {
             Ok(true)
         } else {
@@ -323,7 +355,7 @@ impl Elm327Adapter {
 
     /// Identification: work out what this device actually is.
     fn identify(&mut self) -> AimResult<()> {
-        let ident = self.send_raw("ATI", self.config.at_timeout)?;
+        let ident = self.send_probe("ATI", self.config.at_timeout)?;
         let banner = ident.lines.join(" ");
         if !ident.class.is_success() || banner.is_empty() {
             return Err(AimError::new(
@@ -347,7 +379,7 @@ impl Elm327Adapter {
 
         // AT@1 is the device-description command. Genuine and better clones
         // answer it; the cheapest ones return '?'. Either way it is evidence.
-        let desc = self.send_raw("AT@1", self.config.at_timeout)?;
+        let desc = self.send_probe("AT@1", self.config.at_timeout)?;
         if desc.class.is_success() && !desc.lines.is_empty() {
             self.caps.vendor = desc.lines.join(" ").trim().to_string();
         } else {
@@ -385,7 +417,7 @@ impl Elm327Adapter {
         // Asking costs one command. A device without STN firmware answers `?`,
         // which is a definite answer, and definite answers are what this
         // project prefers to clever guesses about product names.
-        let sti = self.send_raw("STI", self.config.at_timeout)?;
+        let sti = self.send_probe("STI", self.config.at_timeout)?;
         if sti.class.is_success() && !sti.lines.is_empty() {
             let firmware = sti.lines.join(" ").trim().to_string();
             self.stn_confirmed = true;
@@ -393,7 +425,7 @@ impl Elm327Adapter {
             // `STDI` names the product properly. The banner is an ELM327
             // compatibility story the device tells so that old software keeps
             // working; this is what it actually is.
-            if let Ok(stdi) = self.send_raw("STDI", self.config.at_timeout) {
+            if let Ok(stdi) = self.send_probe("STDI", self.config.at_timeout) {
                 if stdi.class.is_success() && !stdi.lines.is_empty() {
                     self.caps.model = stdi.lines.join(" ").trim().to_string();
                 }
@@ -1064,10 +1096,9 @@ impl Elm327Adapter {
     fn measure_long_message_support(&mut self) {
         // Seven parameters: the supported-PID bitmaps, which every OBD-II
         // vehicle implements and none of which change anything.
-        const LONG_PROBE: &str = "0100204060 80A0C0";
-        let probe = LONG_PROBE.replace(' ', "");
+        let probe = String::from(LONG_PROBE_COMMAND);
 
-        let Ok(reply) = self.send_raw(&probe, self.config.request_timeout) else {
+        let Ok(reply) = self.send_probe(&probe, self.config.request_timeout) else {
             // A transport failure says nothing about segmentation. Leave the
             // capability unmeasured rather than recording a guess.
             return;
@@ -1138,8 +1169,8 @@ impl Elm327Adapter {
         // The first version of this asked for the header and returned early
         // without it, so the probe silently never ran and the adapter was
         // still reported as unable to write.
-        const STN_PROBE: &str = "STPX d:0100204060 80A0C0";
-        let Ok(reply) = self.send_raw(STN_PROBE, self.config.request_timeout) else {
+        let stn_probe = format!("STPX d:{LONG_PROBE_COMMAND}");
+        let Ok(reply) = self.send_probe(&stn_probe, self.config.request_timeout) else {
             return false;
         };
         if reply.class == ResponseClass::NotUnderstood {
@@ -2050,3 +2081,6 @@ mod tests {
         assert!(!is_link_fault(&AimError::new(ErrorCode::AdapterRejectedCommand, "x")));
     }
 }
+
+/// The eight-byte ELM-form request used to test segmentation.
+const LONG_PROBE_COMMAND: &str = "010020406080A0C0";

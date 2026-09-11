@@ -17,6 +17,7 @@ pub mod capability;
 pub mod domain;
 pub mod error;
 pub mod event;
+pub mod fitness;
 pub mod ids;
 pub mod provenance;
 pub mod tool;
@@ -31,6 +32,7 @@ pub use domain::{
 };
 pub use error::{AimError, AimResult, ErrorCode};
 pub use event::{EventKind, SessionEvent};
+pub use fitness::{AdapterFitness, FitnessGrade};
 pub use ids::{CaptureId, ConnectionId, DiagnosisId, ModuleId, SessionId, TestRunId, VehicleId};
 pub use provenance::{Provenance, SourceKind, VerificationStatus};
 pub use tool::{PermissionLevel, RiskClass, ToolResult, Warning, WarningSeverity};

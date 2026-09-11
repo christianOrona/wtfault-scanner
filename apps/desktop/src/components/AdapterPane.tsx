@@ -53,7 +53,7 @@ export function AdapterPane({ adapter }: { adapter: AdapterStatus | null }) {
       {/* Fitness first: what the hardware can reach decides what the whole
           app can do, and it was previously only discoverable by hitting a
           wall mid-task. The raw caveat list is folded into it. */}
-      {c && <AdapterFitness caps={c} />}
+      {c && <AdapterFitness caps={c} fitness={adapter.fitness} />}
 
       <div className="section">
         <h2>Adapter</h2>

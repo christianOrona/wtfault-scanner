@@ -116,6 +116,7 @@ export interface AdapterStatus {
   descriptor?: string | null;
   session_id?: string | null;
   health?: AdapterHealth | null;
+  fitness?: AdapterFitness | null;
   capabilities?: AdapterCapabilities | null;
   vehicle?: Vehicle | null;
 }
@@ -804,4 +805,31 @@ export interface AsBuiltImport {
   /** How many of those modules are not answering — the reason to have the file. */
   modules_not_answering_on_the_bus: number;
   source: string | null;
+}
+
+/** How much confidence the link between this computer and the vehicle has earned. */
+export type FitnessGrade = "unmeasured" | "good" | "workable" | "marginal" | "unreliable";
+
+/**
+ * What has been measured about the adapter, and what follows from it.
+ *
+ * The counters were always there; what was missing was anything a person or a
+ * model could act on. "345 timeouts" is a fact nobody can use. "A silence
+ * through this link is ambiguous, so read less and do not call a clean scan a
+ * clean vehicle" changes what happens next.
+ */
+export interface AdapterFitness {
+  grade: FitnessGrade;
+  summary: string;
+  requests: number;
+  timeout_rate: number;
+  error_rate: number;
+  failure_rate: number;
+  mean_latency_ms: number;
+  requests_per_second: number | null;
+  can_write: boolean;
+  reaches_second_bus: boolean;
+  /** Whether an absence of findings can be read as an absence of faults. */
+  silence_is_evidence: boolean;
+  advice: string[];
 }

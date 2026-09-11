@@ -229,16 +229,19 @@ pub async fn describe_context(state: &AppState) -> String {
                 format!("{:?}", s.state()),
                 s.vehicle().and_then(|v| v.vin.clone()),
                 modules,
+                aim_types::AdapterFitness::assess(&s.health(), &s.capabilities()),
             )
         })
         .await
         .ok()
         .flatten();
 
-    let (descriptor, conn_state, vin, modules) =
-        snapshot.unwrap_or_else(|| ("none".into(), "disconnected".into(), None, Vec::new()));
+    let (descriptor, conn_state, vin, modules, link) = match snapshot {
+        Some(s) => (s.0, s.1, s.2, s.3, Some(s.4)),
+        None => ("none".into(), "disconnected".into(), None, Vec::new(), None),
+    };
 
-    prompts::context_block(&descriptor, &conn_state, vin.as_deref(), None, &modules)
+    prompts::context_block(&descriptor, &conn_state, vin.as_deref(), None, &modules, link.as_ref())
 }
 
 /// A live provider plus the per-provider limits the agent should run under.

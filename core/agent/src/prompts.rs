@@ -277,8 +277,25 @@ pub fn context_block(
     vin: Option<&str>,
     vehicle: Option<&str>,
     modules: &[String],
+    link: Option<&aim_types::AdapterFitness>,
 ) -> String {
     let mut s = format!("- Adapter: {adapter} (state: {state})\n");
+    // How much the link has earned. Without this the model reads a silence as
+    // a finding, which on a failing adapter is the single most misleading
+    // thing it can do: "no faults found" and "nothing answered" look identical
+    // from where it sits, and only one of them is about the vehicle.
+    if let Some(f) = link {
+        s.push_str(&format!("- Link quality: {} — {}\n", f.grade.as_str(), f.summary));
+        if !f.silence_is_evidence {
+            s.push_str(
+                "  A module that does not answer through this link may be fine. Do NOT report \
+                 an absence of findings as a clean vehicle; say the link was unreliable.\n",
+            );
+        }
+        for a in &f.advice {
+            s.push_str(&format!("  - {a}\n"));
+        }
+    }
     match vin {
         Some(v) => s.push_str(&format!("- VIN: {v}\n")),
         None => s.push_str("- VIN: not read yet\n"),
@@ -326,7 +343,7 @@ mod tests {
 
     #[test]
     fn missing_context_is_stated_not_omitted() {
-        let c = context_block("sim:dpf-regen", "ready", None, None, &[]);
+        let c = context_block("sim:dpf-regen", "ready", None, None, &[], None);
         assert!(c.contains("VIN: not read yet"));
         assert!(c.contains("must not be guessed"));
         assert!(c.contains("not scanned yet"));
@@ -340,8 +357,44 @@ mod tests {
             Some("1FT7W2BT6KEC00001"),
             None,
             &["ECU_7E8".into(), "ECU_7EA".into()],
+            None,
         );
         assert!(c.contains("1FT7W2BT6KEC00001"));
         assert!(c.contains("ECU_7E8, ECU_7EA"));
+    }
+    /// A failing link must reach the model as an instruction, not a statistic.
+    ///
+    /// "No faults found" and "nothing answered" look identical from where the
+    /// model sits, and only one of them is about the vehicle. This is the line
+    /// that keeps it from reporting the second as the first.
+    #[test]
+    fn an_unreliable_link_tells_the_model_not_to_call_it_clean() {
+        let mut health = aim_types::AdapterHealth::new(aim_types::ConnectionState::Ready);
+        health.requests = 200;
+        health.timeouts = 80;
+        let caps = aim_types::AdapterCapabilities::unknown(aim_types::TransportKind::Bluetooth);
+        let fitness = aim_types::AdapterFitness::assess(&health, &caps);
+
+        let block = context_block("COM4", "Ready", None, None, &[], Some(&fitness));
+        assert!(block.contains("unreliable"), "{block}");
+        assert!(block.contains("Do NOT report an absence of findings"), "{block}");
+    }
+
+    /// A good link says so and adds no instructions, because there is nothing
+    /// to do differently and a prompt full of irrelevant caution is a prompt
+    /// that gets skimmed.
+    #[test]
+    fn a_good_link_adds_no_noise() {
+        let mut health = aim_types::AdapterHealth::new(aim_types::ConnectionState::Ready);
+        health.requests = 200;
+        let mut caps = aim_types::AdapterCapabilities::unknown(aim_types::TransportKind::Usb);
+        caps.supports_transmit = true;
+        caps.supports_long_messages = true;
+        caps.multiple_can_buses = true;
+        let fitness = aim_types::AdapterFitness::assess(&health, &caps);
+
+        let block = context_block("COM4", "Ready", None, None, &[], Some(&fitness));
+        assert!(block.contains("good"), "{block}");
+        assert!(!block.contains("Do NOT report"), "{block}");
     }
 }

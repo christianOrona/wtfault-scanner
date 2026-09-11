@@ -14,7 +14,7 @@
 //               by this project and is labelled as such, in the same way the
 //               agent's cost estimates are.
 
-import type { AdapterCapabilities } from "../api/types";
+import type { AdapterCapabilities, AdapterFitness as LinkFitness } from "../api/types";
 import { useExplain } from "../explain";
 
 /** One thing an adapter either can or cannot do, and what it unlocks. */
@@ -69,7 +69,77 @@ const ABILITIES: Ability[] = [
   },
 ];
 
-export function AdapterFitness({ caps }: { caps: AdapterCapabilities }) {
+/** How each grade reads, and how loudly. */
+const GRADE: Record<FitnessGradeId, { label: string; tone: string }> = {
+  unmeasured: { label: "not established yet", tone: "var(--text-faint)" },
+  good: { label: "working well", tone: "var(--ok)" },
+  workable: { label: "working", tone: "var(--ok)" },
+  marginal: { label: "marginal", tone: "var(--caution)" },
+  unreliable: { label: "unreliable", tone: "var(--serious)" },
+};
+
+type FitnessGradeId = LinkFitness["grade"];
+
+/**
+ * How much the link has earned, as opposed to what the hardware claims.
+ *
+ * The two halves of this screen answer different questions and both matter.
+ * What the adapter *can reach* is fixed by the hardware; how well it is
+ * *actually working* is measured request by request, and a good adapter on a
+ * bad Bluetooth link is a bad link.
+ *
+ * The line that earns its place is `silence_is_evidence`. A scan that finds
+ * nothing means one thing through a healthy link and nothing at all through a
+ * failing one, and until now the app presented both the same way.
+ */
+function LinkQuality({ fitness }: { fitness: LinkFitness }) {
+  const g = GRADE[fitness.grade];
+  return (
+    <div className="card" style={{ marginBottom: 10 }}>
+      <div className="row" style={{ gap: 8 }}>
+        <strong>How well it is working</strong>
+        <span className="tag" style={{ color: g.tone }}>{g.label}</span>
+        {fitness.requests > 0 && (
+          <span className="faint">
+            {fitness.requests} requests · {(fitness.failure_rate * 100).toFixed(1)}% failed
+            {fitness.requests_per_second != null &&
+              ` · ${fitness.requests_per_second.toFixed(1)}/s`}
+          </span>
+        )}
+      </div>
+      <div className="explain" style={{ marginTop: 4 }}>{fitness.summary}</div>
+
+      {/* The finding that changes what a result means, rather than a statistic
+          about the adapter. */}
+      {!fitness.silence_is_evidence && fitness.grade !== "unmeasured" && (
+        <div className="banner serious" style={{ marginTop: 10, marginBottom: 0 }}>
+          <span className="b-code">read this</span>
+          <span>
+            A module that does not answer through this link may be perfectly fine. Until the
+            connection improves, <strong>finding nothing does not mean there is nothing</strong>
+            {" "}— and any clean result here is weaker evidence than it looks.
+          </span>
+        </div>
+      )}
+
+      {fitness.advice.length > 0 && (
+        <ul style={{ margin: "8px 0 0", paddingLeft: 18 }}>
+          {fitness.advice.map((a) => (
+            <li key={a} className="explain" style={{ marginBottom: 3 }}>{a}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+export function AdapterFitness({
+  caps,
+  fitness,
+}: {
+  caps: AdapterCapabilities;
+  fitness?: LinkFitness | null;
+}) {
   const { easy } = useExplain();
   const have = ABILITIES.filter((a) => a.present(caps));
   const missing = ABILITIES.filter((a) => !a.present(caps));
@@ -77,6 +147,8 @@ export function AdapterFitness({ caps }: { caps: AdapterCapabilities }) {
   return (
     <div className="section">
       <h2>What this adapter can reach</h2>
+
+      {fitness && <LinkQuality fitness={fitness} />}
 
       <div className="explain">
         Everything below was observed while connecting — what the adapter actually did, not
