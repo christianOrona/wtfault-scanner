@@ -1393,3 +1393,82 @@ fn a_first_connect_with_no_history_says_nothing_about_one() {
     assert!(!codes.contains(&"answered_before"), "nothing has ever worked: {codes:?}");
     assert!(r.data.as_ref().unwrap()["answered_before"].is_null());
 }
+
+// ------------------------------------------------------------- procedures
+
+/// A procedure reads the vehicle to decide whether its conditions hold. It
+/// never asks the person — "I'm holding 2500" is a claim and engine speed is a
+/// reading.
+#[test]
+fn a_procedure_checks_its_conditions_against_the_vehicle() {
+    let (mut service, _) = connected(ScenarioId::Healthy);
+    assert!(service.scan_modules(USER).success);
+
+    let r = service.check_procedure("steady_rpm_2500", USER);
+    assert!(r.success, "checking is read-only and always runs: {:?}", r.error);
+    let data = r.data.as_ref().unwrap();
+
+    assert_eq!(data["state"], "waiting", "the simulator idles, so 2500 rpm is not held");
+    assert_eq!(data["all_met"], false);
+
+    let conditions = data["conditions"].as_array().unwrap();
+    // Stationary is satisfied and read from the vehicle rather than assumed.
+    let stationary = &conditions[0];
+    assert_eq!(stationary["met"], true);
+    assert_eq!(stationary["signal"], "vehicle_speed");
+    assert!(stationary["value"].is_number(), "settled by a reading, not by asking");
+
+    // Engine speed is not, and its actual value is reported.
+    let rpm = &conditions[1];
+    assert_eq!(rpm["met"], false);
+    assert_eq!(rpm["signal"], "engine_rpm");
+    assert!(rpm["value"].as_f64().unwrap() < 2300.0);
+}
+
+/// One instruction at a time, and it is the first thing standing in the way.
+/// Somebody handed five things to change at once does none of them.
+#[test]
+fn the_next_step_names_the_first_unmet_condition() {
+    let (mut service, _) = connected(ScenarioId::Healthy);
+    assert!(service.scan_modules(USER).success);
+
+    let r = service.check_procedure("steady_rpm_2500", USER);
+    let next = r.data.as_ref().unwrap()["next_step"].as_str().unwrap();
+    assert!(next.contains("2300") && next.contains("2700"), "{next}");
+    // And it says how, not just what.
+    assert!(next.contains("neutral") || next.contains("park"), "{next}");
+}
+
+/// Running it while the vehicle is somewhere else measures nothing and says
+/// so. A reading taken outside the state is not a reading under the state,
+/// which is the entire reason a procedure exists rather than a plain read.
+#[test]
+fn a_procedure_refuses_to_measure_outside_its_own_conditions() {
+    let (mut service, _) = connected(ScenarioId::Healthy);
+    assert!(service.scan_modules(USER).success);
+
+    let r = service.run_procedure("steady_rpm_2500", USER);
+    assert!(r.success, "not an error — a state that has not been reached yet");
+    let codes: Vec<&str> = r.warnings.iter().map(|w| w.code.as_str()).collect();
+    assert!(codes.contains(&"conditions_not_met"), "{codes:?}");
+    assert!(r.values.is_empty(), "nothing was measured");
+}
+
+/// An unknown procedure is a not-found rather than a silent no-op.
+#[test]
+fn an_unknown_procedure_says_so() {
+    let (mut service, _) = connected(ScenarioId::Healthy);
+    let r = service.check_procedure("hold_it_sideways", USER);
+    assert!(!r.success);
+    assert_eq!(r.error.as_ref().unwrap().code, ErrorCode::NotFound);
+}
+
+/// Every procedure this build ships can be done by one person, stationary,
+/// with the handbrake on. The safety rule is enforced where procedures are
+/// defined, not left to whoever writes the next one.
+#[test]
+fn nothing_shipped_asks_somebody_to_drive_and_read_at_once() {
+    for p in aim_diagnostics::Procedure::built_in() {
+        assert!(p.safe_for_one_person(), "{} needs a second person", p.id);
+    }
+}

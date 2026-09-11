@@ -72,6 +72,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/modules/{key}/read", post(module_read))
         .route("/api/v1/dtcs/clear", post(clear_dtcs))
         .route("/api/v1/readiness", get(readiness))
+        .route("/api/v1/procedures", get(list_procedures))
+        .route("/api/v1/procedures/{id}", get(check_procedure))
+        .route("/api/v1/procedures/{id}/run", post(run_procedure))
         .route("/api/v1/modules/scan-all", post(scan_all_modules))
         .route("/api/v1/export", post(export_file))
         // ---- updates ----
@@ -1143,4 +1146,47 @@ fn safe_stem(source: &str) -> String {
     let trimmed = cleaned.trim_matches('-');
     let stem = if trimmed.is_empty() { "profile" } else { trimmed };
     stem.chars().take(60).collect()
+}
+
+// ------------------------------------------------------------ procedures
+
+/// Every guided procedure this build can walk somebody through.
+///
+/// Includes the ones it will refuse, with the reason. A person wondering why
+/// there is no road-speed test deserves to see that it exists and what it
+/// would take, rather than finding an absence.
+async fn list_procedures(State(_state): State<AppState>) -> ApiResult<Json<Value>> {
+    let all: Vec<Value> = aim_diagnostics::Procedure::built_in()
+        .into_iter()
+        .map(|p| {
+            json!({
+                "id": p.id,
+                "name": p.name,
+                "purpose": p.purpose,
+                "hold_seconds": p.hold_seconds,
+                "safety_notes": p.safety_notes,
+                "measures": p.measure,
+                "instructions": p.conditions.iter().map(|c| c.instruction()).collect::<Vec<_>>(),
+                "can_run_alone": p.safe_for_one_person(),
+                "why_not_alone": p.why_not_alone(),
+            })
+        })
+        .collect();
+    Ok(Json(json!({ "procedures": all })))
+}
+
+/// Where the vehicle is against what a procedure needs. Read-only.
+async fn check_procedure(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<ToolResult>> {
+    Ok(Json(state.with_service(move |s| s.check_procedure(&id, "user:api")).await?))
+}
+
+/// Take the readings, having confirmed the conditions hold.
+async fn run_procedure(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<ToolResult>> {
+    Ok(Json(state.with_service(move |s| s.run_procedure(&id, "user:api")).await?))
 }

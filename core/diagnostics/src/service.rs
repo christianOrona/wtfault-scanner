@@ -1536,6 +1536,245 @@ impl DiagnosticService {
         }
     }
 
+    // ----------------------------------------------------------- procedures
+
+    /// Check where the vehicle is against what a procedure needs.
+    ///
+    /// Read-only, and called repeatedly while somebody works towards the
+    /// state. Each call reads the signals the conditions depend on and reports
+    /// what still has to change — the vehicle is asked, never the person. "I'm
+    /// holding 2500" is a claim; engine speed is a reading.
+    ///
+    /// A procedure that cannot be run safely by one person is refused here
+    /// rather than part-way through, so nobody is led into starting it.
+    pub fn check_procedure(&mut self, procedure_id: &str, initiator: &str) -> ToolResult {
+        let t0 = Instant::now();
+        self.record_invocation(
+            "check_procedure",
+            initiator,
+            serde_json::json!({ "procedure": procedure_id }),
+        );
+        let outcome = self
+            .authorize(capabilities::READ_LIVE_DATA, initiator, None)
+            .and_then(|_| self.check_procedure_inner(procedure_id));
+        self.finish("check_procedure", capabilities::READ_LIVE_DATA, t0, outcome)
+    }
+
+    fn check_procedure_inner(&mut self, procedure_id: &str) -> AimResult<Payload> {
+        let Some(procedure) = crate::procedure::Procedure::by_id(procedure_id) else {
+            return Err(AimError::not_found(format!(
+                "no procedure {procedure_id:?}. `list_procedures` shows the ones this build has."
+            )));
+        };
+
+        // Refused before it begins, not after. A procedure needing road speed
+        // is described so somebody knows what it would take, and never walked
+        // through — that would mean reading a screen while driving.
+        if !procedure.safe_for_one_person() {
+            let why = procedure.why_not_alone().unwrap_or_default();
+            return Ok(Payload {
+                data: Some(serde_json::json!({
+                    "procedure": procedure.id,
+                    "name": procedure.name,
+                    "state": crate::procedure::ProcedureState::Refused,
+                    "refused_because": why,
+                    "purpose": procedure.purpose,
+                })),
+                warnings: vec![Warning::serious("procedure_needs_two_people", why)],
+                ..Default::default()
+            });
+        }
+
+        self.require_usable()?;
+        let module = self
+            .store
+            .modules(&self.session.id)
+            .unwrap_or_default()
+            .into_iter()
+            .find(|m| m.module_key.contains("7E8") || m.module_key.contains("7E0"))
+            .map(|m| m.module_key)
+            .unwrap_or_else(|| String::from("ECU_7E8"));
+
+        let mut checks = Vec::new();
+        for condition in &procedure.conditions {
+            let (value, unmeasurable) = match condition.signal() {
+                Some(signal) => match self.sample_signal(&module, signal) {
+                    Ok(v) => (Some(v), None),
+                    Err(e) => (None, Some(e.message)),
+                },
+                None => (
+                    None,
+                    Some(String::from(
+                        "This vehicle cannot report this, so it would have to be taken on your \
+                         word. It is recorded as stated rather than measured.",
+                    )),
+                ),
+            };
+            checks.push(crate::procedure::ConditionCheck {
+                condition: condition.clone(),
+                instruction: condition.instruction(),
+                signal: condition.signal().map(String::from),
+                value,
+                // Unreadable is not satisfied. A condition nobody could check
+                // must not count as met, or the window would close on a state
+                // that was never established.
+                met: value.is_some_and(|v| condition.satisfied_by(v)),
+                unmeasurable,
+            });
+        }
+
+        let all_met = !checks.is_empty() && checks.iter().all(|c| c.met);
+        let blocking = checks.iter().find(|c| !c.met);
+        let next_step = match (&blocking, all_met) {
+            (Some(c), _) => c.instruction.clone(),
+            (None, true) => format!(
+                "Hold it there for {} seconds while the readings are taken.",
+                procedure.hold_seconds
+            ),
+            (None, false) => String::from("Nothing to check."),
+        };
+
+        Ok(Payload {
+            data: Some(serde_json::json!({
+                "procedure": procedure.id,
+                "name": procedure.name,
+                "purpose": procedure.purpose,
+                "state": if all_met {
+                    crate::procedure::ProcedureState::Holding
+                } else {
+                    crate::procedure::ProcedureState::Waiting
+                },
+                "conditions": checks,
+                "all_met": all_met,
+                "next_step": next_step,
+                "hold_seconds": procedure.hold_seconds,
+                "safety_notes": procedure.safety_notes,
+                "measures": procedure.measure,
+            })),
+            warnings: Vec::new(),
+            evidence: self.recorder.last_response_event(),
+            ..Default::default()
+        })
+    }
+
+    /// Read the signals a procedure measures, having confirmed its conditions.
+    ///
+    /// The conditions are re-checked immediately before and immediately after
+    /// the readings, and the result says so. A measurement taken while the
+    /// state was drifting is not a measurement under that state, and the
+    /// difference is the whole reason a procedure exists rather than a plain
+    /// read.
+    pub fn run_procedure(&mut self, procedure_id: &str, initiator: &str) -> ToolResult {
+        let t0 = Instant::now();
+        self.record_invocation(
+            "run_procedure",
+            initiator,
+            serde_json::json!({ "procedure": procedure_id }),
+        );
+        let outcome = self
+            .authorize(capabilities::READ_LIVE_DATA, initiator, None)
+            .and_then(|_| self.run_procedure_inner(procedure_id));
+        self.finish("run_procedure", capabilities::READ_LIVE_DATA, t0, outcome)
+    }
+
+    fn run_procedure_inner(&mut self, procedure_id: &str) -> AimResult<Payload> {
+        let Some(procedure) = crate::procedure::Procedure::by_id(procedure_id) else {
+            return Err(AimError::not_found(format!("no procedure {procedure_id:?}")));
+        };
+        if !procedure.safe_for_one_person() {
+            return Err(AimError::new(
+                ErrorCode::OperationNotAllowed,
+                procedure.why_not_alone().unwrap_or_default(),
+            ));
+        }
+        self.require_usable()?;
+
+        let before = self.check_procedure_inner(procedure_id)?;
+        let held_before =
+            before.data.as_ref().and_then(|d| d["all_met"].as_bool()).unwrap_or(false);
+        if !held_before {
+            return Ok(Payload {
+                data: before.data,
+                warnings: vec![Warning::caution(
+                    "conditions_not_met",
+                    "The vehicle is not in the state this procedure needs, so nothing was \
+                     measured. What is still required is in the conditions above.",
+                )],
+                ..Default::default()
+            });
+        }
+
+        // The readings, taken while the state holds.
+        let module = self
+            .store
+            .modules(&self.session.id)
+            .unwrap_or_default()
+            .into_iter()
+            .find(|m| m.module_key.contains("7E8") || m.module_key.contains("7E0"))
+            .map(|m| m.module_key)
+            .unwrap_or_else(|| String::from("ECU_7E8"));
+        let reading = self.read_live_data(&module, &procedure.measure, "user:procedure");
+
+        // And again afterwards. If the state broke while this was happening,
+        // the readings describe a vehicle that was on its way somewhere else.
+        let after = self.check_procedure_inner(procedure_id)?;
+        let held_after = after.data.as_ref().and_then(|d| d["all_met"].as_bool()).unwrap_or(false);
+
+        let mut warnings = reading.warnings.clone();
+        if !held_after {
+            warnings.push(Warning::caution(
+                "conditions_broke_during_the_reading",
+                "The vehicle left the required state while these were being read, so they were \
+                 not all taken under it. Treat them as ordinary live data rather than as a \
+                 measurement under load, and run it again.",
+            ));
+        }
+
+        Ok(Payload {
+            data: Some(serde_json::json!({
+                "procedure": procedure.id,
+                "name": procedure.name,
+                "state": if held_after {
+                    crate::procedure::ProcedureState::Measured
+                } else {
+                    crate::procedure::ProcedureState::Lost
+                },
+                // Both ends, because the claim being made is about the whole
+                // window rather than about either instant.
+                "conditions_before": before.data.as_ref().map(|d| d["conditions"].clone()),
+                "conditions_after": after.data.as_ref().map(|d| d["conditions"].clone()),
+                "held_throughout": held_after,
+                "purpose": procedure.purpose,
+            })),
+            values: reading.values.clone(),
+            warnings,
+            evidence: reading.raw_evidence_ref,
+            ..Default::default()
+        })
+    }
+
+    /// One signal's current value, as a number.
+    fn sample_signal(&mut self, module_key: &str, signal: &str) -> AimResult<f64> {
+        let result = self.read_pid(module_key, signal, "user:procedure");
+        if !result.success {
+            return Err(result
+                .error
+                .clone()
+                .unwrap_or_else(|| AimError::new(ErrorCode::NoData, "no reading")));
+        }
+        result
+            .values
+            .first()
+            .and_then(|v| match &v.value {
+                aim_types::Value::Number(n) => Some(*n),
+                aim_types::Value::Integer(n) => Some(*n as f64),
+                _ => None,
+            })
+            .ok_or_else(|| {
+                AimError::new(ErrorCode::NoData, format!("{signal} did not decode to a number"))
+            })
+    }
+
     // ------------------------------------------------------------- as-built
 
     /// Whether an as-built file would tell us anything, and how to get one.
