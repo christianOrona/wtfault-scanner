@@ -3,6 +3,23 @@
 Notable changes, newest first. Versions follow [semantic versioning](https://semver.org),
 with the caveat that everything below 1.0 is allowed to move.
 
+## [0.3.4] — 2026-09-11
+
+Nothing in this release changes how the scanner talks to a vehicle. It exists
+so that the last untested step of the updater — the one that actually replaces
+the running application — gets run once with someone watching.
+
+0.3.3 proved the parts either side of it: the check finds a newer tag, the
+banner appears, the button is wired, and the download address is now accepted.
+What has never happened in one continuous go is: download the installer,
+verify its size, launch it, and come back as a newer version. Every earlier
+attempt stopped before that point, for a different reason each time.
+
+So the payload is deliberately empty. If this install lands, the only thing
+that changed is the number, and the update path is proven. If it doesn't, the
+failure belongs to the updater and nothing else — which is the entire point of
+shipping it with nothing else in it.
+
 ## [0.3.3] — 2026-09-11
 
 ### Fixed
