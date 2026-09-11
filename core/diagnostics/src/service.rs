@@ -20,7 +20,7 @@
 
 use crate::identity::VehicleIdentity;
 use crate::recorder::SessionRecorder;
-use aim_adapter::{DiagnosticAdapter, EcuMessage, RequestTarget};
+use aim_adapter::{DiagnosticAdapter, EcuMessage, RequestTarget, VehicleBus};
 use aim_decoders::{Authority, DecoderSet, KnowledgeProvider};
 use aim_protocols::{
     decode_dtc_list, decode_monitor_response, decode_supported_pids, strip_dtc_count, ObdRequest,
@@ -1016,18 +1016,137 @@ impl DiagnosticService {
         self.finish("scan_modules", capabilities::SCAN_MODULES, t0, outcome)
     }
 
+    /// Discover modules on every bus this adapter can reach.
+    ///
+    /// Most of a vehicle is not on the legislated high-speed bus. Body, comfort
+    /// and instrument modules — the ones that own nearly everything
+    /// configurable — commonly sit on a slower body bus, and an adapter that
+    /// only ever asks the fast one sees the powertrain and calls it the
+    /// vehicle.
+    ///
+    /// Each bus is reported separately, including the ones where nothing
+    /// answered. That distinction is load-bearing: an adapter can accept every
+    /// bit-rate command and still not be wired to the pins the second bus uses,
+    /// and nothing on the wire can tell the two apart. So silence is recorded
+    /// as silence, never as "this vehicle has no second bus".
     fn scan_modules_inner(&mut self) -> AimResult<Payload> {
         self.require_usable()?;
+
+        let home = self.adapter.current_bus();
+        let mut buses = vec![home];
+        if self.adapter.capabilities().multiple_can_buses {
+            for bus in [VehicleBus::HighSpeed, VehicleBus::MediumSpeed] {
+                if bus != home {
+                    buses.push(bus);
+                }
+            }
+        }
+
+        let mut all: Vec<Module> = Vec::new();
+        let mut reports: Vec<serde_json::Value> = Vec::new();
+        let mut evidence = None;
+        let mut fatal: Option<AimError> = None;
+
+        for bus in buses {
+            if self.adapter.current_bus() != bus {
+                if let Err(e) = self.adapter.select_bus(bus) {
+                    reports.push(serde_json::json!({
+                        "bus": bus,
+                        "label": bus.label(),
+                        "reached": false,
+                        "modules": 0,
+                        "note": format!("the adapter would not switch to this bus: {e}"),
+                    }));
+                    continue;
+                }
+            }
+
+            // Not `?`. An error here still has to leave the adapter on the bus
+            // it was found on, or a failed scan would silently redirect every
+            // request made afterwards.
+            let found = match self.scan_one_bus(bus) {
+                Ok(found) => found,
+                Err(e) => {
+                    fatal = Some(e);
+                    break;
+                }
+            };
+            if evidence.is_none() {
+                evidence = self.recorder.last_response_event();
+            }
+            reports.push(serde_json::json!({
+                "bus": bus,
+                "label": bus.label(),
+                "reached": true,
+                "modules": found.len(),
+                "note": if found.is_empty() {
+                    // Deliberately not a conclusion about the vehicle.
+                    Some(format!(
+                        "nothing answered on the {}. That can mean the vehicle has no modules \
+                         there, or that this adapter's connector is not wired to the pins that \
+                         bus uses — the two are indistinguishable from here.",
+                        bus.label()
+                    ))
+                } else {
+                    None
+                },
+            }));
+            all.extend(found);
+        }
+
+        // Back where we started, whatever happened. Everything after a scan
+        // assumes the bus it was already talking to, and leaving the adapter
+        // pointed somewhere else would make the next unrelated request fail in
+        // a way nobody would connect to having run a scan.
+        if self.adapter.current_bus() != home {
+            if let Err(e) = self.adapter.select_bus(home) {
+                tracing::warn!(error = %e, "cannot return to the original bus after a scan");
+            }
+        }
+
+        if let Some(e) = fatal {
+            return Err(e);
+        }
+
+        if all.is_empty() {
+            return Err(AimError::no_data("no module answered the discovery request"));
+        }
+
+        Ok(Payload {
+            data: Some(serde_json::json!({
+                "modules": all,
+                "buses": reports,
+                "protocol": self.adapter.protocol(),
+                "protocol_label": self.adapter.protocol().label(),
+            })),
+            evidence,
+            ..Default::default()
+        })
+    }
+
+    /// The discovery sweep on whichever bus the adapter is currently on.
+    fn scan_one_bus(&mut self, bus: VehicleBus) -> AimResult<Vec<Module>> {
         // Service 01 PID 00 is the one request every OBD-II module must answer,
         // which makes it the discovery probe.
         let request = ObdRequest::current_data(0x00);
-        let messages = self.request(&request, &RequestTarget::Functional)?;
-        let evidence = self.recorder.last_response_event();
+        let messages = match self.request(&request, &RequestTarget::Functional) {
+            Ok(m) => m,
+            // A bus nobody answers on is a finding, not a failure. The caller
+            // records it as silence and carries on to the next one.
+            Err(e) if e.code == ErrorCode::NoData => Vec::new(),
+            Err(e) => return Err(e),
+        };
         let protocol = self.adapter.protocol();
 
         let mut discovered = Vec::new();
         for message in &messages {
-            let key = format!("ECU_{}", message.address);
+            // The bus is part of the identity, not a label on it. Two buses can
+            // both have a module at 7E8, and a key that ignored which bus it
+            // came from would quietly overwrite one with the other.
+            let key = match bus {
+                VehicleBus::HighSpeed => format!("ECU_{}", message.address),
+                other => format!("{}_{}", other.key_prefix(), message.address),
+            };
             let module = Module {
                 id: aim_types::ModuleId::new(),
                 session_id: self.session.id.clone(),
@@ -1062,10 +1181,6 @@ impl DiagnosticService {
             discovered.push(stored);
         }
 
-        if discovered.is_empty() {
-            return Err(AimError::no_data("no module answered the discovery request"));
-        }
-
         // Ask each module for its own name. A module that answers gets named
         // by evidence; one that does not keeps its address-based label.
         let mut named = Vec::new();
@@ -1078,15 +1193,7 @@ impl DiagnosticService {
             named.push(module);
         }
 
-        Ok(Payload {
-            data: Some(serde_json::json!({
-                "modules": named,
-                "protocol": protocol,
-                "protocol_label": protocol.label(),
-            })),
-            evidence,
-            ..Default::default()
-        })
+        Ok(named)
     }
 
     fn read_ecu_name(&mut self, module: &Module) -> AimResult<String> {

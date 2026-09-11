@@ -3,6 +3,44 @@
 Notable changes, newest first. Versions follow [semantic versioning](https://semver.org),
 with the caveat that everything below 1.0 is allowed to move.
 
+## [0.3.9] — 2026-09-11
+
+### Added
+
+- **A module scan sweeps the second bus.** Body, comfort and instrument modules
+  — the ones owning nearly everything configurable — commonly sit on a slower
+  body bus, and a tool that only asks the fast one sees the powertrain and calls
+  it the vehicle. When the adapter accepts the bit-rate commands, the scan now
+  switches, sweeps, and switches back.
+
+  Every bus is reported separately, including ones where nothing answered. That
+  distinction is the point: an adapter can accept every command and still not be
+  wired to the pins the second bus uses, and nothing on the wire tells the two
+  apart. So silence is recorded as silence, never as "this vehicle has no second
+  bus".
+
+  A module key now carries the bus it answered on. Two buses can each have a
+  module at `7E8`; a key built from the address alone would file the second on
+  top of the first, and the scan would report fewer modules the more buses it
+  swept.
+
+  Nothing here has met a real body module yet.
+
+### Changed
+
+- **Updates download in the background and install without windows.** The
+  download starts as soon as a release is found, with progress, and the button
+  only offers to install once the bytes are on disk — the wait happens before
+  the decision instead of after it. The installer then runs silently: no wizard,
+  no uninstaller dialog, and the app is relaunched when it finishes.
+
+  This uses flags the generated installer already had. In silent mode it also
+  closes the running application itself rather than asking, which is what makes
+  it safe to start from inside the app being replaced.
+
+  The crash marker is cleared before the installer starts rather than on the way
+  out, because the installer does not wait for this process to finish tidying up.
+
 ## [0.3.8] — 2026-09-11
 
 ### Added

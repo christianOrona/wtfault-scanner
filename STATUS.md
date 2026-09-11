@@ -3,7 +3,7 @@
 Where the project actually is, updated when something significant changes.
 Not a changelog — see `CHANGELOG.md` for releases — and not a diary.
 
-Last reviewed: **2026-09-10**
+Last reviewed: **2026-09-11**
 
 ---
 
@@ -14,11 +14,11 @@ Evidence, not intention. Everything here has run against a vehicle.
 | | |
 |---|---|
 | Vehicles seen | 3 real (2019 F-250 ×2, 2012 F-250), plus the virtual truck |
-| Adapters | FTDI USB at 500000 baud, Bluetooth ELM327 clone at 38400 |
+| Adapters | FTDI USB at 500000 baud, Bluetooth ELM327 clone at 38400, OBDLink MX+ (STN) |
 | Sessions recorded | 34 |
 | Adapter exchanges logged | ~29,900 |
 
-OBD-II services 01–0A, UDS 0x10/0x19/0x22/0x2E/0x3E, full-bus module sweep,
+OBD-II services 01–0A, UDS 0x10/0x19/0x22/0x27/0x2E/0x3E, full-bus module sweep,
 Mode 06, readiness, live data, session comparison, flight recorder.
 
 ## Findings from real sessions
@@ -92,10 +92,17 @@ and says the history is probably not lost.
 
 Honest gaps, in the order they matter.
 
-- **No verified configuration mapping ships for any real vehicle.** Every
-  catalogue entry has `mapping: null`. The write path is complete and proven
-  against the virtual vehicle; nobody has measured a real one. This closes with
-  a profile file, not a release.
+- **One verified configuration mapping ships, and one is not a catalogue.**
+  AutoLock on the 2019 F-250 was written to a real truck on 2026-09-11 — DID
+  `DE0E`, byte 4, `01` → `00` — and confirmed by the owner seeing it change on
+  the dash after an ignition cycle. That is the whole of it. Every other
+  catalogue entry still has `mapping: null`, and the honest reading of one
+  success is that the mechanism works, not that the catalogue does. This closes
+  with profile files, not releases.
+- **The write needed a key cycle before it showed.** The module accepted the
+  write and reported the new value immediately; the dash kept the old behaviour
+  until the ignition was cycled. Any feature whose verification does not include
+  a key cycle has not actually been verified.
 - **Windows only in practice.** The core is portable and CI builds it on Linux;
   the desktop shell has only ever been built and run on Windows.
 - **Mode 06 unit scalings unverified.** Pass/fail and margin are exact because
@@ -105,10 +112,25 @@ Honest gaps, in the order they matter.
   code nobody has a description for.
 - **Profile import is folder-only.** Dropping a YAML file in works; importing
   one from a URL with a verification count does not exist.
-- **MS-CAN is detected but never used.** The adapter can be switched to a second
-  bus; nothing in the app asks it to yet.
-- **Provider API keys are stored in plain text** in the user profile. The OS
-  credential store would be better and is not implemented.
+- **The second bus is swept but has never answered.** A module scan now switches
+  to the medium-speed body bus and sweeps it when the adapter accepts the
+  bit-rate commands. No vehicle has been scanned this way yet, so there is no
+  evidence any of it reaches a real body module. An adapter that takes the
+  commands is not necessarily wired to pins 3 and 11, and nothing on the wire
+  distinguishes "this vehicle has nothing there" from "this cable cannot hear
+  it" — so silence is reported as silence and this line stays here until a real
+  module answers.
+- **A guided procedure has never reached its measured state.** The built-in
+  preconditions want a warm engine; the simulator idles at 65 °C and satisfies
+  none of them, so the `waiting` → `holding` transition has only ever been
+  reasoned about.
+- **Provider API keys go to the OS credential store** where there is one. On a
+  machine without one the key stays in the settings file in plain text, and the
+  Settings screen says so against that key rather than leaving anyone to assume
+  otherwise.
+- **Nothing the app writes has ever been reported to anybody.** It keeps a log
+  and can assemble a problem report; moving one anywhere is still a person
+  copying text.
 
 ## Permanently out of scope
 

@@ -311,4 +311,49 @@ impl VehicleBus {
             VehicleBus::MediumSpeed => "medium-speed body bus (125 kbit/s)",
         }
     }
+
+    /// Prefix distinguishing a module key on this bus from one at the same
+    /// address on another.
+    ///
+    /// Two buses can each have a module answering at `7E8`. They are different
+    /// modules, and a key that recorded only the address would file the second
+    /// one on top of the first. The high-speed prefix is what module keys have
+    /// always been, so existing stored sessions keep matching.
+    pub fn key_prefix(&self) -> &'static str {
+        match self {
+            VehicleBus::HighSpeed => "ECU",
+            VehicleBus::MediumSpeed => "MSCAN",
+        }
+    }
+}
+
+#[cfg(test)]
+mod bus_tests {
+    use super::VehicleBus;
+
+    /// Two buses, one address, two modules.
+    ///
+    /// A body module on the slow bus can answer at the same address as a
+    /// powertrain module on the fast one. They are unrelated, and a key built
+    /// from the address alone would file the second on top of the first — the
+    /// scan would report finding fewer modules the more buses it swept.
+    #[test]
+    fn a_module_key_distinguishes_the_bus_it_answered_on() {
+        let high = format!("{}_{}", VehicleBus::HighSpeed.key_prefix(), "7E8");
+        let medium = format!("{}_{}", VehicleBus::MediumSpeed.key_prefix(), "7E8");
+        assert_ne!(high, medium);
+        // The high-speed form is what module keys have always been, so sessions
+        // recorded before there was a second bus still match.
+        assert_eq!(high, "ECU_7E8");
+    }
+
+    /// The divisor the bus switch is built on. 500/125 = 4, and a bus whose
+    /// rate did not divide cleanly would silently configure the wrong speed.
+    #[test]
+    fn every_bus_rate_divides_the_programmable_base() {
+        for bus in [VehicleBus::HighSpeed, VehicleBus::MediumSpeed] {
+            assert_ne!(bus.kbits(), 0, "a zero bit rate would divide by zero");
+            assert_eq!(500 % bus.kbits(), 0, "{} needs a fractional divisor", bus.label());
+        }
+    }
 }
