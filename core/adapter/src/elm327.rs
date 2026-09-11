@@ -1594,6 +1594,13 @@ fn is_at_command(command: &str) -> bool {
 /// request in this form still comes back `?`.
 const ELM_MAX_REQUEST_BYTES: usize = 7;
 
+/// The eight-byte ELM-form request used to test whether a device can send a
+/// request longer than one CAN frame.
+///
+/// Seven parameters: the supported-PID bitmaps, which every OBD-II vehicle
+/// implements and none of which change anything.
+const LONG_PROBE_COMMAND: &str = "010020406080A0C0";
+
 /// Where the learned response window starts, in milliseconds.
 ///
 /// The ELM327's own power-on default is roughly this, and it is enough for a
@@ -2081,6 +2088,3 @@ mod tests {
         assert!(!is_link_fault(&AimError::new(ErrorCode::AdapterRejectedCommand, "x")));
     }
 }
-
-/// The eight-byte ELM-form request used to test segmentation.
-const LONG_PROBE_COMMAND: &str = "010020406080A0C0";
