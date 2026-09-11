@@ -1,6 +1,6 @@
 [package]
 name = "ai-mechanic-desktop"
-version = "0.3.7"
+version = "0.3.8"
 edition = "2021"
 rust-version = "1.82"
 license = "MIT OR Apache-2.0"
@@ -29,6 +29,7 @@ tauri = { version = "2", features = [] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
 directories = "5"
 include_dir = "0.7"
 mime_guess = "2"

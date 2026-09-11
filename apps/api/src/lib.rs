@@ -18,6 +18,7 @@ pub mod agent_routes;
 pub mod error;
 pub mod routes;
 pub mod state;
+pub mod support;
 pub mod update;
 pub mod ws;
 

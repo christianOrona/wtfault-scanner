@@ -3,6 +3,36 @@
 Notable changes, newest first. Versions follow [semantic versioning](https://semver.org),
 with the caveat that everything below 1.0 is allowed to move.
 
+## [0.3.8] — 2026-09-11
+
+### Added
+
+- **The app keeps a log.** Daily files under the application's own data folder,
+  seven kept. Until now logging went to stdout, and a release build is a Windows
+  GUI binary with no stdout — so it went nowhere. An installed build ran for
+  eleven minutes, froze, and left a hash in the Windows event log and nothing
+  else. The file writer is unbuffered on purpose: buffering loses whatever had
+  not been flushed when the process died, which is the part worth reading.
+
+- **A run that ends badly is noticed.** A marker file is written at startup and
+  removed on a clean exit. A process that freezes, is killed, or loses power
+  never removes its own, so finding one at the next launch is proof the last run
+  did not end properly — the one failure that cannot report itself while it is
+  happening. The updater clears the marker before replacing the app, because
+  leaving on purpose is not crashing.
+
+- **"Reporting a problem" in Settings, and a banner after a bad run.** One piece
+  of text with the version, the machine, how the last run ended, and the end of
+  the log, over three buttons: copy it, save it to a file, open the log folder.
+  No account, no form, nothing to sign up for.
+
+  Nothing is sent anywhere. A log carries VINs, fault codes and file paths with
+  somebody's own name in them, so it moves only when a person moves it.
+  [#50](https://github.com/christianOrona/wtfault-scanner/issues/50) covers
+  sending one to an endpoint the project hosts, with its own consent.
+
+- Panics are written to the log before they reach a stderr nobody can see.
+
 ## [0.3.7] — 2026-09-11
 
 ### Changed

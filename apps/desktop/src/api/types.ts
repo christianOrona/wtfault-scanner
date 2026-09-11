@@ -764,6 +764,33 @@ export interface ComparisonResponse {
  * `error` is separate from a failed request on purpose: a check that reached
  * GitHub and was refused (rate limit, no network) is a different thing from a
  * check that never ran, and neither should look like "you are up to date". */
+/** A run of the application that started and, one way or another, stopped. */
+export interface RunMarker {
+  version: string;
+  /** RFC 3339. */
+  started: string;
+  pid: number;
+}
+
+/**
+ * Everything a person would be asked for when reporting a problem.
+ *
+ * Assembled by the core rather than here: what gets copied to a clipboard and
+ * what gets written to a file are then the same text by construction.
+ */
+export interface SupportReport {
+  generated: string;
+  app_version: string;
+  os: string;
+  /** Set when the previous run never recorded a clean shutdown. */
+  previous_run_ended_badly: RunMarker | null;
+  log_dir: string | null;
+  log_file: string | null;
+  has_log: boolean;
+  /** The whole report as plain text. */
+  text: string;
+}
+
 export interface UpdateStatus {
   current: string;
   latest: string | null;

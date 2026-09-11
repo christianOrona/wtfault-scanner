@@ -294,6 +294,10 @@ pub async fn download_and_launch() -> Result<String, String> {
     // and outlives us.
     tokio::spawn(async {
         tokio::time::sleep(QUIT_DELAY).await;
+        // Leaving on purpose is not crashing. Without this the next launch
+        // would find a marker nobody removed and report the update as a
+        // failure, which is how a warning that matters gets ignored.
+        crate::support::end_run();
         std::process::exit(0);
     });
 

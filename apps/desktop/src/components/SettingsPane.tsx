@@ -10,6 +10,7 @@ import { api, describeError, type ProviderInput } from "../api/client";
 import type { ProbeResult, ProfilesResponse, ProviderKindId, ProviderView, ProvidersResponse, ScanPurpose, Tone, Health } from "../api/types";
 import { LINKS, PRODUCT_NAME, TAGLINE } from "../branding";
 import appIcon from "../assets/icon.png";
+import { ProblemReportSection } from "./ProblemReport";
 import { ErrorBanner, Spinner } from "./primitives";
 
 /** Where a key lives, in three words. The full sentence is on the title. */
@@ -438,6 +439,11 @@ export function SettingsPane({
       />
 
       <VehicleProfiles />
+
+      <div className="section" style={{ marginTop: 26 }}>
+        <h2>Reporting a problem</h2>
+        <ProblemReportSection />
+      </div>
 
       <About health={health ?? null} />
     </div>

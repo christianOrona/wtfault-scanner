@@ -80,6 +80,9 @@ pub fn router(state: AppState) -> Router {
         // ---- updates ----
         .route("/api/v1/update/check", get(update_check))
         .route("/api/v1/update/apply", post(update_apply))
+        // ---- reporting a problem ----
+        .route("/api/v1/support/report", get(support_report))
+        .route("/api/v1/support/reveal", post(support_reveal))
         .route("/api/v1/modules/{key}/freeze-frame", get(freeze_frame))
         .route("/api/v1/modules/{key}/tests/{test_id}/run", post(run_module_test))
         // ---- sessions ----
@@ -832,6 +835,26 @@ async fn update_apply() -> ApiResult<Json<Value>> {
             "installer": path,
             "note": "The installer is running. This app will close when it replaces itself.",
         }))),
+        Err(e) => Err(ApiError::bad_request(e)),
+    }
+}
+
+/// Everything a person would be asked for when reporting a problem, gathered in
+/// one place so nobody has to be talked through finding it.
+///
+/// A read: it assembles what this machine already knows and sends nothing
+/// anywhere. What happens to the text afterwards is the person's decision.
+async fn support_report() -> Json<Value> {
+    Json(serde_json::to_value(crate::support::report()).unwrap_or(Value::Null))
+}
+
+/// Open the log folder in the desktop's own file manager.
+///
+/// A POST because it starts a program, even though it reads nothing and changes
+/// nothing. It takes no path: the folder is this process's own.
+async fn support_reveal() -> ApiResult<Json<Value>> {
+    match crate::support::reveal_logs() {
+        Ok(dir) => Ok(Json(serde_json::json!({ "opened": dir }))),
         Err(e) => Err(ApiError::bad_request(e)),
     }
 }

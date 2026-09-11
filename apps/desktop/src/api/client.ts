@@ -14,7 +14,7 @@ import type {
   Health, IdentifyData, Measurement, ModuleIdentity, ModuleRecord, PortsResponse,
   SessionEvent, SessionSummary, SignalsData, ToolResult, ApiError, Dtc, MonitorTestsData,
   AgentStatus, InspectResponse, ChatResponse as AgentChatResponse,
-  ProvidersResponse, ProviderView, ProviderKindId, ProbeResult, Speed, ExplanationsResponse, FeaturesData, ChangePlan, ProfilesResponse, ClearResult, ReadinessData, ScanPurpose, Tone, FullScanData, ComparisonResponse, UpdateStatus, AsBuiltStatus, AsBuiltImport,
+  ProvidersResponse, ProviderView, ProviderKindId, ProbeResult, Speed, ExplanationsResponse, FeaturesData, ChangePlan, ProfilesResponse, ClearResult, ReadinessData, ScanPurpose, Tone, FullScanData, ComparisonResponse, UpdateStatus, SupportReport, AsBuiltStatus, AsBuiltImport,
 } from "./types";
 
 /**
@@ -124,6 +124,11 @@ export const api = {
   /** Download the installer and launch it. The app closes when it replaces itself. */
   updateApply: () =>
     post<{ started: boolean; installer: string; note: string }>("/update/apply", {}),
+  /** What this machine knows about how the app is running, and how the last run
+   *  ended. Reads local state; sends nothing anywhere. */
+  supportReport: () => request<SupportReport>("/support/report"),
+  /** Open the log folder in the desktop's own file manager. */
+  supportReveal: () => post<{ opened: string }>("/support/reveal", {}),
   exportFile: (body: { filename: string; content: string }) =>
     post<{ path: string; directory: string; filename: string }>("/export", body),
   setVoice: (body: { purpose?: ScanPurpose; tone?: Tone }) =>

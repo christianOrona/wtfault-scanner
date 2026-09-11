@@ -830,6 +830,51 @@ a.mini.button:hover { border-color: var(--accent-dim); background: #1c222c; }
 }
 .update-note-more:hover { border-bottom-color: var(--accent-dim); }
 
+/* The strip after a run that ended badly.
+ *
+ * Deliberately not the accent colour the update strip uses. An update is good
+ * news and this is not, and two bars that look identical train somebody to
+ * dismiss both without reading either. */
+.problem-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  background: color-mix(in srgb, var(--caution) 18%, transparent);
+  border-bottom: 1px solid var(--caution);
+}
+
+.report-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+}
+.report-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+/* The log itself. Monospace because column alignment is part of reading it,
+   and bounded because a report is something to glance at before sending, not
+   something to scroll through here. */
+.report-text {
+  max-height: 240px;
+  overflow: auto;
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 /* Follow-up questions under the conversation. Wraps rather than scrolls: a row
    of offers that runs off the edge is a row of offers nobody reads. */
 .suggestions {

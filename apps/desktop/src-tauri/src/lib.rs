@@ -43,14 +43,23 @@ const PREFERRED_PORT: u16 = 8787;
 /// Where sessions are kept. Unlike `cargo run -p aim-api`, the desktop app
 /// persists by default: someone scanning a truck in a driveway expects the
 /// history to still be there tomorrow.
-fn database_path() -> Option<std::path::PathBuf> {
+/// The one directory this application keeps anything in.
+///
+/// `None` when it cannot be created, which every caller treats as "carry on
+/// without that": a diagnostic tool that will not open because it could not
+/// make a folder is worse than one running without a log.
+fn data_dir() -> Option<std::path::PathBuf> {
     let dirs = directories::ProjectDirs::from("", "", "ai-mechanic")?;
     let dir = dirs.data_dir().to_path_buf();
     if let Err(e) = std::fs::create_dir_all(&dir) {
-        tracing::warn!(error = %e, path = %dir.display(), "cannot create the data directory; falling back to an in-memory database");
+        tracing::warn!(error = %e, path = %dir.display(), "cannot create the data directory");
         return None;
     }
-    Some(dir.join("sessions.sqlite"))
+    Some(dir)
+}
+
+fn database_path() -> Option<std::path::PathBuf> {
+    Some(data_dir()?.join("sessions.sqlite"))
 }
 
 /// Where user-supplied vehicle profiles live.
@@ -62,6 +71,59 @@ fn database_path() -> Option<std::path::PathBuf> {
 fn profile_dir() -> Option<std::path::PathBuf> {
     let dirs = directories::ProjectDirs::from("", "", "ai-mechanic")?;
     Some(dirs.data_dir().join("profiles"))
+}
+
+/// Start logging to the console and, when there is somewhere to put it, to a
+/// file on disk.
+///
+/// A release build is a Windows GUI binary with no console attached, so until
+/// there was a file this application's log went nowhere at all — a build that
+/// ran for eleven minutes and froze left a hash in the event log and nothing
+/// else.
+///
+/// The file writer is deliberately not the buffered one. Buffering is faster
+/// and loses whatever had not been flushed when the process dies, which is
+/// exactly the part worth reading.
+fn start_logging(log_dir: Option<&std::path::Path>) {
+    use tracing_subscriber::layer::SubscriberExt as _;
+    use tracing_subscriber::util::SubscriberInitExt as _;
+
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,aim_=debug"));
+
+    let file = log_dir.and_then(|dir| {
+        tracing_appender::rolling::RollingFileAppender::builder()
+            .rotation(tracing_appender::rolling::Rotation::DAILY)
+            .filename_prefix("wtfault")
+            .filename_suffix("log")
+            // A week is long enough to cover "it did it again last Tuesday"
+            // without turning into something a person has to clean up.
+            .max_log_files(7)
+            .build(dir)
+            .map_err(|e| tracing::warn!(error = %e, "cannot open a log file; logging to the console only"))
+            .ok()
+    });
+
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(tracing_subscriber::fmt::layer())
+        .with(
+            file.map(|f| {
+                tracing_subscriber::fmt::layer()
+                    .with_ansi(false)
+                    .with_writer(f)
+            }),
+        )
+        .init();
+
+    // A panic already prints to a stderr nobody can see. This puts it in the
+    // file as well, which is the difference between "it closed by itself" and
+    // a line naming the source file it happened in.
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        tracing::error!(%info, "the application panicked");
+        default(info);
+    }));
 }
 
 /// Bind the preferred port, or let the OS choose one if it is taken.
@@ -120,12 +182,20 @@ fn bind_loopback() -> std::io::Result<StdTcpListener> {
 /// failure at startup.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,aim_=debug")),
-        )
-        .init();
+    let support = data_dir().and_then(|dir| aim_api::support::init(&dir));
+    start_logging(support.map(|s| s.log_dir.as_path()));
+
+    // What the last run did, before this one overwrites the record of it. A run
+    // that froze or was killed never removed its marker, and this is the only
+    // place that failure can be noticed — by definition it could not report
+    // itself while it was happening.
+    if let Some(previous) = aim_api::support::begin_run() {
+        tracing::warn!(
+            previous_version = %previous.version,
+            previous_started = %previous.started,
+            "starting after a run that did not end cleanly"
+        );
+    }
 
     let listener = bind_loopback().expect("cannot bind a loopback socket for the diagnostic core");
     listener
@@ -209,9 +279,16 @@ pub fn run() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("the desktop shell failed to start");
-
-    // Nothing to tear down: the core lives in this process, so it goes when the
-    // window does, and the open serial port goes with it.
+        .build(tauri::generate_context!())
+        .expect("the desktop shell failed to start")
+        .run(|_app, event| {
+            // The core lives in this process, so it goes when the window does,
+            // and the open serial port goes with it. The one thing that has to
+            // happen on the way out is saying so: a run that leaves its marker
+            // behind is read as a crash by the next launch.
+            if let tauri::RunEvent::Exit = event {
+                tracing::info!("shutting down");
+                aim_api::support::end_run();
+            }
+        });
 }
