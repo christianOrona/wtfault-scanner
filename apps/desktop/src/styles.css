@@ -647,3 +647,13 @@ button.mini {
   font-size: 12px;
   white-space: pre-wrap;
 }
+
+/* Follow-up questions under the conversation. Wraps rather than scrolls: a row
+   of offers that runs off the edge is a row of offers nobody reads. */
+.suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 10px 0 4px;
+}

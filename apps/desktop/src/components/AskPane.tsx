@@ -167,6 +167,10 @@ export function AskPane({
           </div>
         )}
 
+        {/* Under the conversation rather than beside the box: these are things
+            to ask next, and they belong where the last answer ended. */}
+        {!busy && <Suggestions turns={turns} connected={connected} busy={busy} onPick={send} />}
+
         <ErrorBanner error={error} />
         <div ref={endRef} />
       </div>
@@ -201,6 +205,107 @@ export function AskPane({
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+/** One thing worth asking next, and the question that asks it. */
+interface Suggestion {
+  label: string;
+  prompt: string;
+}
+
+/**
+ * Follow-ups that have not been done yet in this conversation.
+ *
+ * Deliberately derived from the **trace** — which tools actually ran — rather
+ * than from the reply text. Reading the model's prose to guess what it meant
+ * would make these buttons a second, worse interpretation of an answer that is
+ * already on screen, and they would be wrong exactly when the answer was
+ * surprising.
+ *
+ * What they are instead is a statement of fact: this has not been read yet, and
+ * here is the question that reads it. Nothing here can do anything the person
+ * could not already do from the tabs — each button sends an ordinary question
+ * through the ordinary path, so every gate, confirmation and refusal along the
+ * way still applies. A button is a shortcut, never a privilege.
+ */
+function suggest(turns: Turn[], connected: boolean): Suggestion[] {
+  if (!connected) return [];
+
+  const ran = new Set<string>();
+  for (const t of turns) {
+    for (const e of t.trace ?? []) {
+      if (e.type === "tool") ran.add(e.name);
+    }
+  }
+
+  const all: (Suggestion & { done: boolean })[] = [
+    {
+      label: "What vehicle is this?",
+      prompt: "Identify this vehicle and tell me what you can read from the VIN.",
+      done: ran.has("identify_vehicle"),
+    },
+    {
+      label: "Any stored codes?",
+      prompt: "Read the stored trouble codes and explain what each one means in plain English.",
+      done: ran.has("read_dtcs"),
+    },
+    {
+      label: "What's wearing out?",
+      prompt:
+        "Read the on-board self-test results and tell me which parts are passing but close to " +
+        "their limits, before they set a code.",
+      done: ran.has("read_monitor_tests"),
+    },
+    {
+      label: "Ready for an emissions test?",
+      prompt: "Check the emissions readiness monitors and tell me whether this would pass a test.",
+      done: ran.has("read_readiness"),
+    },
+    {
+      label: "Everything on the bus",
+      prompt:
+        "Scan every module on the vehicle, including the ones the emissions services do not " +
+        "reach, and tell me what you found.",
+      done: ran.has("scan_all_modules"),
+    },
+  ];
+
+  // Only what has not been done. Offering to re-read something just read is
+  // noise, and on a long conversation it would be most of the row.
+  return all.filter((s) => !s.done).map(({ label, prompt }) => ({ label, prompt }));
+}
+
+/** The follow-up row. Hidden entirely when there is nothing useful left. */
+function Suggestions({
+  turns,
+  connected,
+  busy,
+  onPick,
+}: {
+  turns: Turn[];
+  connected: boolean;
+  busy: boolean;
+  onPick: (prompt: string) => void;
+}) {
+  const items = suggest(turns, connected);
+  if (!items.length) return null;
+
+  return (
+    <div className="suggestions">
+      <span className="faint">Or ask:</span>
+      {items.map((s) => (
+        <button
+          key={s.label}
+          className="mini"
+          disabled={busy}
+          title={s.prompt}
+          onClick={() => onPick(s.prompt)}
+        >
+          {s.label}
+        </button>
+      ))}
     </div>
   );
 }
