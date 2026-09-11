@@ -452,3 +452,74 @@ fn a_modules_request_address_is_remembered() {
     let legacy = saved.iter().find(|m| m.module_key == "ECU_7E8").expect("engine module");
     assert_eq!(legacy.request_address, None, "not knowing is a fact, not a default");
 }
+
+/// A connect that degrades tells somebody the vehicle is not answering. It
+/// does not tell them the same adapter read the same truck twenty minutes ago
+/// — which is the difference between "it is broken" and "it is intermittent",
+/// and an entirely different thing to go and check.
+#[test]
+fn a_previous_successful_session_is_findable_afterwards() {
+    let store = SessionStore::open_in_memory().unwrap();
+
+    // A session where the vehicle genuinely answered: a module row exists only
+    // because something on the bus replied to an addressed request.
+    let first = store.create_session(Some("yesterday".into())).unwrap();
+    let vehicle = store
+        .upsert_vehicle(&aim_types::Vehicle::from_vin(Some("1FT7W2BT7KEF78036".into())))
+        .unwrap();
+    store.attach_vehicle(&first.id, &vehicle.id).unwrap();
+    store.record_connection(&conn(&first.id, "COM4")).expect("a connection on COM4");
+    store.upsert_module(&module(&first.id, "ECU_7E8", "7E8")).unwrap();
+
+    // Matched on the adapter.
+    let found = store.last_successful_contact("COM4", None).unwrap().expect("found by adapter");
+    assert_eq!(found.session_id, first.id.as_str());
+    assert_eq!(found.modules, 1);
+    assert!(found.same_adapter);
+    assert!(!found.same_vehicle, "no VIN was offered to match on");
+
+    // And on the VIN, which is the stronger claim of the two.
+    let found = store
+        .last_successful_contact("COM9", Some("1FT7W2BT7KEF78036"))
+        .unwrap()
+        .expect("found by VIN even through a different adapter");
+    assert!(found.same_vehicle);
+    assert!(!found.same_adapter);
+}
+
+/// A session where nothing ever answered is not evidence that anything works.
+/// The bar is a module row, which an adapter talking to itself cannot produce.
+#[test]
+fn a_session_where_nothing_answered_does_not_count_as_contact() {
+    let store = SessionStore::open_in_memory().unwrap();
+    let empty = store.create_session(Some("silent bus".into())).unwrap();
+    store.record_connection(&conn(&empty.id, "COM4")).unwrap();
+
+    assert!(
+        store.last_successful_contact("COM4", None).unwrap().is_none(),
+        "a connection that found nothing proves nothing"
+    );
+}
+
+/// Nothing has ever been plugged in. The common case on a first run, and it
+/// must not invent a history to be encouraging about.
+#[test]
+fn an_unknown_adapter_has_no_history() {
+    let store = SessionStore::open_in_memory().unwrap();
+    assert!(store.last_successful_contact("COM99", None).unwrap().is_none());
+    assert!(store.last_successful_contact("COM99", Some("1FT7W2BT7KEF00000")).unwrap().is_none());
+}
+
+/// A connection record for a given session and adapter.
+fn conn(session: &SessionId, adapter: &str) -> aim_types::Connection {
+    aim_types::Connection {
+        id: ConnectionId::new(),
+        session_id: session.clone(),
+        adapter_id: adapter.to_string(),
+        transport: TransportKind::Bluetooth,
+        connected_at: now(),
+        disconnected_at: None,
+        firmware: Some("ELM327 v1.4b".into()),
+        capabilities: AdapterCapabilities::unknown(TransportKind::Bluetooth),
+    }
+}

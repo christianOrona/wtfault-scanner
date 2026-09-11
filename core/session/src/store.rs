@@ -84,6 +84,29 @@ pub struct StoredAsBuilt {
     pub data: serde_json::Value,
 }
 
+/// A past session in which a vehicle actually answered.
+///
+/// History, and nothing more. "This adapter read this vehicle at 02:09" is a
+/// fact; "the adapter is fine" is not, and the distinction is the whole reason
+/// this type carries the timestamp and the counts rather than a verdict.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PriorContact {
+    /// The session it happened in.
+    pub session_id: String,
+    /// When that session started, ISO 8601.
+    pub started_at: String,
+    /// The adapter used then.
+    pub adapter_id: String,
+    /// The VIN, when that session identified one.
+    pub vin: Option<String>,
+    /// How many modules answered. The evidence that contact was real.
+    pub modules: i64,
+    /// Whether it was this same adapter.
+    pub same_adapter: bool,
+    /// Whether it was this same vehicle. Much the stronger of the two.
+    pub same_vehicle: bool,
+}
+
 /// Local diagnostic history.
 #[derive(Clone)]
 pub struct SessionStore {
@@ -532,6 +555,63 @@ impl SessionStore {
             .optional()
             .map_err(storage)?;
         Ok(raw.and_then(|s| serde_json::from_value(serde_json::Value::String(s)).ok()))
+    }
+
+    /// The last time a vehicle actually answered, through this adapter or on
+    /// this VIN.
+    ///
+    /// # Why this exists
+    ///
+    /// A connect that degrades tells somebody the vehicle is not answering. It
+    /// does not tell them that the same adapter read the same truck twenty
+    /// minutes earlier — which is the difference between "it is broken" and
+    /// "it is intermittent", and an entirely different thing to go and check.
+    /// The history was already on disk and nothing consulted it.
+    ///
+    /// A session counts as successful contact when it recorded at least one
+    /// module. That is a deliberately strict bar: a module row exists only
+    /// because something on the bus answered an addressed request, so it
+    /// cannot be produced by an adapter talking to itself.
+    ///
+    /// Matched on the VIN where one is known and on the adapter otherwise, and
+    /// the result says which — "this adapter has read *this vehicle* before"
+    /// and "this adapter has read *a* vehicle before" are different facts and
+    /// the second one is much weaker.
+    pub fn last_successful_contact(
+        &self,
+        adapter_id: &str,
+        vin: Option<&str>,
+    ) -> AimResult<Option<PriorContact>> {
+        let conn = self.lock()?;
+        let row = conn
+            .query_row(
+                "SELECT s.id, s.started_at, c.adapter_id, v.vin,
+                        (SELECT COUNT(*) FROM modules m WHERE m.session_id = s.id) AS modules,
+                        c.adapter_id = ?1 AS same_adapter,
+                        (?2 IS NOT NULL AND v.vin = ?2) AS same_vehicle
+                 FROM sessions s
+                 JOIN connections c ON c.session_id = s.id
+                 LEFT JOIN vehicles v ON v.id = s.vehicle_id
+                 WHERE (SELECT COUNT(*) FROM modules m WHERE m.session_id = s.id) > 0
+                   AND (c.adapter_id = ?1 OR (?2 IS NOT NULL AND v.vin = ?2))
+                 ORDER BY s.started_at DESC
+                 LIMIT 1",
+                params![adapter_id, vin],
+                |r| {
+                    Ok(PriorContact {
+                        session_id: r.get(0)?,
+                        started_at: r.get(1)?,
+                        adapter_id: r.get(2)?,
+                        vin: r.get(3)?,
+                        modules: r.get(4)?,
+                        same_adapter: r.get::<_, i64>(5)? != 0,
+                        same_vehicle: r.get::<_, i64>(6)? != 0,
+                    })
+                },
+            )
+            .optional()
+            .map_err(storage)?;
+        Ok(row)
     }
 
     /// The line speed this adapter was last found answering at.

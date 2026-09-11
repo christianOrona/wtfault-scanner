@@ -1321,3 +1321,75 @@ features:
     let codes: Vec<&str> = r.warnings.iter().map(|w| w.code.as_str()).collect();
     assert!(codes.contains(&"read_from_the_as_built_file"), "{codes:?}");
 }
+
+/// A degraded connect says the vehicle is not answering. It should also say
+/// when this same adapter last got an answer, because "it is broken" and "it
+/// is intermittent" send somebody to completely different places — and the
+/// history was on disk the whole time.
+#[test]
+fn a_silent_bus_mentions_the_last_time_this_adapter_worked() {
+    let store = SessionStore::open_in_memory().unwrap();
+
+    // A previous session, on this same adapter, in which modules answered.
+    // A module row exists only because something on the bus replied.
+    let earlier = store.create_session(Some("earlier today".into())).unwrap();
+    store
+        .record_connection(&aim_types::Connection {
+            id: aim_types::ConnectionId::new(),
+            session_id: earlier.id.clone(),
+            adapter_id: String::from("sim:bus-silent"),
+            transport: aim_types::TransportKind::Simulated,
+            connected_at: aim_types::now(),
+            disconnected_at: None,
+            firmware: None,
+            capabilities: aim_types::AdapterCapabilities::unknown(
+                aim_types::TransportKind::Simulated,
+            ),
+        })
+        .unwrap();
+    store
+        .upsert_module(&aim_types::Module {
+            id: aim_types::ModuleId::new(),
+            session_id: earlier.id.clone(),
+            module_key: String::from("ECU_7E8"),
+            name: String::from("engine"),
+            address: String::from("7E8"),
+            request_address: Some(String::from("7E0")),
+            protocol: aim_types::ObdProtocol::Iso15765Can11_500,
+            identity: aim_types::ModuleIdentity::default(),
+            software_version: None,
+            discovered_at: aim_types::now(),
+        })
+        .unwrap();
+
+    // Now the same adapter finds a silent bus.
+    let transport = SimulatedTransport::new(ScenarioId::BusSilent);
+    let adapter: Box<dyn DiagnosticAdapter> =
+        Box::new(Elm327Adapter::new(Box::new(transport), Elm327Config::fast()));
+    let decoders = Arc::new(DecoderSet::generic_obd().unwrap());
+    let mut service =
+        DiagnosticService::start(adapter, store, decoders, SafetyGate::phase1(), None).unwrap();
+
+    let r = service.connect(USER);
+    let codes: Vec<&str> = r.warnings.iter().map(|w| w.code.as_str()).collect();
+    assert!(codes.contains(&"adapter_degraded"), "still reports the silence: {codes:?}");
+    assert!(codes.contains(&"answered_before"), "and says it worked before: {codes:?}");
+
+    let said = r.warnings.iter().find(|w| w.code == "answered_before").unwrap();
+    // History, never reassurance. The distinction is the whole point.
+    assert!(said.message.contains("does not mean anything is working now"), "{}", said.message);
+    assert!(said.message.contains("intermittent"), "{}", said.message);
+
+    assert!(r.data.as_ref().unwrap()["answered_before"].is_object());
+}
+
+/// And a first-ever connect invents no history to be encouraging about.
+#[test]
+fn a_first_connect_with_no_history_says_nothing_about_one() {
+    let (mut service, _) = service(ScenarioId::BusSilent);
+    let r = service.connect(USER);
+    let codes: Vec<&str> = r.warnings.iter().map(|w| w.code.as_str()).collect();
+    assert!(codes.contains(&"adapter_degraded"));
+    assert!(!codes.contains(&"answered_before"), "nothing has ever worked: {codes:?}");
+    assert!(r.data.as_ref().unwrap()["answered_before"].is_null());
+}

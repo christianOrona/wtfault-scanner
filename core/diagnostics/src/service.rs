@@ -731,8 +731,49 @@ impl DiagnosticService {
 
         let mut warnings: Vec<Warning> =
             caps.caveats.iter().map(|c| Warning::caution("adapter_caveat", c.clone())).collect();
+        let mut prior = None;
         if let ConnectionState::Degraded { reason } = &state {
             warnings.push(Warning::serious("adapter_degraded", reason.clone()));
+
+            // The history was already on disk and nothing looked at it.
+            //
+            // "The vehicle is not answering" and "the vehicle is not answering
+            // *now*, and this same adapter read it twenty minutes ago" send a
+            // person to two completely different places. The second is the
+            // difference between a dead bus and an intermittent connection,
+            // and it was knowable the whole time.
+            prior = self
+                .store
+                .last_successful_contact(
+                    &self.adapter.descriptor(),
+                    self.vehicle.as_ref().and_then(|v| v.vin.as_deref()),
+                )
+                .ok()
+                .flatten();
+
+            if let Some(p) = &prior {
+                // Stated as history and never as reassurance. That it worked
+                // before is a fact; that it is fine now is not one, and the
+                // wording has to keep those apart.
+                let what = if p.same_vehicle {
+                    "this same adapter read this same vehicle"
+                } else if p.same_adapter {
+                    "this same adapter read a vehicle successfully"
+                } else {
+                    "this vehicle answered a different adapter"
+                };
+                warnings.push(Warning::info(
+                    "answered_before",
+                    format!(
+                        "Worth knowing: {what} on {}, when {} module(s) replied. That does not \
+                         mean anything is working now — it means the problem is more likely to \
+                         be intermittent than permanent, which is a different thing to go and \
+                         check. Look at the connector and the cable before concluding the bus \
+                         is dead.",
+                        p.started_at, p.modules
+                    ),
+                ));
+            }
         }
 
         Ok(Payload {
@@ -743,6 +784,9 @@ impl DiagnosticService {
                 "protocol": self.adapter.protocol(),
                 "protocol_label": self.adapter.protocol().label(),
                 "capabilities": caps,
+                // Null on a healthy connect, and on the first time anything was
+                // ever plugged in.
+                "answered_before": prior,
             })),
             warnings,
             ..Default::default()
