@@ -3,6 +3,39 @@
 Notable changes, newest first. Versions follow [semantic versioning](https://semver.org),
 with the caveat that everything below 1.0 is allowed to move.
 
+## [0.3.6] — 2026-09-11
+
+### Changed
+
+- **The splash shows the artwork it was always meant to show.** The banner —
+  the truck, the logo, the tagline — instead of the square app-icon art. The
+  file being imported was named `splash.png` and had been the icon all along,
+  so every request to "use my image" was already satisfied by the code and
+  still wrong on screen. Re-encoded at 1400px: 1.6 MB of PNG became 238 KB.
+
+- **Something moves the whole time the app is starting.** A ring beside the
+  step name, turning continuously. The progress bar underneath only advances
+  when a step completes, which on a slow core is several seconds of a screen
+  with nothing happening on it — indistinguishable from a screen that has
+  hung. The ring stops and fills once everything is done; a spinner next to
+  the word "Ready" claims work that is over.
+
+- **"What changed?" is no longer a wall of monospace.** It rendered the raw
+  markdown in a `<pre>`: asterisks, headings, and the hard line breaks at
+  column 78, which made every release look like log output. The notes are the
+  same published words, now read for their shape — the claim of each entry,
+  its explanation underneath in smaller type and capped at two lines, over a
+  link to the full text. Notes written for one medium do not survive being
+  pasted into another.
+
+### Noted
+
+- Updating without closing the app is [#48](https://github.com/christianOrona/wtfault-scanner/issues/48).
+  A running Windows process holds its own executable open, so it cannot be
+  replaced in place — that needs staged folders and a helper that swaps them
+  after exit. Doing that quietly with unsigned installers is also precisely
+  what a compromised app would do, so signing comes first.
+
 ## [0.3.5] — 2026-09-11
 
 ### Fixed
