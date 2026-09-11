@@ -352,6 +352,36 @@ pub fn plan_change(
         ));
     }
 
+    // A configuration record does not fit in one frame, so an adapter that
+    // cannot segment a request cannot perform any write at all - however sound
+    // the mapping and however willing the module.
+    //
+    // Measured rather than assumed, and checked here rather than discovered
+    // halfway through a write: on a 2019 F-250 a clone answered `?` to a
+    // 13-byte write in 11 ms, the vehicle never saw it, and the failure was
+    // reported as the module refusing. Somebody spent an evening in a truck
+    // finding that out.
+    match ctx.adapter.map(|a| a.supports_long_messages) {
+        Some(true) => checks.push(Check::pass(
+            "adapter_can_send_a_whole_record",
+            "Can the adapter send a request longer than one frame?",
+        )),
+        Some(false) => checks.push(Check::fail(
+            "adapter_can_send_a_whole_record",
+            "Can the adapter send a request longer than one frame?",
+            "This adapter refused an eight-byte read without sending it, so it cannot transmit \
+             a configuration record either - those are all longer than one frame. Reading is \
+             unaffected. An STN-based adapter (OBDLink EX or MX+) does this properly, and \
+             nothing about the vehicle or the mapping needs to change.",
+        )),
+        None => checks.push(Check::fail(
+            "adapter_can_send_a_whole_record",
+            "Can the adapter send a request longer than one frame?",
+            "Not established yet. This is measured once a protocol has been negotiated, so \
+             connect to the vehicle first.",
+        )),
+    }
+
     let needs_second_bus = f.requires.iter().any(|r| r == "ms_can");
     let has_second_bus = ctx.adapter.map(|a| a.multiple_can_buses).unwrap_or(false);
     if !needs_second_bus || has_second_bus {
@@ -640,6 +670,7 @@ mod tests {
         let mut caps = AdapterCapabilities::unknown(aim_types::TransportKind::Usb);
         caps.supports_transmit = true;
         caps.multiple_can_buses = true;
+        caps.supports_long_messages = true;
 
         ctx.adapter = Some(&caps);
 
@@ -664,6 +695,7 @@ mod tests {
         let mut caps = AdapterCapabilities::unknown(aim_types::TransportKind::Usb);
         caps.supports_transmit = true;
         caps.multiple_can_buses = true;
+        caps.supports_long_messages = true;
         ctx.adapter = Some(&caps);
 
         let plan = plan_change(&request(), Some(&f), &ctx);
@@ -702,6 +734,7 @@ mod tests {
         let mut caps = AdapterCapabilities::unknown(aim_types::TransportKind::Usb);
         caps.supports_transmit = true;
         caps.multiple_can_buses = true;
+        caps.supports_long_messages = true;
         ctx.adapter = Some(&caps);
 
         let plan = plan_change(&request(), Some(&f), &ctx);
@@ -820,5 +853,71 @@ mod first_write {
             !check(&plan, "mapping_known").passed,
             "knowing a module takes writes is not knowing where the setting lives"
         );
+    }
+}
+
+#[cfg(test)]
+mod long_messages {
+    use super::tests::*;
+    use super::*;
+    use aim_types::{AdapterCapabilities, TransportKind, VerificationStatus};
+
+    fn caps(long: bool) -> AdapterCapabilities {
+        let mut c = AdapterCapabilities::unknown(TransportKind::Usb);
+        c.supports_transmit = true;
+        c.multiple_can_buses = true;
+        c.supports_long_messages = long;
+        c
+    }
+
+    /// A configuration record does not fit in one frame, so an adapter that
+    /// cannot segment cannot write however sound the mapping is. Measured on a
+    /// 2019 F-250, where a clone answered `?` in 11 ms and the vehicle never
+    /// saw the write - and the app blamed the module.
+    #[test]
+    fn an_adapter_that_cannot_segment_cannot_write() {
+        let f = feature(RiskClass::Convenience, verified_mapping(), VerificationStatus::Verified);
+        let modules: Vec<String> = Vec::new();
+        let mut ctx = perfect_context(&modules);
+        let c = caps(false);
+        ctx.adapter = Some(&c);
+
+        let plan = plan_change(&request(), Some(&f), &ctx);
+        assert!(!plan.can_apply);
+        let check = check(&plan, "adapter_can_send_a_whole_record");
+        assert!(!check.passed);
+        // It must point at the adapter rather than leaving somebody to suspect
+        // their vehicle or their mapping.
+        let detail = check.detail.as_ref().unwrap();
+        assert!(detail.contains("Reading is unaffected"), "{detail}");
+        assert!(detail.contains("OBDLink"), "{detail}");
+    }
+
+    #[test]
+    fn an_adapter_that_can_segment_passes_the_check() {
+        let f = feature(RiskClass::Convenience, verified_mapping(), VerificationStatus::Verified);
+        let modules: Vec<String> = Vec::new();
+        let mut ctx = perfect_context(&modules);
+        let c = caps(true);
+        ctx.adapter = Some(&c);
+
+        let plan = plan_change(&request(), Some(&f), &ctx);
+        assert!(check(&plan, "adapter_can_send_a_whole_record").passed);
+    }
+
+    /// Not measured yet is its own answer. Reporting "cannot" before anything
+    /// has been tried would send somebody shopping for hardware they may
+    /// already own.
+    #[test]
+    fn unmeasured_is_reported_as_unmeasured() {
+        let f = feature(RiskClass::Convenience, verified_mapping(), VerificationStatus::Verified);
+        let modules: Vec<String> = Vec::new();
+        let mut ctx = perfect_context(&modules);
+        ctx.adapter = None;
+
+        let plan = plan_change(&request(), Some(&f), &ctx);
+        let detail =
+            check(&plan, "adapter_can_send_a_whole_record").detail.as_ref().unwrap().clone();
+        assert!(detail.contains("Not established yet"), "{detail}");
     }
 }

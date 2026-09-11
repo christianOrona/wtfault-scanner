@@ -410,10 +410,24 @@ impl Elm327Adapter {
             );
         }
 
-        // Segmentation is performed by the adapter itself on every ELM327-class
-        // device, and long messages follow from it.
+        // Receiving segmented replies is something every ELM327-class device
+        // does, and this build reassembles a multi-frame VIN on the cheapest
+        // clone tested.
         self.caps.iso_tp = true;
-        self.caps.supports_long_messages = true;
+
+        // *Sending* one is a different capability, and this used to be set true
+        // here on the reasoning that "segmentation is performed by the adapter
+        // itself on every ELM327-class device". That is false, and the way it
+        // was false cost somebody an evening in a truck: a clone answered `?`
+        // to a 13-byte configuration write in 11 milliseconds - too fast to
+        // have reached the vehicle - while answering a 4-byte one properly.
+        // The module was never involved, and the app reported it as the module
+        // refusing the write.
+        //
+        // So it starts false and is measured after a protocol is negotiated,
+        // by `measure_long_message_support`. Unknown until then, which is the
+        // honest state rather than an optimistic one.
+        self.caps.supports_long_messages = false;
 
         // The ELM327 command set covers both 11- and 29-bit CAN. That is
         // inferred from the identification, not measured, and is labelled so.
@@ -663,6 +677,12 @@ impl Elm327Adapter {
         // which is what stops every later `NO DATA` being retried to re-learn
         // something already established.
         self.record_window_success();
+
+        // Now that something answers, find out whether this adapter can send a
+        // request too long for one frame. Configuration writes are all longer
+        // than one frame, so this is the difference between a product that can
+        // change a setting and one that can only read.
+        self.measure_long_message_support();
 
         let dpn = self.send_raw("ATDPN", self.config.at_timeout)?;
         self.protocol = dpn
@@ -1004,6 +1024,59 @@ impl Elm327Adapter {
         // The protocol survives a warm start but the request header does not.
         self.current_header = None;
         let _ = self.apply_response_window();
+    }
+
+    /// Find out whether this adapter can transmit a request longer than one
+    /// frame, by sending one and seeing whether it leaves the building.
+    ///
+    /// The probe is an ordinary service 01 request for seven parameters. That
+    /// is a read, it is legitimate OBD-II, and at eight bytes it is one byte
+    /// too long for a single frame — so an adapter that cannot segment has to
+    /// say so. A vehicle that dislikes seven parameters at once answers `NO
+    /// DATA`, which still proves the request reached it.
+    ///
+    /// The distinction being measured is **rejected by the adapter** versus
+    /// **answered by the vehicle, however unhappily**. Only the first means the
+    /// capability is missing, and it arrives as `?` within a few milliseconds
+    /// because no bus was ever involved.
+    fn measure_long_message_support(&mut self) {
+        // Seven parameters: the supported-PID bitmaps, which every OBD-II
+        // vehicle implements and none of which change anything.
+        const LONG_PROBE: &str = "0100204060 80A0C0";
+        let probe = LONG_PROBE.replace(' ', "");
+
+        let Ok(reply) = self.send_raw(&probe, self.config.request_timeout) else {
+            // A transport failure says nothing about segmentation. Leave the
+            // capability unmeasured rather than recording a guess.
+            return;
+        };
+
+        match reply.class {
+            ResponseClass::NotUnderstood => {
+                self.caps.supports_long_messages = false;
+                self.caps.add_caveat(
+                    "this adapter will not send a request longer than one frame: an eight-byte \
+                     read came straight back as \"?\" without reaching the vehicle. Reading is \
+                     unaffected, and every configuration write is longer than one frame, so \
+                     changing a setting is not possible with this device. An STN-based adapter \
+                     (OBDLink EX or MX+) does this properly",
+                );
+                tracing::info!(
+                    elapsed_ms = reply.elapsed_ms,
+                    "adapter refused a multi-frame request: writes are not possible"
+                );
+            }
+            // Anything else means the request left the adapter. Even `NO DATA`
+            // is a vehicle declining to answer, which it could only do having
+            // been asked.
+            _ => {
+                self.caps.supports_long_messages = true;
+                tracing::debug!(
+                    class = reply.class.as_str(),
+                    "adapter transmitted a multi-frame request"
+                );
+            }
+        }
     }
 
     /// Record that nothing answered, saying what was ruled out along the way.
