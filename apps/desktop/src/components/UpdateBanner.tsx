@@ -26,6 +26,7 @@ export function UpdateBanner({ coreUp }: { coreUp: boolean }) {
   const [dismissed, setDismissed] = useState(false);
   const [installing, setInstalling] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
+  const [quitting, setQuitting] = useState(false);
   const [notes, setNotes] = useState(false);
 
   useEffect(() => {
@@ -53,8 +54,13 @@ export function UpdateBanner({ coreUp }: { coreUp: boolean }) {
     setFailed(null);
     api
       .updateApply()
-      // No success branch: the installer replaces this application and the
-      // window goes away. Anything rendered here would be for an instant.
+      // This branch used to be empty, on the theory that the window was about
+      // to disappear anyway. It was not: 0.3.4 started the installer and stayed
+      // open, the installer could not delete files this app was holding, and
+      // the spinner said "Downloading" over a failure. The core now quits
+      // itself a moment after the installer starts, so the honest thing to show
+      // in that moment is that we are leaving.
+      .then(() => setQuitting(true))
       .catch((e: unknown) => {
         setInstalling(false);
         setFailed(e instanceof Error ? e.message : "the download did not finish");
@@ -77,7 +83,13 @@ export function UpdateBanner({ coreUp }: { coreUp: boolean }) {
       </div>
       <div className="row" style={{ gap: 8 }}>
         <button className="primary" onClick={install} disabled={installing}>
-          {installing ? <Spinner label="Downloading" /> : "Update now"}
+          {quitting ? (
+            <Spinner label="Closing for the installer" />
+          ) : installing ? (
+            <Spinner label="Downloading" />
+          ) : (
+            "Update now"
+          )}
         </button>
         <button onClick={() => setDismissed(true)} disabled={installing}>
           Not now

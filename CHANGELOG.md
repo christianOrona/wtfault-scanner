@@ -3,6 +3,34 @@
 Notable changes, newest first. Versions follow [semantic versioning](https://semver.org),
 with the caveat that everything below 1.0 is allowed to move.
 
+## [0.3.5] — 2026-09-11
+
+### Fixed
+
+- **The app would not get out of its own installer's way.** Pressing "Update
+  now" downloaded the installer, checked its size, and started it — and then
+  kept running. The installer's first act is to remove the version already on
+  the machine, which it cannot do while the app is holding those files open.
+
+  It failed badly rather than harmlessly. The uninstall entry was removed
+  before the file deletion was attempted, so the machine was left with an older
+  build installed and nothing in Add/Remove Programs pointing at it. Measured
+  on a real machine: a running 0.3.3 pressed the button and came back as
+  **0.3.1**, unregistered. A failed update that downgrades you is worse than
+  one that changes nothing.
+
+  The core now quits itself 750 ms after starting the installer — long enough
+  for the response to reach the window, short enough that nobody can click
+  through the installer's first page before the files are free.
+
+- The button no longer lies while this happens. Its success branch was empty,
+  on the theory that the window was about to disappear on its own; it did not,
+  so a spinner reading "Downloading" sat on top of a failed install. It now
+  says it is closing for the installer.
+
+This is the bug that 0.3.4 existed to find. 0.3.4 shipped with nothing in it so
+that exactly one thing could be blamed if the install failed, and it was.
+
 ## [0.3.4] — 2026-09-11
 
 Nothing in this release changes how the scanner talks to a vehicle. It exists

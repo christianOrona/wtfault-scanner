@@ -35,6 +35,14 @@ const REPO: &str = "christianOrona/wtfault-scanner";
 /// button, and the app refused its own installer.
 const ALLOWED_HOSTS: [&str; 3] = ["github.com", "api.github.com", "objects.githubusercontent.com"];
 
+/// How long to stay alive after starting the installer.
+///
+/// Long enough for an HTTP response to cross the loopback interface, short
+/// enough that nobody can reach the installer's first page before this process
+/// is gone — that page is where the old version gets removed, and removing it
+/// requires these files to be free.
+const QUIT_DELAY: Duration = Duration::from_millis(750);
+
 /// The version this build reports.
 pub fn current_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
@@ -268,6 +276,26 @@ pub async fn download_and_launch() -> Result<String, String> {
     std::process::Command::new(&path)
         .spawn()
         .map_err(|e| format!("could not start the installer: {e}"))?;
+
+    // Then get out of the way, because the installer cannot work around us.
+    //
+    // 0.3.4 started the installer and kept running. The installer's first act
+    // is to remove the version already on the machine, and it cannot delete
+    // files this process is holding open: it stopped with "Unable to
+    // uninstall!" *after* the uninstall entry had already been removed,
+    // leaving an older build installed and unregistered. A failed update that
+    // downgrades the machine is worse than one that changes nothing.
+    //
+    // Measured on 2026-09-11: a running 0.3.3 pressed the button and came back
+    // as 0.3.1 with no entry in Add/Remove Programs.
+    //
+    // The delay exists only so the response to this request reaches whatever
+    // asked before this process is gone. The installer is a separate process
+    // and outlives us.
+    tokio::spawn(async {
+        tokio::time::sleep(QUIT_DELAY).await;
+        std::process::exit(0);
+    });
 
     Ok(path.display().to_string())
 }
