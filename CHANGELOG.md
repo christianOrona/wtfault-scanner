@@ -3,6 +3,22 @@
 Notable changes, newest first. Versions follow [semantic versioning](https://semver.org),
 with the caveat that everything below 1.0 is allowed to move.
 
+## [0.3.1] — 2026-09-11
+
+### Fixed
+
+- **The update prompt never appeared.** The core could check for a newer
+  release and install one; nothing in the interface ever asked it, so a 0.2.0
+  install sat beside a published 0.3.0 and said nothing. An endpoint with tests
+  is not a feature until something calls it.
+
+  Note that this fix cannot reach an install older than 0.3.1: the code that
+  does the asking ships *in* the update. One manual install, and after that
+  updates announce themselves.
+
+- The version comparison is now pinned by test, including the case that
+  matters here — a release tag carries a `v` and a package version does not.
+
 ## [0.3.0] — 2026-09-11
 
 Talk to any vehicle, not just the one this was built against.
