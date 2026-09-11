@@ -28,3 +28,13 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 [[example]]
 name = "probe_port"
 required-features = ["serial"]
+
+# Same again: both of these open a real COM port to ask a real adapter what it
+# supports, so neither can build without the serial transport.
+[[example]]
+name = "ask_adapter"
+required-features = ["serial"]
+
+[[example]]
+name = "restore_bus"
+required-features = ["serial"]

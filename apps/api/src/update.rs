@@ -348,4 +348,35 @@ mod release_ordering {
         assert!(is_newer("v0.4.0-rc1", "0.3.0"));
         assert!(!is_newer("v0.3.0-rc1", "0.3.0"));
     }
+    /// The version this binary reports and the version its installer carries
+    /// must be the same number.
+    ///
+    /// If they drift, the updater loops. It compares the published tag against
+    /// `CARGO_PKG_VERSION`, so an installer stamped 0.3.2 that installs a
+    /// binary reporting 0.3.1 will offer the same update, install it, and find
+    /// itself still out of date — forever, with no error anywhere, because
+    /// every individual step worked.
+    ///
+    /// Read from the manifest rather than hardcoded: a test that repeated the
+    /// number would be a fifth place to update and would pass while the other
+    /// four disagreed.
+    #[test]
+    fn the_reported_version_matches_the_installer_version() {
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let conf = manifest.join("../desktop/src-tauri/tauri.conf.json");
+        let text = std::fs::read_to_string(&conf)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", conf.display()));
+        let parsed: serde_json::Value =
+            serde_json::from_str(&text).expect("tauri.conf.json is valid json");
+        let bundled = parsed["version"].as_str().expect("tauri.conf.json states a version");
+
+        assert_eq!(
+            bundled,
+            env!("CARGO_PKG_VERSION"),
+            "the installer would carry {bundled} while the app reports {}, and the updater \
+             would offer the same update forever",
+            env!("CARGO_PKG_VERSION")
+        );
+    }
+
 }

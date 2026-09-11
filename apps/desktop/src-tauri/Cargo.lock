@@ -19,7 +19,7 @@ dependencies = [
 
 [[package]]
 name = "ai-mechanic-desktop"
-version = "0.2.0"
+version = "0.3.2"
 dependencies = [
  "aim-api",
  "aim-decoders",
