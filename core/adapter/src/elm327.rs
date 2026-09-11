@@ -134,6 +134,12 @@ pub struct Elm327Adapter {
     /// Set when the device answered `STI`, proving STN-series firmware rather
     /// than a clone that borrowed the name.
     stn_confirmed: bool,
+    /// Set when the ELM327 request form was *measured* to refuse a long
+    /// request and `STPX` was measured to carry one. Not the same as
+    /// [`AdapterCapabilities::supports_long_messages`], which says only that
+    /// some path exists: a device that accepts a long request in the ordinary
+    /// form needs no `STPX` and may not implement it at all.
+    long_via_stpx: bool,
     battery_voltage: Option<f64>,
 }
 
@@ -164,6 +170,7 @@ impl Elm327Adapter {
             latency_total_ms: 0,
             latency_samples: 0,
             stn_confirmed: false,
+            long_via_stpx: false,
             battery_voltage: None,
         }
     }
@@ -1139,6 +1146,7 @@ impl Elm327Adapter {
             return false;
         }
         self.caps.supports_long_messages = true;
+        self.long_via_stpx = true;
         self.caps.add_caveat(
             "long requests are sent through this device's own `STPX` command rather than the \
              ELM327 request form, which caps at seven data bytes on every device. Configuration \
@@ -1149,6 +1157,54 @@ impl Elm327Adapter {
             "STN firmware segmented and transmitted a multi-frame request"
         );
         true
+    }
+
+    /// How to put this request on the wire.
+    ///
+    /// Short requests go out in the ordinary ELM327 form, which every device
+    /// understands. A request too long for one CAN frame goes out through the
+    /// STN `STPX` command, which takes the payload as a parameter and does the
+    /// segmentation itself.
+    ///
+    /// This is what makes configuration writes possible at all. A
+    /// `WriteDataByIdentifier` is a service byte, two identifier bytes and the
+    /// record — eight bytes before the record even starts — so every write is
+    /// longer than the ELM form can express, on every adapter. The device
+    /// either has another way of sending it or it does not.
+    ///
+    /// Measured on an OBDLink MX+ (2026-09-11): `22F190F191F192F193` comes back
+    /// `?`, and `STPX d:22F190F191F192F193` returns the four-frame reply. The
+    /// header set by `ATSH` is honoured, so the addressing above this function
+    /// is unchanged and there is one place that decides where a request goes.
+    fn request_line(&self, pdu: &[u8]) -> AimResult<String> {
+        let hex: String = pdu.iter().map(|b| format!("{b:02X}")).collect();
+        if pdu.len() <= ELM_MAX_REQUEST_BYTES {
+            return Ok(hex);
+        }
+        if !self.long_via_stpx && !self.caps.supports_long_messages {
+            // Refused here rather than sent and silently truncated. An adapter
+            // that cannot segment answers `?` in a few milliseconds without
+            // the vehicle ever seeing the request, and that failure has
+            // previously been read as the module refusing — somebody spent an
+            // evening in a truck finding that out.
+            return Err(AimError::new(
+                ErrorCode::AdapterRejectedCommand,
+                format!(
+                    "this request is {} bytes and will not fit in one CAN frame, and this \
+                     adapter has not been measured able to send a longer one. Reading is \
+                     unaffected. An STN-based adapter (OBDLink EX or MX+) segments these \
+                     properly.",
+                    pdu.len()
+                ),
+            )
+            .with_capabilities(self.caps.clone()));
+        }
+        if !self.long_via_stpx {
+            // The device took a long request in the ordinary form when it was
+            // measured, so it does not need `STPX` and may not implement it.
+            return Ok(hex);
+        }
+        Ok(format!("STPX d:{hex}"))
     }
 
     /// Record that nothing answered, saying what was ruled out along the way.
@@ -1395,7 +1451,7 @@ impl DiagnosticAdapter for Elm327Adapter {
     ) -> AimResult<Vec<EcuMessage>> {
         self.ensure_usable()?;
         self.set_header(target)?;
-        let command: String = pdu.iter().map(|b| format!("{b:02X}")).collect();
+        let command = self.request_line(pdu)?;
         let reply = self.send_with_recovery(&command, timeout)?;
 
         // Deliberately does NOT go through `ok_lines()`.
@@ -1486,8 +1542,26 @@ const PLAUSIBLE_SYSTEM_VOLTS: std::ops::RangeInclusive<f64> = 9.0..=32.0;
 /// else is hex going out on the bus.
 fn is_at_command(command: &str) -> bool {
     let c = command.trim_start();
+    // `STPX` begins with the STN prefix and is not an adapter command at all:
+    // it carries a request to the vehicle and comes back with the vehicle's
+    // answer. Treating it as adapter chatter would exempt it from the response
+    // window learning and the `NO DATA` retry, which are exactly the things a
+    // vehicle request needs — and it is the form every configuration write
+    // goes out in.
+    if c.len() >= 4 && c[..4].eq_ignore_ascii_case("STPX") {
+        return false;
+    }
     c.len() >= 2 && (c[..2].eq_ignore_ascii_case("AT") || c[..2].eq_ignore_ascii_case("ST"))
 }
+
+/// The most data bytes an ELM327 request line can carry.
+///
+/// One CAN frame holds a one-byte ISO-TP header and seven bytes of payload, and
+/// the ELM327 request form cannot express more than fits in one frame. This is
+/// a property of the *form*, not of any particular device: measured on an
+/// OBDLink MX+, which segments perfectly well through `STPX`, an eight-byte
+/// request in this form still comes back `?`.
+const ELM_MAX_REQUEST_BYTES: usize = 7;
 
 /// Where the learned response window starts, in milliseconds.
 ///

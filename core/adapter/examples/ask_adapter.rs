@@ -66,11 +66,15 @@ fn main() {
     }
     show(&mut t, "0100", 9000);
 
-    println!("\n--- long transmit, with the protocol still unread ---");
-    show(&mut t, "010020406080A0C0", 9000);
-    // No `h:` parameter: does STPX use whatever header is already configured?
-    show(&mut t, "STPX d:0100204060 80A0C0", 9000);
-    show(&mut t, "STPX d:0100", 9000);
+    println!("\n--- does STPX honour a header set by ATSH? ---");
+    show(&mut t, "ATSH7E0", 3000);
+    show(&mut t, "STPX d:22F190", 9000);
+
+    println!("\n--- a request longer than seven bytes, physically addressed ---");
+    // Four identifiers in one read: one service byte plus eight, so it cannot
+    // fit in a single CAN frame. Reads only — nothing here changes anything.
+    show(&mut t, "22F190F191F192F193", 9000);
+    show(&mut t, "STPX d:22 F1 90 F1 91 F1 92 F1 93", 9000);
 
     let _ = t.close();
 }
