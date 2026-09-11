@@ -241,7 +241,28 @@ pub async fn describe_context(state: &AppState) -> String {
         None => ("none".into(), "disconnected".into(), None, Vec::new(), None),
     };
 
+    // The one place the VIN enters a prompt, and therefore the only place the
+    // privacy setting has to be enforced. Enforced here rather than trusted to
+    // every caller: a setting that depends on remembering to check it is a
+    // setting that will eventually be forgotten, and the cost of forgetting is
+    // somebody's vehicle identity going to a company they did not choose.
+    let vin = vin.map(|v| match withhold_identifiers(state) {
+        true => String::from(aim_agent::privacy::WITHHELD),
+        false => v,
+    });
+
     prompts::context_block(&descriptor, &conn_state, vin.as_deref(), None, &modules, link.as_ref())
+}
+
+/// Whether the VIN must be kept out of this prompt.
+///
+/// Errs towards withholding. A settings file that will not load is not
+/// evidence that sending is fine, and this is the one decision where a wrong
+/// guess costs somebody their privacy rather than a little usefulness.
+fn withhold_identifiers(state: &AppState) -> bool {
+    let Ok(settings) = state.settings.load() else { return true };
+    let Some(active) = settings.active() else { return true };
+    !settings.share_identifiers.may_send_to(aim_agent::privacy::locality_of(active))
 }
 
 /// A live provider plus the per-provider limits the agent should run under.

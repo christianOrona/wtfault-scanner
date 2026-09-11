@@ -330,6 +330,13 @@ pub struct ProviderSettings {
     /// How direct the agent should be.
     #[serde(default)]
     pub tone: Tone,
+    /// Whether the VIN may be sent to a model, and how far.
+    ///
+    /// Defaults to withholding it from anything outside the owner.s own
+    /// network. See [`crate::privacy`] for why the distinction is whose
+    /// machine rather than local versus hosted.
+    #[serde(default)]
+    pub share_identifiers: crate::privacy::ShareIdentifiers,
 }
 
 impl ProviderSettings {

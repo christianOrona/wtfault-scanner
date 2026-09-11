@@ -30,6 +30,7 @@
 
 pub mod credentials;
 pub mod error;
+pub mod privacy;
 pub mod prompts;
 pub mod provider;
 pub mod report;

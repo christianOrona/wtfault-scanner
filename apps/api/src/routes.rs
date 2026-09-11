@@ -102,6 +102,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/settings/providers/{id}/select", post(crate::agent_routes::select_provider))
         .route("/api/v1/settings/providers/{id}/test", post(crate::agent_routes::test_provider))
         .route("/api/v1/settings/voice", post(crate::agent_routes::set_voice))
+        .route(
+            "/api/v1/settings/privacy",
+            get(crate::agent_routes::privacy).post(crate::agent_routes::set_privacy),
+        )
         // ---- live data websocket ----
         .route("/api/v1/live", get(ws::live_data_ws))
         .with_state(state)

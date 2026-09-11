@@ -408,6 +408,12 @@ pub struct VoiceBody {
     pub tone: Option<aim_agent::settings::Tone>,
 }
 
+/// The privacy choice: whether the VIN may be sent to a model, and how far.
+#[derive(Debug, Deserialize)]
+pub struct PrivacyBody {
+    share_identifiers: aim_agent::privacy::ShareIdentifiers,
+}
+
 /// Set who the agent thinks it is talking to, and how bluntly.
 ///
 /// Separate from provider configuration on purpose: this is a property of the
@@ -426,4 +432,80 @@ pub async fn set_voice(
     }
     state.settings.save(&settings).map_err(agent_error)?;
     Ok(Json(json!({ "purpose": settings.purpose, "tone": settings.tone })))
+}
+
+/// `POST /api/v1/settings/privacy`
+///
+/// Whether identifying data may be sent to the model, and how far it may go.
+pub async fn set_privacy(
+    State(state): State<AppState>,
+    Json(body): Json<PrivacyBody>,
+) -> ApiResult<Json<Value>> {
+    let mut settings = state.settings.load().map_err(agent_error)?;
+    settings.share_identifiers = body.share_identifiers;
+    state.settings.save(&settings).map_err(agent_error)?;
+    Ok(Json(privacy_view(&state, &settings)))
+}
+
+/// Where the selected model runs, and what that means for the VIN.
+///
+/// Reported as the *current* situation rather than as an abstract setting. A
+/// person asked whether to "share identifying data with hosted models" cannot
+/// answer without knowing which of the three situations they are in, and the
+/// app knows.
+fn privacy_view(_state: &AppState, settings: &aim_agent::settings::ProviderSettings) -> Value {
+    use aim_agent::privacy::{locality_of, Locality};
+    let active = settings.active();
+    let locality = active.map(locality_of);
+    let sending = locality.map(|l| settings.share_identifiers.may_send_to(l));
+
+    json!({
+        "share_identifiers": settings.share_identifiers,
+        "provider": active.map(|p| p.label.clone()),
+        "runs_on": locality.map(|l| l.as_str()),
+        "runs_on_explanation": locality.map(|l| l.explain()),
+        // The answer to the only question that matters, stated outright rather
+        // than left to be worked out from the two fields above.
+        "vin_is_sent": sending,
+        "summary": match (locality, sending) {
+            (None, _) => String::from("No model is configured, so nothing is being sent anywhere."),
+            (Some(Locality::ThisMachine), Some(true)) => String::from(
+                "The VIN is included, and the model runs on this computer, so it does not leave \
+                 the machine.",
+            ),
+            (Some(Locality::YourNetwork), Some(true)) => String::from(
+                "The VIN is included and crosses your own network to reach the model. It does \
+                 not leave your network.",
+            ),
+            (Some(Locality::SomebodyElse), Some(true)) => String::from(
+                "The VIN is being sent to somebody else's computers. It identifies your vehicle \
+                 and, in practice, you.",
+            ),
+            (Some(_), Some(false)) => String::from(
+                "The VIN is withheld. The model is told the vehicle is identified and that the \
+                 number is not being shared, so it will not report the VIN as unreadable.",
+            ),
+            (Some(_), None) => String::from("No model is configured."),
+        },
+        "options": [
+            { "id": "not_beyond_your_network",
+              "label": "Keep it on my own network",
+              "help": "Send the VIN to a model on this computer or on your own network, and \
+                       withhold it from anything else. The default." },
+            { "id": "never",
+              "label": "Never send it",
+              "help": "Withhold the VIN from every model, including one running on this \
+                       computer." },
+            { "id": "always",
+              "label": "Always send it",
+              "help": "Send the VIN wherever the model runs, including somebody else's \
+                       computers." }
+        ]
+    })
+}
+
+/// `GET /api/v1/settings/privacy`
+pub async fn privacy(State(state): State<AppState>) -> ApiResult<Json<Value>> {
+    let settings = state.settings.load().map_err(agent_error)?;
+    Ok(Json(privacy_view(&state, &settings)))
 }
