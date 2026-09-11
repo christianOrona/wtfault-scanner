@@ -32,7 +32,7 @@
 // something is genuinely stuck.
 
 import { useEffect, useState } from "react";
-import splash from "../assets/splash.png";
+import splash from "../assets/splash.jpg";
 import { LICENCE, LINKS, PRODUCT_NAME } from "../branding";
 
 /** How long the artwork stays up even when the core is ready sooner.
@@ -131,10 +131,18 @@ export function Splash({
             </div>
           </div>
 
-          {/* The corner: what is happening, and how far through it is. */}
+          {/* The corner: what is happening, and how far through it is. The ring
+              turns the whole time — steps can sit for seconds, and a screen
+              with nothing moving on it looks like a screen that has hung. */}
           <div className="splash-progress">
-            <div className={`splash-step${stalled ? " splash-slow" : ""}`}>
-              {stalled ? "Core is slow to start…" : current ? current.label : "Ready"}
+            <div className="splash-working">
+              <span
+                className={`splash-ring${stalled ? " stalled" : !current ? " done" : ""}`}
+                aria-hidden="true"
+              />
+              <span className={`splash-step${stalled ? " splash-slow" : ""}`}>
+                {stalled ? "Core is slow to start…" : current ? current.label : "Ready"}
+              </span>
             </div>
             <div className="splash-count">
               {finished} of {steps.length}

@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api/client";
 import type { UpdateStatus } from "../api/types";
+import { highlightsOf } from "../releaseNotes";
 import { Spinner } from "./primitives";
 
 /** How long after the core comes up before asking.
@@ -96,10 +97,32 @@ export function UpdateBanner({ coreUp }: { coreUp: boolean }) {
         </button>
       </div>
       {notes && status.notes && (
-        // The release notes as written, not a summary. They are short, they say
-        // what changed, and rewriting them here would be a second place to keep
-        // the same words correct.
-        <pre className="update-notes">{status.notes}</pre>
+        // Still the release notes as published — not a second set of words to
+        // keep correct — but read for their shape rather than printed raw. The
+        // <pre> this replaced showed asterisks, headings and column-78 line
+        // breaks in monospace, which made every release look like log output.
+        <div className="update-notes">
+          {highlightsOf(status.notes).map((h) => (
+            <div className="update-note" key={h.headline}>
+              <span className="update-note-mark" aria-hidden="true" />
+              <div className="update-note-text">
+                <div className="update-note-head">{h.headline}</div>
+                {h.body && <div className="update-note-body">{h.body}</div>}
+              </div>
+            </div>
+          ))}
+          {status.url && (
+            <a
+              className="update-note-more"
+              href={status.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              title={status.url}
+            >
+              All of it on GitHub
+            </a>
+          )}
+        </div>
       )}
     </div>
   );
