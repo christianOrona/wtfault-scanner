@@ -488,12 +488,29 @@ export interface InspectResponse {
   trace: TraceEntry[];
 }
 
+/**
+ * A question the assistant put to the person, with the answers to choose from.
+ *
+ * Only ever appears when the answer is something the vehicle cannot give:
+ * what a dash menu shows, whether a noise happens cold or warm, whether the
+ * key is in the car. Answering sends an ordinary message, so a button here is
+ * a shortcut to typing and never an action taken on anyone's behalf.
+ */
+export interface AgentQuestion {
+  question: string;
+  options: string[];
+  /** What the answer would let it work out. Optional. */
+  why: string | null;
+}
+
 export interface ChatResponse {
   text: string;
   steps: number;
   truncated: boolean;
   usage: AgentUsage;
   trace: TraceEntry[];
+  /** Null on almost every turn. */
+  question: AgentQuestion | null;
 }
 
 /// One service 06 on-board monitor test result, as the core reports it.

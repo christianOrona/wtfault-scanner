@@ -347,6 +347,10 @@ pub async fn messages(
         "truncated": outcome.truncated,
         "usage": outcome.usage,
         "trace": trace_of(&sink),
+        // A question the model put to the person, with the answers it wants to
+        // choose between. Null on almost every turn. Answering is an ordinary
+        // next message, so nothing here can act on their behalf.
+        "question": agent::pending_question(&sink),
     })))
 }
 

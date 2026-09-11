@@ -7,7 +7,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { api, describeError } from "../api/client";
-import type { AgentStatus, TraceEntry } from "../api/types";
+import type { AgentQuestion, AgentStatus, TraceEntry } from "../api/types";
 import { ErrorBanner, Spinner } from "./primitives";
 import { PaneIntro } from "../explain";
 import { TraceList } from "./InspectPane";
@@ -16,6 +16,11 @@ interface Turn {
   role: "user" | "assistant";
   content: string;
   trace?: TraceEntry[];
+  /** A question the agent put to the person, with answers to choose between. */
+  question?: AgentQuestion | null;
+  /** Which option they picked, once they have. Keeps the buttons on screen as
+   *  a record of what was asked rather than vanishing the question. */
+  answered?: string;
 }
 
 /**
@@ -75,11 +80,18 @@ export function AskPane({
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [turns.length, busy]);
 
-  async function send(text: string) {
+  async function send(text: string, answering?: number) {
     const question = text.trim();
     if (!question || busy) return;
 
-    const next: Turn[] = [...turns, { role: "user", content: question }];
+    // Mark the turn whose question this answers, so the buttons stay on screen
+    // showing what was asked and what was chosen. Removing them would leave the
+    // person's bare answer above with nothing saying what it answered.
+    const history = turns.map((t, i) =>
+      i === answering ? { ...t, answered: question } : t,
+    );
+
+    const next: Turn[] = [...history, { role: "user", content: question }];
     setTurns(next);
     setInput("");
     setBusy(true);
@@ -93,6 +105,7 @@ export function AskPane({
           role: "assistant",
           content: res.text || "(the model returned nothing)",
           trace: res.trace,
+          question: res.question,
         },
       ]);
       onFinished?.();
@@ -150,6 +163,14 @@ export function AskPane({
               {t.role === "user" ? "you" : "ai mechanic"}
             </div>
             <div style={{ whiteSpace: "pre-wrap" }}>{renderInline(t.content)}</div>
+            {t.question && (
+              <AskedBack
+                question={t.question}
+                answered={t.answered}
+                disabled={busy}
+                onAnswer={(choice) => void send(choice, i)}
+              />
+            )}
             {!!t.trace?.length && (
               <details style={{ marginTop: 8 }}>
                 <summary className="faint" style={{ cursor: "pointer", fontSize: 12 }}>
@@ -205,6 +226,66 @@ export function AskPane({
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * The assistant asking the person something, with the answers to pick from.
+ *
+ * This is the half of the conversation that was missing. The agent could read
+ * the vehicle and it could talk; what it could not do was find out something
+ * only the person knows — what the dash menu shows, whether the noise is there
+ * cold — without writing the question into a paragraph and hoping for a typed
+ * reply in a shape it could use. A question buried in prose gets skipped, and
+ * then it is guessing about the one thing it could have asked.
+ *
+ * A button sends the option as an ordinary message, through the same path as
+ * anything typed. It is a shortcut to typing, never an action taken on
+ * somebody's behalf, and there is deliberately nothing here that could become
+ * one: the options are text and the only thing that happens to them is being
+ * sent as a message.
+ *
+ * The buttons stay after an answer, showing which was chosen. Removing them
+ * would leave a bare "Off" in the transcript with nothing saying what it
+ * answered.
+ */
+function AskedBack({
+  question,
+  answered,
+  disabled,
+  onAnswer,
+}: {
+  question: AgentQuestion;
+  answered?: string;
+  disabled: boolean;
+  onAnswer: (choice: string) => void;
+}) {
+  return (
+    <div className="asked-back">
+      <div className="asked-back-q">{question.question}</div>
+      {question.why && <div className="asked-back-why">{question.why}</div>}
+      <div className="row" style={{ gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+        {question.options.map((o) => (
+          <button
+            key={o}
+            className={`mini${answered === o ? " primary" : ""}`}
+            disabled={disabled || !!answered}
+            onClick={() => onAnswer(o)}
+          >
+            {o}
+          </button>
+        ))}
+      </div>
+      {/* Never a closed list. The options are the assistant's guess at the
+          answers, and a person whose answer is not among them needs somewhere
+          to put it — the box below has always been that somewhere, and saying
+          so is cheaper than a sixth button reading "something else". */}
+      {!answered && (
+        <div className="faint" style={{ marginTop: 6, fontSize: 11 }}>
+          Or just type an answer — these are only shortcuts.
+        </div>
+      )}
     </div>
   );
 }

@@ -751,3 +751,19 @@ a.mini.button:hover { border-color: var(--accent-dim); background: #1c222c; }
   gap: 6px;
   margin: 10px 0 4px;
 }
+
+/* ---------- the assistant asking back ----------
+
+   Set apart from the reply text it follows, because it is a different kind of
+   thing: the rest of the card is the assistant talking, and this is the
+   assistant waiting. */
+.asked-back {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  background: var(--bg-inset);
+}
+.asked-back-q { font-weight: 600; font-size: 13px; }
+.asked-back-why { margin-top: 3px; font-size: 11.5px; color: var(--text-dim); }
