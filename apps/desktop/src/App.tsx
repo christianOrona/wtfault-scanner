@@ -14,7 +14,7 @@ import { AskPane } from "./components/AskPane";
 import { SettingsPane } from "./components/SettingsPane";
 import { FeaturesPane } from "./components/FeaturesPane";
 import { FullScanPane } from "./components/FullScanPane";
-import { Splash } from "./components/Splash";
+import { Splash, type BootStep } from "./components/Splash";
 import { UpdateBanner } from "./components/UpdateBanner";
 import { ErrorBanner, FailedResult, Pill, Spinner, Warnings } from "./components/primitives";
 import { useFlightRecorder } from "./hooks/useFlightRecorder";
@@ -67,9 +67,19 @@ export default function App() {
   /** True once the connect dialog has been dismissed to browse history. */
   const [browsing, setBrowsing] = useState(false);
 
-  const { easy } = useExplain();
+  const { easy, loaded: explanationsLoaded } = useExplain();
   /** True once the core has answered at least once. Drives the splash. */
   const coreUp = booted && !!health;
+
+  /** Boot work that has finished, by step id.
+   *
+   * Set when a request *settles*, not when it succeeds: a provider that is
+   * misconfigured is a finished step with a bad answer, and a progress bar
+   * that waits for it forever would be reporting the wrong thing. */
+  const [bootDone, setBootDone] = useState<Record<string, boolean>>({});
+  const finishBootStep = useCallback((id: string) => {
+    setBootDone((d) => (d[id] ? d : { ...d, [id]: true }));
+  }, []);
   const sessionId = adapter?.session_id ?? null;
   const recorder = useFlightRecorder(sessionId, true);
 
@@ -117,7 +127,12 @@ export default function App() {
       }
       setSuppressBootError(false);
 
-      if (!a.connected) return;
+      if (!a.connected) {
+        // Nothing plugged in is a finished answer to "is there a session to
+        // restore", not a step still running.
+        finishBootStep("session");
+        return;
+      }
       try {
         const res = await api.modules();
         if (cancelled) return;
@@ -125,12 +140,14 @@ export default function App() {
         setSelectedModule((cur) => cur ?? res.modules[0]?.module_key ?? null);
       } catch {
         /* No stored modules yet; Rescan is one click away in the header. */
+      } finally {
+        finishBootStep("session");
       }
     };
 
     void tick();
     return () => { cancelled = true; };
-  }, [refresh]);
+  }, [refresh, finishBootStep]);
 
   /** Re-read what the agent may have discovered while it worked. */
   const refreshAfterAgent = useCallback(async () => {
@@ -146,8 +163,12 @@ export default function App() {
   }, [refresh]);
 
   const refreshAgent = useCallback(() => {
-    api.agentStatus().then(setAgent).catch(() => setAgent(null));
-  }, []);
+    api
+      .agentStatus()
+      .then(setAgent)
+      .catch(() => setAgent(null))
+      .finally(() => finishBootStep("assistant"));
+  }, [finishBootStep]);
 
   useEffect(() => { refreshAgent(); }, [refreshAgent]);
 
@@ -223,9 +244,28 @@ export default function App() {
   const vin = identify?.data?.vin ?? adapter?.vehicle?.vin ?? null;
   const vinDecoded = identify?.data?.vin_decoded;
 
+  /** What the splash reports, in the order it actually happens.
+   *
+   * Every one of these is a request this component really makes on boot. The
+   * temptation with a splash is to invent plausible-sounding stages and
+   * animate through them on a timer, which looks identical whether the app is
+   * starting normally or hung — and is therefore worth nothing at exactly the
+   * moment somebody needs it. */
+  const bootSteps: BootStep[] = [
+    { id: "core", label: "Starting the diagnostic core", done: coreUp },
+    { id: "explanations", label: "Loading the plain-language catalogue", done: explanationsLoaded },
+    { id: "assistant", label: "Checking the assistant", done: !!bootDone.assistant },
+    { id: "session", label: "Restoring the last session", done: !!bootDone.session },
+  ];
+
   return (
     <>
-    <Splash ready={coreUp} stalled={!coreUp && !suppressBootError} />
+    <Splash
+      ready={coreUp}
+      stalled={!coreUp && !suppressBootError}
+      steps={bootSteps}
+      version={health?.build_version}
+    />
     <div className="app">
       <UpdateBanner coreUp={coreUp} />
       <div className="topbar">

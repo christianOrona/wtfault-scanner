@@ -531,39 +531,120 @@ a.mini.button:hover { border-color: var(--accent-dim); background: #1c222c; }
 
 /* ---------- splash ---------- */
 
-.splash {
+/* ---------- splash ----------
+
+   A card on a dimmed desktop, not a full-screen takeover. The app has not
+   taken the machine over for the few seconds it takes to start, and a splash
+   that fills the screen says it has.
+
+   No cursor: pointer and no click handler anywhere in here. The card contains
+   links, and an overlay that dismisses on click is an overlay that eats the
+   link somebody was aiming at. It closes itself. */
+.splash-scrim {
   position: fixed;
   inset: 0;
   z-index: 100;
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 22px;
-  background: radial-gradient(ellipse at 50% 40%, #101922, var(--bg) 70%);
+  background: rgba(6, 9, 13, 0.82);
+  backdrop-filter: blur(3px);
   opacity: 1;
   transition: opacity 400ms ease;
 }
 .splash-out { opacity: 0; pointer-events: none; }
 
-.splash-art {
-  /* Square artwork, not a banner: constrain by the shorter axis so it never
-     overflows a short window. */
-  width: min(420px, 60vw);
-  max-height: 55vh;
-  object-fit: contain;
-  border-radius: 12px;
-  /* The artwork already glows; this seats it on the background rather than
-     letting it float as a rectangle. */
-  box-shadow: 0 0 90px -30px var(--accent-glow);
+/* The artwork is the card, and the card takes its shape from the artwork.
+   Nothing here assumes a square or a banner, so swapping the image is a
+   one-line change in Splash.tsx and no CSS at all. */
+.splash-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: max-content;
+  max-width: 92vw;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #0b0f14;
+  box-shadow: 0 30px 80px -20px #000, 0 0 120px -60px var(--accent-glow);
 }
 
-.splash-status { color: var(--text-dim); font-size: 13px; min-height: 20px; }
+.splash-art {
+  display: block;
+  /* The "smaller" in "smaller, you know?": a splash, not a wallpaper. Bounded
+     on both axes so a tall image cannot outgrow a short window. */
+  width: min(440px, 88vw);
+  max-height: 62vh;
+  object-fit: contain;
+}
+
+/* The strip along the bottom: credits on the left, progress in the corner. */
+.splash-strip {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 11px 14px 12px;
+  border-top: 1px solid var(--line);
+  background: #090c11;
+}
+
+.splash-legend { min-width: 0; }
+.splash-meta { font-size: 10px; color: var(--text-faint); line-height: 1.5; }
+
+.splash-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 11px;
+  margin-top: 5px;
+}
+.splash-links a {
+  font-size: 11px;
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+}
+.splash-links a:hover { border-bottom-color: var(--accent-dim); }
+
+.splash-progress { flex: 0 0 auto; text-align: right; }
+.splash-step {
+  font-size: 11px;
+  color: var(--text-dim);
+  /* One line. A step name that wrapped would change the strip's height every
+     time a step finished, and the card would twitch through the whole boot. */
+  white-space: nowrap;
+}
 .splash-slow { color: var(--caution); }
-/* Shown once the core is up and the splash is only being looked at. Cursor
-   included: an element that dismisses on click should look like one. */
-.splash-skip { color: var(--text-dim); opacity: 0.85; }
-.splash { cursor: pointer; }
+.splash-count {
+  margin-top: 3px;
+  font-size: 10px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Along the very bottom edge of the card, the full width of it. */
+.splash-bar {
+  height: 3px;
+  background: var(--bg-inset);
+  overflow: hidden;
+}
+.splash-bar-fill {
+  height: 100%;
+  background: var(--accent);
+  box-shadow: 0 0 10px var(--accent-glow);
+  /* Eased, because steps finish in jumps and an instant jump to a new width
+     reads as a glitch rather than as progress. */
+  transition: width 320ms ease;
+}
+.splash-bar-fill.stalled { background: var(--caution); box-shadow: none; }
+
+/* A small window keeps the artwork and drops nothing: the strip is two lines
+   of small print and it is the only part that carries information. */
+@media (max-width: 460px) {
+  .splash-strip { flex-direction: column; align-items: flex-start; gap: 8px; }
+  .splash-progress { text-align: left; }
+}
 
 /* The wordmark, matching the artwork: "WTF" light, the rest in the accent. */
 .topbar .brand .brand-accent {

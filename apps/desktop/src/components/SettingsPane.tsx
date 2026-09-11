@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, describeError, type ProviderInput } from "../api/client";
 import type { ProbeResult, ProfilesResponse, ProviderKindId, ProviderView, ProvidersResponse, ScanPurpose, Tone, Health } from "../api/types";
-import { LINKEDIN_URL, PRODUCT_NAME, REPO_URL, TAGLINE } from "../branding";
+import { LINKS, PRODUCT_NAME, TAGLINE } from "../branding";
 import appIcon from "../assets/icon.png";
 import { ErrorBanner, Spinner } from "./primitives";
 
@@ -656,9 +656,13 @@ function AboutDialog({ health, onClose }: { health: Health | null; onClose: () =
           </div>
         </div>
 
+        {/* The same list the splash shows, from the same place. Two screens
+            with two hand-maintained sets of links is two screens that
+            eventually disagree about where the project lives. */}
         <div className="about-links">
-          <ExternalLink href={REPO_URL} label="Source code" />
-          <ExternalLink href={LINKEDIN_URL} label="Author" />
+          {LINKS.map((l) => (
+            <ExternalLink key={l.href} href={l.href} label={l.label} />
+          ))}
         </div>
 
         <details className="about-more">
