@@ -209,7 +209,104 @@ pub async fn check() -> UpdateStatus {
 /// Returns the path it was written to. The installer runs as a separate
 /// process: this app cannot replace its own running binary, so it hands over
 /// and exits rather than pretending to update itself in place.
-pub async fn download_and_launch() -> Result<String, String> {
+/// How far along a background download is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Stage {
+    /// Nothing has been asked for.
+    Idle,
+    /// Fetching the installer.
+    Downloading,
+    /// On disk, size checked, waiting for somebody to say when.
+    Ready,
+    /// It did not finish. `error` says why.
+    Failed,
+}
+
+/// The background download, as the interface sees it.
+#[derive(Debug, Clone, Serialize)]
+pub struct DownloadState {
+    /// What it is doing.
+    pub stage: Stage,
+    /// Which version is being fetched.
+    pub version: Option<String>,
+    /// Bytes on disk so far.
+    pub downloaded: u64,
+    /// What the release says the installer weighs, when it said.
+    pub total: Option<u64>,
+    /// Where it landed, once it is `Ready`.
+    pub path: Option<String>,
+    /// Why it stopped, when it stopped badly.
+    pub error: Option<String>,
+}
+
+impl Default for DownloadState {
+    fn default() -> Self {
+        DownloadState {
+            stage: Stage::Idle,
+            version: None,
+            downloaded: 0,
+            total: None,
+            path: None,
+            error: None,
+        }
+    }
+}
+
+static DOWNLOAD: std::sync::Mutex<Option<DownloadState>> = std::sync::Mutex::new(None);
+
+/// Where the download has got to.
+pub fn download_state() -> DownloadState {
+    DOWNLOAD
+        .lock()
+        .ok()
+        .and_then(|s| s.clone())
+        .unwrap_or_default()
+}
+
+fn set_state(state: DownloadState) {
+    if let Ok(mut slot) = DOWNLOAD.lock() {
+        *slot = Some(state);
+    }
+}
+
+/// Fetch the installer in the background, without installing it.
+///
+/// Separate from installing on purpose. Waiting for a download after pressing a
+/// button is the part of an update that feels like being interrupted; the bytes
+/// can be on disk long before anyone decides they want them, and then the
+/// decision costs a restart instead of a wait.
+///
+/// Idempotent: asking again while one is running, or after one has finished,
+/// does nothing.
+pub async fn download() -> DownloadState {
+    {
+        let current = download_state();
+        if matches!(current.stage, Stage::Downloading | Stage::Ready) {
+            return current;
+        }
+    }
+
+    set_state(DownloadState {
+        stage: Stage::Downloading,
+        ..Default::default()
+    });
+
+    match fetch_installer().await {
+        Ok(state) => state,
+        Err(e) => {
+            let failed = DownloadState {
+                stage: Stage::Failed,
+                error: Some(e),
+                ..Default::default()
+            };
+            set_state(failed.clone());
+            failed
+        }
+    }
+}
+
+async fn fetch_installer() -> Result<DownloadState, String> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(600))
         .user_agent(format!("wtfault-scanner/{}", current_version()))
@@ -249,16 +346,33 @@ pub async fn download_and_launch() -> Result<String, String> {
         ));
     }
 
-    let bytes = client
+    let mut response = client
         .get(&asset.browser_download_url)
         .send()
         .await
         .map_err(|e| format!("could not download the installer: {e}"))?
         .error_for_status()
-        .map_err(|e| format!("the download was refused: {e}"))?
-        .bytes()
+        .map_err(|e| format!("the download was refused: {e}"))?;
+
+    let mut bytes: Vec<u8> = Vec::with_capacity(asset.size as usize);
+    // Read it in pieces rather than in one call, so the interface can say how
+    // far along it is. A progress bar that only knows "started" and "finished"
+    // is a spinner wearing a costume.
+    while let Some(chunk) = response
+        .chunk()
         .await
-        .map_err(|e| format!("the download did not complete: {e}"))?;
+        .map_err(|e| format!("the download did not complete: {e}"))?
+    {
+        bytes.extend_from_slice(&chunk);
+        set_state(DownloadState {
+            stage: Stage::Downloading,
+            version: Some(release.tag_name.clone()),
+            downloaded: bytes.len() as u64,
+            total: Some(asset.size),
+            path: None,
+            error: None,
+        });
+    }
 
     if bytes.len() as u64 != asset.size {
         return Err(format!(
@@ -273,35 +387,81 @@ pub async fn download_and_launch() -> Result<String, String> {
     let path = dir.join(&asset.name);
     std::fs::write(&path, &bytes).map_err(|e| format!("could not save the installer: {e}"))?;
 
+    tracing::info!(version = %release.tag_name, path = %path.display(), "an update is downloaded and ready to install");
+
+    let ready = DownloadState {
+        stage: Stage::Ready,
+        version: Some(release.tag_name),
+        downloaded: bytes.len() as u64,
+        total: Some(asset.size),
+        path: Some(path.display().to_string()),
+        error: None,
+    };
+    set_state(ready.clone());
+    Ok(ready)
+}
+
+/// Flags that make the installer do its work without ever drawing a window.
+///
+/// All three are the generated NSIS script's own, and none of them is a trick:
+///
+///   `/S`      silent — no pages, no wizard, no finish screen;
+///   `/UPDATE` update mode, which is passed through to the *uninstaller* so the
+///             previous version is removed as quietly as this one is installed;
+///   `/R`      relaunch the application afterwards, which the script honours
+///             only in silent and passive modes.
+///
+/// In silent mode the script also finds the running application and closes it
+/// itself rather than asking, which is what makes this safe to start from
+/// inside the application being replaced.
+const SILENT_INSTALL_ARGS: [&str; 3] = ["/S", "/UPDATE", "/R"];
+
+/// Install what has been downloaded, and get out of the way.
+///
+/// Downloads first if nobody has already, so this is still one call for anyone
+/// who wants the old behaviour.
+pub async fn apply() -> Result<String, String> {
+    let state = match download_state().stage {
+        Stage::Ready => download_state(),
+        _ => download().await,
+    };
+
+    let path = match (state.stage, state.path) {
+        (Stage::Ready, Some(p)) => p,
+        (_, _) => {
+            return Err(state
+                .error
+                .unwrap_or_else(|| String::from("the installer has not been downloaded")))
+        }
+    };
+
+    // Before the installer starts, not after.
+    //
+    // In silent mode the installer closes this application itself, and it does
+    // not wait to be asked. Anything this process planned to do on the way out
+    // may simply not happen, so the one thing that must happen — saying that
+    // this exit was deliberate — happens first. Otherwise every silent update
+    // would be reported as a crash on the next launch, which is how a warning
+    // that matters gets trained out of somebody.
+    crate::support::end_run();
+
     std::process::Command::new(&path)
+        .args(SILENT_INSTALL_ARGS)
         .spawn()
         .map_err(|e| format!("could not start the installer: {e}"))?;
 
-    // Then get out of the way, because the installer cannot work around us.
-    //
-    // 0.3.4 started the installer and kept running. The installer's first act
-    // is to remove the version already on the machine, and it cannot delete
-    // files this process is holding open: it stopped with "Unable to
-    // uninstall!" *after* the uninstall entry had already been removed,
-    // leaving an older build installed and unregistered. A failed update that
-    // downgrades the machine is worse than one that changes nothing.
-    //
-    // Measured on 2026-09-11: a running 0.3.3 pressed the button and came back
-    // as 0.3.1 with no entry in Add/Remove Programs.
-    //
-    // The delay exists only so the response to this request reaches whatever
-    // asked before this process is gone. The installer is a separate process
-    // and outlives us.
+    tracing::info!(installer = %path, "handing over to the installer");
+
+    // Leave anyway rather than waiting to be closed. The installer would get
+    // there, but a window that lingers for a second looking unresponsive while
+    // something else decides to kill it is a worse thing to watch than one that
+    // closes when it said it would.
     tokio::spawn(async {
         tokio::time::sleep(QUIT_DELAY).await;
-        // Leaving on purpose is not crashing. Without this the next launch
-        // would find a marker nobody removed and report the update as a
-        // failure, which is how a warning that matters gets ignored.
-        crate::support::end_run();
         std::process::exit(0);
     });
 
-    Ok(path.display().to_string())
+    Ok(path)
 }
 
 #[cfg(test)]

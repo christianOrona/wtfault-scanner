@@ -764,6 +764,18 @@ export interface ComparisonResponse {
  * `error` is separate from a failed request on purpose: a check that reached
  * GitHub and was refused (rate limit, no network) is a different thing from a
  * check that never ran, and neither should look like "you are up to date". */
+/** What a background download of the installer is doing. */
+export type DownloadStage = "idle" | "downloading" | "ready" | "failed";
+
+export interface DownloadState {
+  stage: DownloadStage;
+  version: string | null;
+  downloaded: number;
+  total: number | null;
+  path: string | null;
+  error: string | null;
+}
+
 /** A run of the application that started and, one way or another, stopped. */
 export interface RunMarker {
   version: string;

@@ -80,6 +80,8 @@ pub fn router(state: AppState) -> Router {
         // ---- updates ----
         .route("/api/v1/update/check", get(update_check))
         .route("/api/v1/update/apply", post(update_apply))
+        .route("/api/v1/update/download", post(update_download))
+        .route("/api/v1/update/download", get(update_download_status))
         // ---- reporting a problem ----
         .route("/api/v1/support/report", get(support_report))
         .route("/api/v1/support/reveal", post(support_reveal))
@@ -829,14 +831,29 @@ async fn update_check() -> Json<Value> {
 /// downloads an executable and starts it. The check happens on its own; this
 /// does not.
 async fn update_apply() -> ApiResult<Json<Value>> {
-    match crate::update::download_and_launch().await {
+    match crate::update::apply().await {
         Ok(path) => Ok(Json(serde_json::json!({
             "started": true,
             "installer": path,
-            "note": "The installer is running. This app will close when it replaces itself.",
+            "note": "The installer is running silently. This app closes and comes back updated.",
         }))),
         Err(e) => Err(ApiError::bad_request(e)),
     }
+}
+
+/// Start fetching the installer without installing it.
+///
+/// Returns immediately with whatever the download is doing; the work continues
+/// in the background and [`update_download_status`] reports on it. Asking twice
+/// is harmless.
+async fn update_download() -> Json<Value> {
+    tokio::spawn(async { crate::update::download().await });
+    Json(serde_json::to_value(crate::update::download_state()).unwrap_or(Value::Null))
+}
+
+/// How far along the background download is.
+async fn update_download_status() -> Json<Value> {
+    Json(serde_json::to_value(crate::update::download_state()).unwrap_or(Value::Null))
 }
 
 /// Everything a person would be asked for when reporting a problem, gathered in

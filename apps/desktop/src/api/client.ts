@@ -14,7 +14,7 @@ import type {
   Health, IdentifyData, Measurement, ModuleIdentity, ModuleRecord, PortsResponse,
   SessionEvent, SessionSummary, SignalsData, ToolResult, ApiError, Dtc, MonitorTestsData,
   AgentStatus, InspectResponse, ChatResponse as AgentChatResponse,
-  ProvidersResponse, ProviderView, ProviderKindId, ProbeResult, Speed, ExplanationsResponse, FeaturesData, ChangePlan, ProfilesResponse, ClearResult, ReadinessData, ScanPurpose, Tone, FullScanData, ComparisonResponse, UpdateStatus, SupportReport, AsBuiltStatus, AsBuiltImport,
+  ProvidersResponse, ProviderView, ProviderKindId, ProbeResult, Speed, ExplanationsResponse, FeaturesData, ChangePlan, ProfilesResponse, ClearResult, ReadinessData, ScanPurpose, Tone, FullScanData, ComparisonResponse, UpdateStatus, DownloadState, SupportReport, AsBuiltStatus, AsBuiltImport,
 } from "./types";
 
 /**
@@ -121,7 +121,11 @@ export const api = {
   /** Ask the core whether a newer release exists. Never throws for "no": a
    *  failed check reports its own error rather than looking like "up to date". */
   updateCheck: () => request<UpdateStatus>("/update/check"),
-  /** Download the installer and launch it. The app closes when it replaces itself. */
+  /** Start fetching the installer in the background. Asking twice is harmless. */
+  updateDownload: () => post<DownloadState>("/update/download", {}),
+  /** How far along that download is. */
+  updateDownloadStatus: () => request<DownloadState>("/update/download"),
+  /** Install what has been downloaded. The app closes and comes back updated. */
   updateApply: () =>
     post<{ started: boolean; installer: string; note: string }>("/update/apply", {}),
   /** What this machine knows about how the app is running, and how the last run
