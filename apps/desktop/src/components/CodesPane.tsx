@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, describeError } from "../api/client";
 import type { Dtc, DtcData, FreezeFrameData, ToolResult } from "../api/types";
+import { VehicleMap } from "./VehicleMap";
 import { ErrorBanner, FailedResult, Spinner, Value, Warnings } from "./primitives";
 import { PaneIntro, useExplain } from "../explain";
 import { saveFile, scanFilename, toCsv } from "./exportFile";
@@ -234,21 +235,49 @@ export function CodesPane({
 }
 
 function DtcRow({ dtc }: { dtc: Dtc }) {
+  // "Where is it?" is the question that follows "what is wrong?", and the app
+  // used to answer it with a part name and nothing else. Behind a toggle
+  // because it is a zone rather than a location, and a diagram that opened
+  // itself would be claiming more than it can support.
+  const [showWhere, setShowWhere] = useState(false);
+  const placeable = dtc.region !== "unknown";
+
   return (
-    <tr>
-      <td className="mono" style={{ fontWeight: 600 }}>{dtc.code}</td>
-      <td><span className={`tag ${dtc.status}`}>{dtc.status}</span></td>
-      <td>
-        {dtc.description ?? (
-          <span className="faint">
-            Not in the catalog. It decoded structurally as: {dtc.structural_summary ?? "unknown"}
-          </span>
-        )}
-      </td>
-      <td className="faint">
-        {dtc.is_generic ? "SAE generic" : "manufacturer-specific"}
-        {dtc.verification !== "verified" && <span className="tag unverified" style={{ marginLeft: 6 }}>unverified</span>}
-      </td>
-    </tr>
+    <>
+      <tr>
+        <td className="mono" style={{ fontWeight: 600 }}>{dtc.code}</td>
+        <td><span className={`tag ${dtc.status}`}>{dtc.status}</span></td>
+        <td>
+          {dtc.description ?? (
+            <span className="faint">
+              Not in the catalog. It decoded structurally as: {dtc.structural_summary ?? "unknown"}
+            </span>
+          )}
+          {/* Offered only where the standard actually places the subsystem.
+              Most manufacturer-specific codes get no button, because nobody
+              published what they are about. */}
+          {placeable && (
+            <button
+              className="mini"
+              style={{ marginLeft: 8 }}
+              onClick={() => setShowWhere((s) => !s)}
+            >
+              {showWhere ? "Hide" : "Where is it?"}
+            </button>
+          )}
+        </td>
+        <td className="faint">
+          {dtc.is_generic ? "SAE generic" : "manufacturer-specific"}
+          {dtc.verification !== "verified" && <span className="tag unverified" style={{ marginLeft: 6 }}>unverified</span>}
+        </td>
+      </tr>
+      {showWhere && placeable && (
+        <tr>
+          <td colSpan={4} style={{ paddingTop: 0 }}>
+            <VehicleMap region={dtc.region} what={dtc.description ?? dtc.code} />
+          </td>
+        </tr>
+      )}
+    </>
   );
 }

@@ -767,3 +767,41 @@ a.mini.button:hover { border-color: var(--accent-dim); background: #1c222c; }
 }
 .asked-back-q { font-weight: 600; font-size: 13px; }
 .asked-back-why { margin-top: 3px; font-size: 11.5px; color: var(--text-dim); }
+
+/* ---------- where a finding lives ----------
+
+   A zone on a generic silhouette, never a point on a real vehicle. The caption
+   is load-bearing: it is the difference between a useful diagram and a claim
+   this project cannot support. */
+.vmap {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-inset);
+  padding: 10px 12px;
+  margin-bottom: 8px;
+}
+.vmap-svg { width: 100%; max-width: 420px; display: block; }
+
+/* The vehicle is drawn faintly. It is the frame of reference, not the
+   subject, and a bright outline would compete with the highlight. */
+.vmap-body { fill: none; stroke: var(--line); stroke-width: 1.5; }
+.vmap-wheel { fill: var(--bg-raised); stroke: var(--line); stroke-width: 1.5; }
+.vmap-ground { stroke: var(--line-soft); stroke-width: 1; }
+
+.vmap-zone {
+  fill: var(--accent);
+  fill-opacity: 0.22;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+}
+
+.vmap-caption { margin-top: 8px; font-size: 11.5px; line-height: 1.5; }
+
+.vmap-ask {
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  background: var(--bg-inset);
+  padding: 10px 12px;
+  margin-bottom: 8px;
+}

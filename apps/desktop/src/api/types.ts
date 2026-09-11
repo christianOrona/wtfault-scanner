@@ -233,6 +233,18 @@ export interface SignalsData {
 
 export type DtcStatus = "confirmed" | "pending" | "permanent";
 
+/**
+ * Roughly where on a vehicle something lives. A zone, never a point.
+ *
+ * `unknown` is a common and correct answer: it covers every code the standard
+ * does not place, which is most manufacturer-specific ones. Nothing is drawn
+ * for it — a diagram with no highlight invites somebody to read the absence as
+ * "it is fine".
+ */
+export type Region =
+  | "engine_bay" | "exhaust" | "fuel_system" | "transmission"
+  | "cabin" | "wheels" | "electrical" | "unknown";
+
 export interface Dtc {
   code: string;
   status: DtcStatus;
@@ -241,6 +253,8 @@ export interface Dtc {
   structural_summary: string | null;
   verification: Verification;
   is_generic: boolean;
+  /** Where it roughly lives, from the SAE subsystem ranges. Often unknown. */
+  region: Region;
 }
 
 export interface DtcData {

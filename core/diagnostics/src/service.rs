@@ -278,6 +278,14 @@ pub struct DtcReport {
     pub verification: aim_types::VerificationStatus,
     /// Whether this is a generic SAE code rather than manufacturer-specific.
     pub is_generic: bool,
+    /// Roughly where on a vehicle this lives, when the standard places it.
+    ///
+    /// A zone, never a point, and `unknown` for everything the standard does
+    /// not place — which is most manufacturer-specific codes. This project has
+    /// part locations for no vehicle and will not invent one; what it can say
+    /// is that a catalyst fault is in the exhaust, which is true of every
+    /// vehicle ever built because that is where a catalyst has to be.
+    pub region: aim_decoders::Region,
 }
 
 /// The service.
@@ -2570,6 +2578,7 @@ impl DiagnosticService {
                             status,
                         },
                     );
+                    let region = aim_decoders::region_for_dtc(&code, info.system, info.is_generic);
                     reports.push(DtcReport {
                         code,
                         status,
@@ -2578,6 +2587,7 @@ impl DiagnosticService {
                         structural_summary: info.structural_summary,
                         verification: info.verification,
                         is_generic: info.is_generic,
+                        region,
                     });
                 }
             }

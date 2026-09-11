@@ -24,6 +24,7 @@ pub mod knowledge;
 pub mod monitors;
 pub mod pids;
 pub mod profiles;
+pub mod regions;
 pub mod signalset;
 pub mod vin;
 
@@ -42,6 +43,7 @@ pub use knowledge::{
 pub use monitors::{MonitorCatalog, MonitorReading, RawCounts};
 pub use pids::{PidDefinition, PidKind, PidRegistry};
 pub use profiles::{ProfileKind, ProfileLoad, ProfileReport};
+pub use regions::{region_for_dtc, Region};
 pub use vin::{decode as decode_vin_info, VinInfo};
 
 /// The decoder set the diagnostic core runs with: generic SAE PIDs plus the
