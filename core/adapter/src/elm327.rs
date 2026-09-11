@@ -943,11 +943,29 @@ impl Elm327Adapter {
                 }
                 Ok(again)
             }
-            // The adapter lost its footing rather than the vehicle answering.
-            // These are recoverable, and losing an address in the middle of a
-            // 255-address sweep to a transient buffer overflow is a worse
-            // outcome than one extra request.
-            ResponseClass::BufferFull | ResponseClass::Stopped => {
+            // `STOPPED` is the adapter saying a character arrived while it was
+            // still busy: it abandoned what it was doing, discarded the
+            // command, and printed a prompt. So it is already back in a usable
+            // state, and the only thing it needs is the command it never got.
+            //
+            // Measured on a real session (2026-09-09, `ses_53b92dab`): 611 of
+            // these, every one of them answering an `ATSH<addr>` during a
+            // full-vehicle address sweep, every one inside 50 ms. Systematic
+            // rather than incidental, and the cause is on this side — the sweep
+            // sent the next header before the previous probe's listening window
+            // had closed.
+            //
+            // Warm-starting first would be the wrong medicine for it. `ATWS`
+            // clears echo, headers and spacing and then has to put all three
+            // back, so one interrupted command becomes six round trips; at 611
+            // occurrences over Bluetooth that is minutes of a person's evening
+            // spent resetting a device that was never broken.
+            ResponseClass::Stopped => self.send_raw(command, timeout),
+            // A buffer overflow is different: the device is holding a partial
+            // reply it will otherwise keep trying to deliver, and a reset is
+            // what clears it. Losing an address in the middle of a 255-address
+            // sweep to one is a worse outcome than the extra requests.
+            ResponseClass::BufferFull => {
                 if self.recover_adapter("ATWS", command) {
                     return self.send_raw(command, timeout);
                 }

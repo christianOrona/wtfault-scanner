@@ -19,6 +19,7 @@ default = ["serial"]
 serial = ["aim-transport/serial"]
 
 [dev-dependencies]
+aim-simulator = { path = "../../simulator" }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # The hardware probe talks to a real COM port, so it cannot build without the

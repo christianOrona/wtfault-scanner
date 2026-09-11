@@ -16,6 +16,7 @@ name = "aim-adapter"
 version = "0.3.1"
 dependencies = [
  "aim-protocols",
+ "aim-simulator",
  "aim-transport",
  "aim-types",
  "serde",
