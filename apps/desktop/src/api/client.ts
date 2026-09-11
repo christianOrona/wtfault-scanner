@@ -14,7 +14,7 @@ import type {
   Health, IdentifyData, Measurement, ModuleIdentity, ModuleRecord, PortsResponse,
   SessionEvent, SessionSummary, SignalsData, ToolResult, ApiError, Dtc, MonitorTestsData,
   AgentStatus, InspectResponse, ChatResponse as AgentChatResponse,
-  ProvidersResponse, ProviderView, ProviderKindId, ProbeResult, Speed, ExplanationsResponse, FeaturesData, ChangePlan, ProfilesResponse, ClearResult, ReadinessData, ScanPurpose, Tone, FullScanData, ComparisonResponse,
+  ProvidersResponse, ProviderView, ProviderKindId, ProbeResult, Speed, ExplanationsResponse, FeaturesData, ChangePlan, ProfilesResponse, ClearResult, ReadinessData, ScanPurpose, Tone, FullScanData, ComparisonResponse, UpdateStatus,
 } from "./types";
 
 /**
@@ -118,6 +118,12 @@ export const api = {
   capabilities: () => request<CapabilitiesResponse>("/capabilities"),
   explanations: () => request<ExplanationsResponse>("/explanations"),
   profiles: () => request<ProfilesResponse>("/profiles"),
+  /** Ask the core whether a newer release exists. Never throws for "no": a
+   *  failed check reports its own error rather than looking like "up to date". */
+  updateCheck: () => request<UpdateStatus>("/update/check"),
+  /** Download the installer and launch it. The app closes when it replaces itself. */
+  updateApply: () =>
+    post<{ started: boolean; installer: string; note: string }>("/update/apply", {}),
   exportFile: (body: { filename: string; content: string }) =>
     post<{ path: string; directory: string; filename: string }>("/export", body),
   setVoice: (body: { purpose?: ScanPurpose; tone?: Tone }) =>

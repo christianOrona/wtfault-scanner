@@ -15,6 +15,7 @@ import { SettingsPane } from "./components/SettingsPane";
 import { FeaturesPane } from "./components/FeaturesPane";
 import { FullScanPane } from "./components/FullScanPane";
 import { Splash } from "./components/Splash";
+import { UpdateBanner } from "./components/UpdateBanner";
 import { ErrorBanner, FailedResult, Pill, Spinner, Warnings } from "./components/primitives";
 import { useFlightRecorder } from "./hooks/useFlightRecorder";
 import { Explain, ExplainToggle, useExplain } from "./explain";
@@ -226,6 +227,7 @@ export default function App() {
     <>
     <Splash ready={coreUp} stalled={!coreUp && !suppressBootError} />
     <div className="app">
+      <UpdateBanner coreUp={coreUp} />
       <div className="topbar">
         <span className="brand-mark" aria-hidden="true" />
         <span className="brand">WTF<span className="brand-accent">ault</span> Scanner</span>

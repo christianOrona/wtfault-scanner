@@ -697,3 +697,18 @@ export interface ComparisonResponse {
   comparison: SessionComparison;
   notable_signals: string[];
 }
+
+/** What an update check found.
+ *
+ * `error` is separate from a failed request on purpose: a check that reached
+ * GitHub and was refused (rate limit, no network) is a different thing from a
+ * check that never ran, and neither should look like "you are up to date". */
+export interface UpdateStatus {
+  current: string;
+  latest: string | null;
+  update_available: boolean;
+  notes: string | null;
+  url: string | null;
+  size: number | null;
+  error: string | null;
+}

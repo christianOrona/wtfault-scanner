@@ -315,3 +315,37 @@ mod tests {
         assert!(installer(&assets).is_none());
     }
 }
+
+#[cfg(test)]
+mod release_ordering {
+    use super::*;
+
+    /// The case that shipped broken: a published `v0.3.0` sitting next to an
+    /// installed `0.2.0`. The comparison was never the problem - nothing in the
+    /// interface asked - but a release tag carries a `v` and the version does
+    /// not, so this is worth holding still.
+    #[test]
+    fn a_v_prefixed_tag_is_newer_than_a_bare_version() {
+        assert!(is_newer("v0.3.0", "0.2.0"));
+        assert!(is_newer("0.3.0", "0.2.0"));
+        assert!(!is_newer("v0.3.0", "0.3.0"));
+        assert!(!is_newer("v0.2.0", "0.3.0"));
+    }
+
+    /// Uneven lengths must not read as newer. `0.3` and `0.3.0` are the same
+    /// release, and offering somebody an update to what they are running is a
+    /// good way to make them stop trusting the prompt.
+    #[test]
+    fn a_shorter_version_string_is_not_newer() {
+        assert!(!is_newer("0.3", "0.3.0"));
+        assert!(!is_newer("0.3.0", "0.3"));
+        assert!(is_newer("0.3.1", "0.3"));
+    }
+
+    /// A pre-release suffix is ignored for ordering rather than guessed at.
+    #[test]
+    fn a_pre_release_suffix_does_not_confuse_the_comparison() {
+        assert!(is_newer("v0.4.0-rc1", "0.3.0"));
+        assert!(!is_newer("v0.3.0-rc1", "0.3.0"));
+    }
+}
