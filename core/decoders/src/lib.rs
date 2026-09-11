@@ -20,6 +20,7 @@ pub mod dtc;
 pub mod explain;
 pub mod expr;
 pub mod features;
+pub mod import;
 pub mod knowledge;
 pub mod monitors;
 pub mod pids;
@@ -36,6 +37,7 @@ pub use features::{
     Applicability, DataIdentifierTarget, FeatureCatalog, FeatureDef, FeatureSupport, Mapping,
     OperationEvidence,
 };
+pub use import::{ImportPreview, Severity as ImportSeverity};
 pub use knowledge::{
     Authority, ConfigurationAnswer, Knowledge, KnowledgeBase, KnowledgeProvider, Licence,
     MappingAnswer, ProviderInfo, SignalAnswer, VehicleContext,

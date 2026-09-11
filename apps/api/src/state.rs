@@ -73,6 +73,10 @@ pub struct ServerConfig {
     pub simulator_latency: Duration,
     /// Where model-provider settings are stored.
     pub settings_path: std::path::PathBuf,
+    /// Where user-supplied vehicle profiles live, when this build has a
+    /// directory for them. `None` disables importing rather than inventing a
+    /// location to write somebody else.s YAML into.
+    pub profiles_dir: Option<std::path::PathBuf>,
 }
 
 /// What a connect request asks for.

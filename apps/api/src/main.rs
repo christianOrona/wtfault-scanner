@@ -149,6 +149,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .clone()
             .map(std::path::PathBuf::from)
             .unwrap_or_else(default_settings_path),
+        profiles_dir: args.profiles.as_ref().map(std::path::PathBuf::from),
     };
 
     tracing::info!(

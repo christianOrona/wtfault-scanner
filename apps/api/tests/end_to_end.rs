@@ -46,6 +46,7 @@ impl Harness {
             // A temp path: the test must never read or write the real
             // provider settings, which hold API keys.
             settings_path: dir.path().join("providers.json"),
+            profiles_dir: Some(dir.path().join("profiles")),
         };
         let app = aim_api::router(AppState::new(store.clone(), decoders, config));
         tokio::spawn(async move {

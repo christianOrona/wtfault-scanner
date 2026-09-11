@@ -36,6 +36,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/capabilities", get(capabilities))
         .route("/api/v1/explanations", get(explanations))
         .route("/api/v1/profiles", get(profiles))
+        .route("/api/v1/profiles/preview", post(preview_profile))
+        .route("/api/v1/profiles/import", post(import_profile))
         .route("/api/v1/features", get(features))
         .route("/api/v1/features/{id}", get(read_feature))
         .route("/api/v1/config/capture", post(capture_configuration))
@@ -982,4 +984,163 @@ async fn diff_captures(
              Repeat the capture changing only the one setting."
         },
     })))
+}
+
+// -------------------------------------------------------- profile import
+
+/// A profile offered for import: its text, or a URL to fetch it from.
+#[derive(Debug, Deserialize)]
+struct ImportBody {
+    /// The profile itself, pasted or read from a file by the client.
+    #[serde(default)]
+    text: Option<String>,
+    /// Where to fetch it from instead.
+    #[serde(default)]
+    url: Option<String>,
+    /// A name for the record, when the client knows one.
+    #[serde(default)]
+    source: Option<String>,
+}
+
+/// Resolve a body into the profile text and a label for where it came from.
+///
+/// The fetch is deliberately plain: `https` only, no redirects followed across
+/// hosts by us, a size ceiling, and no authentication ever attached. A profile
+/// is public data by definition — anything needing a credential to read is not
+/// something this should be fetching on somebody's behalf.
+async fn profile_text(body: &ImportBody) -> Result<(String, String), ApiError> {
+    if let Some(text) = &body.text {
+        let source = body.source.clone().unwrap_or_else(|| String::from("pasted"));
+        return Ok((text.clone(), source));
+    }
+    let Some(url) = &body.url else {
+        return Err(ApiError::bad_request(
+            "send either the profile text or a url to fetch it from",
+        ));
+    };
+    if !url.starts_with("https://") {
+        return Err(ApiError::bad_request(
+            "profiles are fetched over https only, so that what arrives is what was published",
+        ));
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|e| ApiError::bad_request(format!("could not build an http client: {e}")))?;
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| ApiError::bad_request(format!("could not fetch {url}: {e}")))?;
+    if !response.status().is_success() {
+        return Err(ApiError::bad_request(format!(
+            "{url} answered {} rather than the profile",
+            response.status()
+        )));
+    }
+    // Checked against the declared length first where there is one, and again
+    // after reading, because a declared length is a claim by the server.
+    if response
+        .content_length()
+        .is_some_and(|n| n as usize > aim_decoders::import::MAX_PROFILE_BYTES)
+    {
+        return Err(ApiError::bad_request("that file is far too large to be a profile"));
+    }
+    let text = response
+        .text()
+        .await
+        .map_err(|e| ApiError::bad_request(format!("could not read {url}: {e}")))?;
+    if text.len() > aim_decoders::import::MAX_PROFILE_BYTES {
+        return Err(ApiError::bad_request("that file is far too large to be a profile"));
+    }
+    Ok((text, body.source.clone().unwrap_or_else(|| url.clone())))
+}
+
+/// `POST /api/v1/profiles/preview`
+///
+/// What importing this would add and what it would override. Changes nothing.
+async fn preview_profile(
+    State(state): State<AppState>,
+    Json(body): Json<ImportBody>,
+) -> ApiResult<Json<Value>> {
+    let (text, source) = profile_text(&body).await?;
+    let preview = aim_decoders::import::preview(&text, &source, &state.decoders.features);
+    Ok(Json(json!({ "preview": preview })))
+}
+
+/// `POST /api/v1/profiles/import`
+///
+/// Accept a profile, after previewing it. Written to the profiles directory
+/// and loaded on the next start, which is deliberate: swapping definitions
+/// under a live session would change what a reading means halfway through one.
+async fn import_profile(
+    State(state): State<AppState>,
+    Json(body): Json<ImportBody>,
+) -> ApiResult<Json<Value>> {
+    let Some(dir) = state.config.profiles_dir.clone() else {
+        return Err(ApiError::bad_request(
+            "this build has no profiles directory, so there is nowhere to put an imported file",
+        ));
+    };
+    let (text, source) = profile_text(&body).await?;
+    let preview = aim_decoders::import::preview(&text, &source, &state.decoders.features);
+    if !preview.acceptable {
+        return Err(ApiError::bad_request(format!(
+            "this profile was not accepted: {}",
+            preview
+                .findings
+                .iter()
+                .filter(|f| f.severity == aim_decoders::import::Severity::Blocking)
+                .map(|f| f.detail.clone())
+                .collect::<Vec<_>>()
+                .join(" ")
+        )));
+    }
+
+    // Every claim the file makes about having been verified is removed before
+    // it is written, so there is no window in which a trusted-looking
+    // definition exists on disk. Verification is re-earned on this vehicle.
+    let mut sanitised = aim_decoders::FeatureCatalog::default();
+    sanitised
+        .load_yaml(&text, &source)
+        .map_err(|e| ApiError::bad_request(format!("could not read the profile: {}", e.message)))?;
+    aim_decoders::import::strip_verification_claims(&mut sanitised);
+
+    let yaml = serde_yaml_ng::to_string(&serde_json::json!({
+        "version": 1,
+        "profile": "imported",
+        "features": sanitised.all().collect::<Vec<_>>(),
+    }))
+    .map_err(|e| ApiError::bad_request(format!("could not re-serialise the profile: {e}")))?;
+
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| ApiError::bad_request(format!("could not create {}: {e}", dir.display())))?;
+    let name = format!("imported-{}.yaml", safe_stem(&source));
+    let path = dir.join(&name);
+    std::fs::write(&path, yaml.as_bytes())
+        .map_err(|e| ApiError::bad_request(format!("could not write {}: {e}", path.display())))?;
+
+    Ok(Json(json!({
+        "imported": true,
+        "path": path.display().to_string(),
+        "features": preview.changes.len(),
+        "preview": preview,
+        "note": "Imported unverified, whatever the file claimed about itself. It takes effect \
+                 when the app next starts: swapping definitions under a live session would \
+                 change what a reading means halfway through one.",
+    })))
+}
+
+/// A filename fragment that cannot escape the profiles directory.
+///
+/// Everything that is not a letter, digit or dash becomes a dash. A source is
+/// a URL or a filename somebody else chose, and it is never allowed to decide
+/// where a file lands.
+fn safe_stem(source: &str) -> String {
+    let cleaned: String =
+        source.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
+    let trimmed = cleaned.trim_matches('-');
+    let stem = if trimmed.is_empty() { "profile" } else { trimmed };
+    stem.chars().take(60).collect()
 }

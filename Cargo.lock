@@ -64,6 +64,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "serde_yaml_ng",
  "tempfile",
  "tokio",
  "tokio-tungstenite 0.30.0",

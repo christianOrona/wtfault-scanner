@@ -616,6 +616,17 @@ impl FeatureCatalog {
         self.by_id.values()
     }
 
+    /// Every feature, mutably.
+    ///
+    /// Exists for [`crate::import::strip_verification_claims`], which has to
+    /// reach every definition that came out of a file before any of them are
+    /// trusted. Deliberately not a general editing surface: a catalogue that
+    /// callers rewrite piecemeal stops being traceable to the files it came
+    /// from.
+    pub fn all_mut(&mut self) -> impl Iterator<Item = &mut FeatureDef> {
+        self.by_id.values_mut()
+    }
+
     /// Features that could apply to a particular vehicle.
     pub fn for_vehicle(
         &self,
