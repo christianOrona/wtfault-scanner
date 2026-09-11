@@ -214,10 +214,18 @@ impl UdsOutcome {
     }
 
     /// What happened, in language meant for a person.
+    ///
+    /// When the module named the condition rather than only that one was
+    /// wrong, the instruction comes with it. `conditionsNotCorrect` leaves
+    /// somebody guessing; `engineIsRunning` tells them to turn the key, and
+    /// reporting only the classification would throw that away.
     fn detail(&self) -> Option<String> {
         match self {
             UdsOutcome::Positive(_) => None,
-            UdsOutcome::Refused(nrc) => Some(nrc.refusal().explain().to_string()),
+            UdsOutcome::Refused(nrc) => Some(match nrc.what_to_change() {
+                Some(fix) => format!("{} {fix}", nrc.refusal().explain()),
+                None => nrc.refusal().explain().to_string(),
+            }),
             UdsOutcome::NoAnswer(why) => Some(why.clone()),
         }
     }
@@ -2403,13 +2411,19 @@ impl DiagnosticService {
                 write_reply.iter().find_map(|m| {
                     match aim_protocols::UdsResponse::parse(&m.payload) {
                         Ok(aim_protocols::UdsResponse::Negative { nrc, .. }) => {
-                            Some((nrc.description(), nrc.refusal()))
+                            Some((nrc.description(), nrc.refusal(), nrc.what_to_change()))
                         }
                         _ => None,
                     }
                 });
             let detail = match refusal {
-                Some((name, kind)) => format!(" It refused with {name}: {}", kind.explain()),
+                // A refused write is exactly where the specific condition
+                // matters most: "put the gearbox in park" is a thing somebody
+                // can do, and "conditions not correct" is not.
+                Some((name, kind, Some(fix))) => {
+                    format!(" It refused with {name}: {} {fix}", kind.explain())
+                }
+                Some((name, kind, None)) => format!(" It refused with {name}: {}", kind.explain()),
                 None => String::from(
                     " It did not answer the write at all, which is different from refusing it.",
                 ),
@@ -2424,7 +2438,10 @@ impl DiagnosticService {
             .with_details(serde_json::json!({
                 "module": target.module,
                 "did": format!("{:04X}", target.did),
-                "refused_because": refusal.map(|(_, k)| k.code()),
+                "refused_because": refusal.map(|(_, k, _)| k.code()),
+                // The instruction, separate from the classification, so an
+                // interface can put it where somebody will act on it.
+                "what_to_change": refusal.and_then(|(_, _, fix)| fix),
                 "bytes_offered": aim_types::hex(&after_bytes),
             })));
         }

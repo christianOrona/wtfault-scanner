@@ -119,6 +119,10 @@ pub enum NegativeResponseCode {
     ConditionsNotCorrect,
     /// 0x24 requestSequenceError.
     RequestSequenceError,
+    /// 0x25 noResponseFromSubnetComponent.
+    NoResponseFromSubnetComponent,
+    /// 0x26 failurePreventsExecutionOfRequestedAction.
+    FailurePreventsExecutionOfRequestedAction,
     /// 0x31 requestOutOfRange.
     RequestOutOfRange,
     /// 0x33 securityAccessDenied.
@@ -129,14 +133,68 @@ pub enum NegativeResponseCode {
     ExceedNumberOfAttempts,
     /// 0x37 requiredTimeDelayNotExpired.
     RequiredTimeDelayNotExpired,
+    /// 0x70 uploadDownloadNotAccepted.
+    UploadDownloadNotAccepted,
+    /// 0x71 transferDataSuspended.
+    TransferDataSuspended,
     /// 0x72 generalProgrammingFailure.
     GeneralProgrammingFailure,
+    /// 0x73 wrongBlockSequenceCounter.
+    WrongBlockSequenceCounter,
     /// 0x78 requestCorrectlyReceived-ResponsePending.
     ResponsePending,
     /// 0x7E subFunctionNotSupportedInActiveSession.
     SubFunctionNotSupportedInActiveSession,
     /// 0x7F serviceNotSupportedInActiveSession.
     ServiceNotSupportedInActiveSession,
+
+    // ---- 0x81..=0x93: what is wrong with the vehicle's state ----
+    //
+    // The block that matters most here and the one this table was missing
+    // entirely. `conditionsNotCorrect` says a module refused because the
+    // vehicle is in the wrong state; every code below says *which* state, and
+    // therefore what the person in the driver's seat has to change.
+    //
+    // Without them a module that answered "the engine is running and must not
+    // be" arrived as `Other(0x83)` and was reported as an unexplained refusal.
+    // The module had already given the answer.
+    /// 0x81 rpmTooHigh.
+    RpmTooHigh,
+    /// 0x82 rpmTooLow.
+    RpmTooLow,
+    /// 0x83 engineIsRunning.
+    EngineIsRunning,
+    /// 0x84 engineIsNotRunning.
+    EngineIsNotRunning,
+    /// 0x85 engineRunTimeTooLow.
+    EngineRunTimeTooLow,
+    /// 0x86 temperatureTooHigh.
+    TemperatureTooHigh,
+    /// 0x87 temperatureTooLow.
+    TemperatureTooLow,
+    /// 0x88 vehicleSpeedTooHigh.
+    VehicleSpeedTooHigh,
+    /// 0x89 vehicleSpeedTooLow.
+    VehicleSpeedTooLow,
+    /// 0x8A throttlePedalTooHigh.
+    ThrottleTooHigh,
+    /// 0x8B throttlePedalTooLow.
+    ThrottleTooLow,
+    /// 0x8C transmissionRangeNotInNeutral.
+    TransmissionRangeNotInNeutral,
+    /// 0x8D transmissionRangeNotInGear.
+    TransmissionRangeNotInGear,
+    /// 0x8F brakeSwitchNotClosed.
+    BrakeSwitchNotClosed,
+    /// 0x90 shifterLeverNotInPark.
+    ShifterLeverNotInPark,
+    /// 0x91 torqueConverterClutchLocked.
+    TorqueConverterClutchLocked,
+    /// 0x92 voltageTooHigh.
+    VoltageTooHigh,
+    /// 0x93 voltageTooLow.
+    VoltageTooLow,
+
     /// Any other code, preserved verbatim.
     Other(u8),
 }
@@ -154,15 +212,38 @@ impl NegativeResponseCode {
             0x21 => BusyRepeatRequest,
             0x22 => ConditionsNotCorrect,
             0x24 => RequestSequenceError,
+            0x25 => NoResponseFromSubnetComponent,
+            0x26 => FailurePreventsExecutionOfRequestedAction,
             0x31 => RequestOutOfRange,
             0x33 => SecurityAccessDenied,
             0x35 => InvalidKey,
             0x36 => ExceedNumberOfAttempts,
             0x37 => RequiredTimeDelayNotExpired,
+            0x70 => UploadDownloadNotAccepted,
+            0x71 => TransferDataSuspended,
             0x72 => GeneralProgrammingFailure,
+            0x73 => WrongBlockSequenceCounter,
             0x78 => ResponsePending,
             0x7E => SubFunctionNotSupportedInActiveSession,
             0x7F => ServiceNotSupportedInActiveSession,
+            0x81 => RpmTooHigh,
+            0x82 => RpmTooLow,
+            0x83 => EngineIsRunning,
+            0x84 => EngineIsNotRunning,
+            0x85 => EngineRunTimeTooLow,
+            0x86 => TemperatureTooHigh,
+            0x87 => TemperatureTooLow,
+            0x88 => VehicleSpeedTooHigh,
+            0x89 => VehicleSpeedTooLow,
+            0x8A => ThrottleTooHigh,
+            0x8B => ThrottleTooLow,
+            0x8C => TransmissionRangeNotInNeutral,
+            0x8D => TransmissionRangeNotInGear,
+            0x8F => BrakeSwitchNotClosed,
+            0x90 => ShifterLeverNotInPark,
+            0x91 => TorqueConverterClutchLocked,
+            0x92 => VoltageTooHigh,
+            0x93 => VoltageTooLow,
             other => Other(other),
         }
     }
@@ -179,15 +260,38 @@ impl NegativeResponseCode {
             BusyRepeatRequest => 0x21,
             ConditionsNotCorrect => 0x22,
             RequestSequenceError => 0x24,
+            NoResponseFromSubnetComponent => 0x25,
+            FailurePreventsExecutionOfRequestedAction => 0x26,
             RequestOutOfRange => 0x31,
             SecurityAccessDenied => 0x33,
             InvalidKey => 0x35,
             ExceedNumberOfAttempts => 0x36,
             RequiredTimeDelayNotExpired => 0x37,
+            UploadDownloadNotAccepted => 0x70,
+            TransferDataSuspended => 0x71,
             GeneralProgrammingFailure => 0x72,
+            WrongBlockSequenceCounter => 0x73,
             ResponsePending => 0x78,
             SubFunctionNotSupportedInActiveSession => 0x7E,
             ServiceNotSupportedInActiveSession => 0x7F,
+            RpmTooHigh => 0x81,
+            RpmTooLow => 0x82,
+            EngineIsRunning => 0x83,
+            EngineIsNotRunning => 0x84,
+            EngineRunTimeTooLow => 0x85,
+            TemperatureTooHigh => 0x86,
+            TemperatureTooLow => 0x87,
+            VehicleSpeedTooHigh => 0x88,
+            VehicleSpeedTooLow => 0x89,
+            ThrottleTooHigh => 0x8A,
+            ThrottleTooLow => 0x8B,
+            TransmissionRangeNotInNeutral => 0x8C,
+            TransmissionRangeNotInGear => 0x8D,
+            BrakeSwitchNotClosed => 0x8F,
+            ShifterLeverNotInPark => 0x90,
+            TorqueConverterClutchLocked => 0x91,
+            VoltageTooHigh => 0x92,
+            VoltageTooLow => 0x93,
             Other(b) => *b,
         }
     }
@@ -217,12 +321,86 @@ impl NegativeResponseCode {
             InvalidKey => "invalidKey",
             ExceedNumberOfAttempts => "exceedNumberOfAttempts",
             RequiredTimeDelayNotExpired => "requiredTimeDelayNotExpired",
+            NoResponseFromSubnetComponent => "noResponseFromSubnetComponent",
+            FailurePreventsExecutionOfRequestedAction => {
+                "failurePreventsExecutionOfRequestedAction"
+            }
+            UploadDownloadNotAccepted => "uploadDownloadNotAccepted",
+            TransferDataSuspended => "transferDataSuspended",
             GeneralProgrammingFailure => "generalProgrammingFailure",
+            WrongBlockSequenceCounter => "wrongBlockSequenceCounter",
             ResponsePending => "requestCorrectlyReceived-ResponsePending",
             SubFunctionNotSupportedInActiveSession => "subFunctionNotSupportedInActiveSession",
             ServiceNotSupportedInActiveSession => "serviceNotSupportedInActiveSession",
+            RpmTooHigh => "rpmTooHigh",
+            RpmTooLow => "rpmTooLow",
+            EngineIsRunning => "engineIsRunning",
+            EngineIsNotRunning => "engineIsNotRunning",
+            EngineRunTimeTooLow => "engineRunTimeTooLow",
+            TemperatureTooHigh => "temperatureTooHigh",
+            TemperatureTooLow => "temperatureTooLow",
+            VehicleSpeedTooHigh => "vehicleSpeedTooHigh",
+            VehicleSpeedTooLow => "vehicleSpeedTooLow",
+            ThrottleTooHigh => "throttlePedalTooHigh",
+            ThrottleTooLow => "throttlePedalTooLow",
+            TransmissionRangeNotInNeutral => "transmissionRangeNotInNeutral",
+            TransmissionRangeNotInGear => "transmissionRangeNotInGear",
+            BrakeSwitchNotClosed => "brakeSwitchNotClosed",
+            ShifterLeverNotInPark => "shifterLeverNotInPark",
+            TorqueConverterClutchLocked => "torqueConverterClutchLocked",
+            VoltageTooHigh => "voltageTooHigh",
+            VoltageTooLow => "voltageTooLow",
             Other(_) => "manufacturerSpecificOrReserved",
         }
+    }
+
+    /// What the person in the driver's seat would have to change.
+    ///
+    /// `None` for every refusal that is not about the vehicle's state, which is
+    /// most of them — there is nothing for somebody to do about
+    /// `securityAccessDenied` except not ask.
+    ///
+    /// This is the whole reason the `0x81..=0x93` block is worth carrying. A
+    /// module answering `conditionsNotCorrect` has said the vehicle is in the
+    /// wrong state and left the person to guess which; a module answering
+    /// `engineIsRunning` has told them exactly what to do, and repeating that
+    /// back as "refused, code 0x83" throws away the useful half of the answer.
+    pub fn what_to_change(&self) -> Option<&'static str> {
+        use NegativeResponseCode::*;
+        Some(match self {
+            RpmTooHigh => "The engine is turning too fast for this. Let it drop to idle.",
+            RpmTooLow => "The engine is turning too slowly for this. Raise the revs and hold them.",
+            EngineIsRunning => "Turn the engine off, leaving the ignition on.",
+            EngineIsNotRunning => "Start the engine.",
+            EngineRunTimeTooLow => {
+                "The engine has not been running long enough. Let it run for a few minutes and \
+                 try again."
+            }
+            TemperatureTooHigh => "Something is too hot for this. Let the vehicle cool down.",
+            TemperatureTooLow => {
+                "Something is too cold for this. Let the engine reach normal running temperature."
+            }
+            VehicleSpeedTooHigh => "The vehicle is moving too fast. Come to a stop.",
+            VehicleSpeedTooLow => {
+                "The vehicle needs to be moving faster than it is. This one needs a second person \
+                 driving, or a rolling road — do not attempt it while reading a screen."
+            }
+            ThrottleTooHigh => "Take your foot off the accelerator.",
+            ThrottleTooLow => "Press the accelerator and hold it.",
+            TransmissionRangeNotInNeutral => "Put the gearbox in neutral.",
+            TransmissionRangeNotInGear => "Put the gearbox in gear.",
+            BrakeSwitchNotClosed => "Press and hold the brake pedal.",
+            ShifterLeverNotInPark => "Put the selector in park.",
+            TorqueConverterClutchLocked => {
+                "The torque converter is locked up. Let the vehicle come to rest first."
+            }
+            VoltageTooHigh => "Supply voltage is too high. If a charger is connected, take it off.",
+            VoltageTooLow => {
+                "The battery is too low for this. Put a charger on it, or run the engine to \
+                 bring the voltage up."
+            }
+            _ => return None,
+        })
     }
 
     /// True for 0x78: the ECU is working and the caller must extend its
@@ -262,10 +440,43 @@ impl NegativeResponseCode {
             SubFunctionNotSupportedInActiveSession | ServiceNotSupportedInActiveSession => {
                 RefusalKind::WrongSession
             }
-            ConditionsNotCorrect | RequestSequenceError => RefusalKind::VehicleConditions,
+            // Everything from 0x81 to 0x93 is the same answer as
+            // `conditionsNotCorrect` with the condition named, so it classifies
+            // the same way — and `what_to_change` carries the part that makes
+            // it actionable.
+            ConditionsNotCorrect
+            | RequestSequenceError
+            | RpmTooHigh
+            | RpmTooLow
+            | EngineIsRunning
+            | EngineIsNotRunning
+            | EngineRunTimeTooLow
+            | TemperatureTooHigh
+            | TemperatureTooLow
+            | VehicleSpeedTooHigh
+            | VehicleSpeedTooLow
+            | ThrottleTooHigh
+            | ThrottleTooLow
+            | TransmissionRangeNotInNeutral
+            | TransmissionRangeNotInGear
+            | BrakeSwitchNotClosed
+            | ShifterLeverNotInPark
+            | TorqueConverterClutchLocked
+            | VoltageTooHigh
+            | VoltageTooLow => RefusalKind::VehicleConditions,
             BusyRepeatRequest | ResponsePending | RequiredTimeDelayNotExpired => RefusalKind::Busy,
             IncorrectMessageLengthOrInvalidFormat | ResponseTooLong => {
                 RefusalKind::OurRequestWasWrong
+            }
+            // A module that could not reach something behind it, or that is
+            // already broken enough to refuse. Neither is about our request.
+            NoResponseFromSubnetComponent | FailurePreventsExecutionOfRequestedAction => {
+                RefusalKind::Unexplained
+            }
+            // The programming-sequence codes. This build never programs, so
+            // seeing one means something else is talking to the module.
+            UploadDownloadNotAccepted | TransferDataSuspended | WrongBlockSequenceCounter => {
+                RefusalKind::Unexplained
             }
             GeneralReject | GeneralProgrammingFailure | Other(_) => RefusalKind::Unexplained,
         }
@@ -913,5 +1124,63 @@ mod tests {
         assert!(UdsResponse::parse(&[]).is_err());
         assert!(UdsResponse::parse(&[0x7F, 0x22]).is_err());
         assert!(UdsResponse::parse(&[0x22, 0xF1]).is_err());
+    }
+    /// The block the table was missing, and the reason it was worth adding.
+    ///
+    /// Every one of these is `conditionsNotCorrect` with the condition named.
+    /// Before they existed each arrived as `Other(0x8n)` and was reported as an
+    /// unexplained refusal — while the module had already said exactly what the
+    /// person needed to change.
+    #[test]
+    fn the_condition_codes_say_what_to_change() {
+        for (byte, expect) in [
+            (0x83u8, "Turn the engine off"),
+            (0x84, "Start the engine"),
+            (0x88, "Come to a stop"),
+            (0x8C, "neutral"),
+            (0x90, "park"),
+            (0x93, "charger"),
+        ] {
+            let nrc = NegativeResponseCode::from_byte(byte);
+            assert_eq!(
+                nrc.refusal(),
+                RefusalKind::VehicleConditions,
+                "{byte:02X} is a condition, not an unexplained refusal"
+            );
+            let fix = nrc.what_to_change().expect("a condition names its own remedy");
+            assert!(fix.contains(expect), "{byte:02X}: {fix}");
+        }
+    }
+
+    /// And a refusal that is not about the vehicle's state offers no
+    /// instruction, because there is nothing for anybody to do about it.
+    #[test]
+    fn a_refusal_that_is_not_about_the_vehicle_offers_no_instruction() {
+        for byte in [0x33u8, 0x31, 0x13, 0x10] {
+            assert!(
+                NegativeResponseCode::from_byte(byte).what_to_change().is_none(),
+                "{byte:02X} should not pretend to be actionable"
+            );
+        }
+    }
+
+    /// The one that needs a second person. A procedure requiring road speed
+    /// must never read as something to attempt alone with a laptop.
+    #[test]
+    fn a_condition_needing_road_speed_says_not_to_do_it_while_reading() {
+        let fix = NegativeResponseCode::from_byte(0x89).what_to_change().unwrap();
+        assert!(fix.contains("second person") || fix.contains("rolling road"), "{fix}");
+        assert!(fix.contains("do not attempt it while reading"), "{fix}");
+    }
+
+    /// Every code round-trips through its byte, including the new ones. A
+    /// table that decodes a byte into a name it cannot encode back is a table
+    /// with a typo in it.
+    #[test]
+    fn every_named_code_round_trips_through_its_byte() {
+        for byte in 0x00u8..=0xFFu8 {
+            let nrc = NegativeResponseCode::from_byte(byte);
+            assert_eq!(nrc.byte(), byte, "{byte:02X} did not survive the round trip");
+        }
     }
 }
