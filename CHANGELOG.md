@@ -3,6 +3,43 @@
 Notable changes, newest first. Versions follow [semantic versioning](https://semver.org),
 with the caveat that everything below 1.0 is allowed to move.
 
+## [0.3.3] — 2026-09-11
+
+### Fixed
+
+- **The updater refused to download its own installer.** The allowlist of hosts
+  a release asset may come from held `api.github.com` and
+  `objects.githubusercontent.com` — the CDN host a download *ends up* on after
+  the redirect. Every asset GitHub publishes starts from
+  `github.com/{owner}/{repo}/releases/download/...`, which was not on the list,
+  so no update could ever install.
+
+  Found by pressing the button. The 0.3.1 banner correctly offered 0.3.2, and
+  "Update now" answered *"the installer is hosted at an unexpected address"*.
+
+  The tests were green because every one of them used a CDN URL. They were
+  careful about rejecting `example.com`, plain `http://`, and
+  `githubusercontent.com.evil.com`, and never once tried the address GitHub
+  actually produces. A test suite can be thorough about the wrong thing.
+
+  So 0.3.1 was half a fix: it made the interface ask, which was the bug it set
+  out to solve, and the install behind the button had never worked either.
+  Nobody noticed because nobody had pressed it.
+
+- `github.com` is allowed but not as a bare host. Anyone can publish a release
+  there, so a host check alone would accept an installer from any repository on
+  the site — a `github.com` URL must be under this project's own releases path.
+
+- The version this binary reports and the version its installer carries are now
+  pinned equal by a test. If they drift the updater loops forever: it compares
+  the published tag against the running version, so an installer stamped 0.3.3
+  that installs a binary reporting 0.3.2 offers the same update, installs it,
+  and is still out of date — with no error anywhere, because every step worked.
+
+**This cannot fix itself in the field.** 0.3.1 and 0.3.2 both carry the broken
+check, so either needs one manual install of 0.3.3 before updates work.
+
+
 ## [0.3.2] — 2026-09-11
 
 The release where writes actually reached a vehicle.
