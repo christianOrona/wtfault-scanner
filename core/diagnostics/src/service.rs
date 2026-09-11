@@ -18,6 +18,7 @@
 //! built it does not get a new path to the vehicle; it calls these same
 //! methods, through the same gate, producing the same recorded evidence.
 
+use crate::identity::VehicleIdentity;
 use crate::recorder::SessionRecorder;
 use aim_adapter::{DiagnosticAdapter, EcuMessage, RequestTarget};
 use aim_decoders::DecoderSet;
@@ -293,6 +294,14 @@ pub struct DiagnosticService {
     /// this a repeated visit to the Inspect screen re-walks the whole mask
     /// chain and puts dozens of extra requests on the bus.
     supported_mids: BTreeMap<String, Vec<u8>>,
+    /// Identification records read from each module, keyed by data identifier.
+    ///
+    /// The sweep that reads these was reporting them once and forgetting them,
+    /// which is how a truck could tell us its ECU software number and its
+    /// supplier and have none of it survive the screen it was shown on. Kept
+    /// per module because two modules answering the same identifier with
+    /// different values is a fact about the vehicle, not a conflict to resolve.
+    identification: BTreeMap<String, BTreeMap<u16, String>>,
     vehicle: Option<Vehicle>,
     /// Set when any reply this session arrived incomplete. Evidence about the
     /// adapter, consumed by the configuration-change checks.
@@ -338,6 +347,7 @@ impl DiagnosticService {
             conditions: VehicleConditions::unknown(),
             supported_pids: BTreeMap::new(),
             supported_mids: BTreeMap::new(),
+            identification: BTreeMap::new(),
             vehicle: None,
             saw_truncated_response: false,
             write_gate_open: std::collections::BTreeSet::new(),
@@ -389,6 +399,29 @@ impl DiagnosticService {
     /// The identified vehicle, when one has been read.
     pub fn vehicle(&self) -> Option<&Vehicle> {
         self.vehicle.as_ref()
+    }
+
+    /// Everything established about this vehicle, with the evidence for each.
+    ///
+    /// All of this was already being collected and then scattered: the VIN
+    /// decode lived on the vehicle record, the calibration identifiers on
+    /// whichever modules happened to report them, the protocol on the adapter.
+    /// Anything wanting to answer "is this definition about *this* vehicle"
+    /// had to reach into three places and then guess about the gaps.
+    ///
+    /// Gaps are the point as much as the facts are. A vehicle whose model was
+    /// never established says so here, rather than presenting an empty field
+    /// that reads like a checked-and-found-nothing.
+    pub fn identity(&self) -> VehicleIdentity {
+        let modules = self.store.modules(&self.session.id).unwrap_or_default();
+        let mut identity = VehicleIdentity::assemble(self.vehicle.as_ref(), &modules);
+        for (module_key, records) in &self.identification {
+            identity.record_identifiers(module_key, records);
+        }
+        for (module_key, pids) in &self.supported_pids {
+            identity.record_supported_parameters(module_key, pids);
+        }
+        identity
     }
 
     /// Vehicle conditions as currently believed, used by precondition checks.
@@ -2787,13 +2820,25 @@ impl DiagnosticService {
                     // 0x62, echoed DID, then the record.
                     let record = payload.get(3..).unwrap_or(&[]);
                     found_here += 1;
+                    let text = Self::printable_ascii(record);
+                    // Keep what the module said about itself rather than only
+                    // reporting it. This is the sweep's most durable product:
+                    // the screen it lands on is transient, but "this module
+                    // answered F188 with this" is how a mapping is later judged
+                    // to be about this vehicle or a different one.
+                    if let Some(text) = &text {
+                        self.identification
+                            .entry(module_key.to_string())
+                            .or_default()
+                            .insert(did, text.clone());
+                    }
                     identifiers.push(serde_json::json!({
                         "did": format!("{did:04X}"),
                         "range": purpose,
                         "length": record.len(),
                         "bytes":
                             record.iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(" "),
-                        "text": Self::printable_ascii(record),
+                        "text": text,
                     }));
                 }
             }

@@ -55,6 +55,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/adapter/disconnect", post(disconnect))
         // ---- vehicle ----
         .route("/api/v1/vehicles/identify", post(identify_vehicle))
+        .route("/api/v1/vehicles/identity", get(vehicle_identity))
         // ---- modules, live ----
         .route("/api/v1/modules", get(list_modules).post(scan_modules))
         .route("/api/v1/modules/{key}", get(module_identity))
@@ -398,6 +399,18 @@ async fn disconnect(State(state): State<AppState>) -> ApiResult<Json<ToolResult>
 
 async fn identify_vehicle(State(state): State<AppState>) -> ApiResult<Json<ToolResult>> {
     Ok(Json(state.with_service(|s| s.identify_vehicle("user:api")).await?))
+}
+
+/// Everything established about the vehicle, with the evidence behind it.
+///
+/// A `GET` beside the `POST` above, and the distinction is the point: the POST
+/// goes and asks the vehicle, this reports what is already known from every
+/// read so far. It never touches the bus, so it is safe to call whenever a
+/// screen needs to know how sure the application is about what it is plugged
+/// into.
+async fn vehicle_identity(State(state): State<AppState>) -> ApiResult<Json<Value>> {
+    let identity = state.peek_service(|s| s.identity()).await?;
+    Ok(Json(json!({ "identity": identity })))
 }
 
 // ----------------------------------------------------------------- modules

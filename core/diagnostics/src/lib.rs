@@ -24,9 +24,11 @@
 
 pub mod capture;
 pub mod config;
+pub mod identity;
 pub mod recorder;
 pub mod service;
 
 pub use config::{plan_change, ChangeContext, ChangePlan, ChangeRequest, Check, DesiredValue};
+pub use identity::{Candidate, Evidence, EvidenceSource, IdentityField, VehicleIdentity};
 pub use recorder::SessionRecorder;
 pub use service::{capabilities, DiagnosticService, DtcReport};

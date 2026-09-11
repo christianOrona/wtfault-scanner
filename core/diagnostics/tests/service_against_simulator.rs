@@ -1027,3 +1027,46 @@ fn a_change_to_the_value_already_set_writes_nothing() {
     assert_eq!(data["reason"], "already_set");
     assert!(r.warnings.iter().any(|w| w.code == "already_set"));
 }
+
+/// The identity is assembled from what the session actually did, not from a
+/// separate pass over the vehicle.
+///
+/// Nothing here talks to the bus: identify and scan already did, and this is
+/// the evidence they produced arriving in one place instead of three. The
+/// point of the test is that reading it costs nothing and that the gaps come
+/// through as gaps.
+#[test]
+fn the_identity_gathers_what_the_session_already_established() {
+    let (mut service, _) = connected(ScenarioId::Healthy);
+    assert!(service.identify_vehicle(USER).success);
+    assert!(service.scan_modules(USER).success);
+
+    let identity = service.identity();
+
+    // The VIN and what its own structure encodes.
+    assert!(identity.settled("vin").is_some(), "the VIN was read and should be here");
+    assert!(identity.settled("make").is_some());
+
+    // And the gap. No licensed database ships with this build, so the model is
+    // never established from a VIN — which is a finding, stated as one.
+    assert_eq!(identity.settled("model"), None);
+    assert!(identity.unresolved.contains(&String::from("model")));
+
+    // Modules and the protocol they answered on came along without anybody
+    // asking the vehicle a second time.
+    assert!(!identity.observations_about("module").is_empty());
+    assert_eq!(identity.observations_about("protocol").len(), 1);
+
+    // Nothing disagrees on a single healthy vehicle.
+    assert!(identity.contested().is_empty());
+}
+
+/// Before anything has been read, an identity is empty rather than a set of
+/// blank fields — and it says which fields nobody established.
+#[test]
+fn an_identity_before_any_reading_claims_nothing() {
+    let (service, _) = connected(ScenarioId::Healthy);
+    let identity = service.identity();
+    assert!(identity.is_empty());
+    assert_eq!(identity.unresolved, vec!["vin", "make", "model", "model_year"]);
+}

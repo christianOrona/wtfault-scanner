@@ -354,6 +354,48 @@ impl RefusalKind {
     }
 }
 
+/// What a data identifier holds, when ISO 14229 says so.
+///
+/// The standard defines meanings for part of `0xF180..=0xF1FF` and leaves the
+/// rest of that block to vehicle manufacturers (`0xF1A0..=0xF1EF`) and system
+/// suppliers (`0xF1F0..=0xF1FF`). Those get `None`, and that is the whole point
+/// of the function: a module answering at `0xF1F3` with `EDC17CP65` has told us
+/// something a supplier defined and nobody published, so it is reported as the
+/// bytes at an identifier rather than as a fact about the vehicle. Guessing
+/// from the shape of the string is exactly the inference this project refuses.
+pub fn identification_did_name(did: u16) -> Option<&'static str> {
+    Some(match did {
+        0xF180 => "boot software identification",
+        0xF181 => "application software identification",
+        0xF182 => "application data identification",
+        0xF183 => "boot software fingerprint",
+        0xF184 => "application software fingerprint",
+        0xF185 => "application data fingerprint",
+        0xF186 => "active diagnostic session",
+        0xF187 => "manufacturer spare part number",
+        0xF188 => "manufacturer ECU software number",
+        0xF189 => "manufacturer ECU software version",
+        0xF18A => "system supplier identifier",
+        0xF18B => "ECU manufacturing date",
+        0xF18C => "ECU serial number",
+        0xF18D => "supported functional units",
+        0xF18E => "manufacturer kit assembly part number",
+        0xF190 => "VIN",
+        0xF191 => "manufacturer ECU hardware number",
+        0xF192 => "system supplier ECU hardware number",
+        0xF193 => "system supplier ECU hardware version",
+        0xF194 => "system supplier ECU software number",
+        0xF195 => "system supplier ECU software version",
+        0xF196 => "exhaust regulation or type-approval number",
+        0xF197 => "system name or engine type",
+        0xF198 => "repair shop code or tester serial number",
+        0xF199 => "programming date",
+        0xF19D => "ECU installation date",
+        0xF19E => "ODX file identifier",
+        _ => return None,
+    })
+}
+
 /// A UDS request PDU.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UdsRequest {
