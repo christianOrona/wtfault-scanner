@@ -21,6 +21,7 @@ import { api, describeError } from "../api/client";
 import type { ChangePlan, FeatureView, FeaturesData, ToolResult } from "../api/types";
 import { ErrorBanner, FailedResult, Spinner, Warnings } from "./primitives";
 import { PaneIntro, useExplain } from "../explain";
+import { AsBuiltPanel } from "./AsBuiltPanel";
 
 const SUPPORT: Record<FeatureView["support"], { label: string; tone: string; blurb: string }> = {
   described_only: {
@@ -156,6 +157,11 @@ export function FeaturesPane({ connected }: { connected: boolean }) {
           <span>Connect to a vehicle to see which of these could apply to it.</span>
         </div>
       )}
+
+      {/* The manufacturer's own record of this vehicle, which covers every
+          module rather than only the ones awake on the bus. Placed above the
+          list because it changes what the list can answer. */}
+      <AsBuiltPanel connected={connected} />
 
       {features.map((f) => (
         <FeatureCard

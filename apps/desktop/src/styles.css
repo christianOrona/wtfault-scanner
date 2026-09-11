@@ -464,11 +464,24 @@ td.num { text-align: right; font-family: var(--mono); }
 }
 .term:hover, .term:focus-visible { text-decoration-color: var(--accent); }
 
-button.mini {
+button.mini, a.mini {
   padding: 2px 9px;
   font-size: 11px;
   border-radius: 5px;
 }
+
+/* A link that goes somewhere outside the app, sitting in a row of buttons.
+   Deliberately still an anchor: it navigates rather than acts, the destination
+   is visible on hover, and the app never fetches it on the person's behalf. */
+a.mini.button {
+  display: inline-block;
+  text-decoration: none;
+  color: var(--text);
+  background: var(--bg-raised);
+  border: 1px solid var(--line);
+  line-height: 1.5;
+}
+a.mini.button:hover { border-color: var(--accent-dim); background: #1c222c; }
 
 /* ---------- live values ---------- */
 

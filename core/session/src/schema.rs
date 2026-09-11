@@ -233,6 +233,40 @@ CREATE INDEX config_captures_by_session ON config_captures (session_id);
 ALTER TABLE modules ADD COLUMN request_address TEXT;
 "#,
     },
+    Migration {
+        version: 4,
+        name: "hold an imported as-built file against its vehicle",
+        sql: r#"
+-- ------------------------------------------------------------- as_built
+-- The manufacturer's record of how one vehicle was configured at the factory.
+--
+-- Keyed on the VIN and not on a session or a vehicle row, because that is what
+-- the file itself is keyed on. The file contains the VIN it was issued for,
+-- and that is the only thing that makes it safe to use: a file whose VIN does
+-- not match the vehicle in front of us describes a different vehicle, and
+-- applying it would silently hand somebody another truck's configuration.
+--
+-- One row per VIN. A newer file for the same vehicle replaces the older one:
+-- these are snapshots of the same factory record, not a history worth keeping,
+-- and the thing worth comparing an old capture against is the live vehicle.
+--
+-- `source` is how it arrived, so a wrong import is traceable to a file on
+-- somebody's disk rather than blamed on the app.
+--
+-- Never uploaded and never shared. This table is the whole of its life: it is
+-- one person's vehicle identity plus its configuration, and it does not leave
+-- the machine it was imported on.
+CREATE TABLE as_built (
+    vin         TEXT PRIMARY KEY,
+    imported_at TEXT NOT NULL,
+    source      TEXT,
+    -- The parsed AsBuiltData as JSON. The original XML is not kept: it is
+    -- large, it is the manufacturer's, and everything this app uses is in the
+    -- parse.
+    data        TEXT NOT NULL
+);
+"#,
+    },
 ];
 
 /// Bring `conn` up to the latest schema version, returning that version.

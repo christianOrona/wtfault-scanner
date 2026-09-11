@@ -56,6 +56,10 @@ pub fn router(state: AppState) -> Router {
         // ---- vehicle ----
         .route("/api/v1/vehicles/identify", post(identify_vehicle))
         .route("/api/v1/vehicles/identity", get(vehicle_identity))
+        .route(
+            "/api/v1/vehicles/as-built",
+            get(as_built_status).post(import_as_built).delete(forget_as_built),
+        )
         // ---- modules, live ----
         .route("/api/v1/modules", get(list_modules).post(scan_modules))
         .route("/api/v1/modules/{key}", get(module_identity))
@@ -411,6 +415,44 @@ async fn identify_vehicle(State(state): State<AppState>) -> ApiResult<Json<ToolR
 async fn vehicle_identity(State(state): State<AppState>) -> ApiResult<Json<Value>> {
     let identity = state.peek_service(|s| s.identity()).await?;
     Ok(Json(json!({ "identity": identity })))
+}
+
+/// Whether an as-built file is held for this vehicle, and how to get one.
+async fn as_built_status(State(state): State<AppState>) -> ApiResult<Json<ToolResult>> {
+    Ok(Json(state.with_service(|s| s.as_built_status("user:api")).await?))
+}
+
+/// An as-built file's contents, sent whole.
+///
+/// The file rather than a path: the server is not given a way to read arbitrary
+/// files off the machine it runs on, even though it happens to be the same
+/// machine today. The client opens what the person chose and posts the text.
+#[derive(Debug, Deserialize)]
+struct AsBuiltBody {
+    /// The file's contents.
+    text: String,
+    /// Where it came from, so a wrong import is traceable to a file.
+    #[serde(default)]
+    source: Option<String>,
+}
+
+/// Import an as-built file, if its VIN is the connected vehicle's.
+async fn import_as_built(
+    State(state): State<AppState>,
+    Json(body): Json<AsBuiltBody>,
+) -> ApiResult<Json<ToolResult>> {
+    Ok(Json(
+        state
+            .with_service(move |s| {
+                s.import_as_built(&body.text, body.source.as_deref(), "user:api")
+            })
+            .await?,
+    ))
+}
+
+/// Forget the as-built file held for this vehicle.
+async fn forget_as_built(State(state): State<AppState>) -> ApiResult<Json<ToolResult>> {
+    Ok(Json(state.with_service(|s| s.forget_as_built("user:api")).await?))
 }
 
 // ----------------------------------------------------------------- modules

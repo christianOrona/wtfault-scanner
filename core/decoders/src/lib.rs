@@ -27,6 +27,7 @@ pub mod profiles;
 pub mod signalset;
 pub mod vin;
 
+pub use asbuilt::{AsBuiltData, Block as AsBuiltBlock};
 pub use dtc::{DtcCatalog, DtcInfo, DtcSystem};
 pub use explain::{ExplainKind, Explanation, ExplanationCatalog};
 pub use expr::Formula;

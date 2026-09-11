@@ -737,3 +737,36 @@ export interface UpdateStatus {
   size: number | null;
   error: string | null;
 }
+
+/**
+ * Whether a manufacturer as-built file is held for this vehicle.
+ *
+ * The file records how one vehicle was configured at the factory, for *every*
+ * module on it — including the ones asleep right now and the ones on a bus the
+ * adapter cannot reach. On one 2019 F-250 that was 29 modules against six
+ * awake on the bus, which is why the app mentions it unprompted rather than
+ * waiting to be asked.
+ */
+export interface AsBuiltStatus {
+  held: boolean;
+  vin: string | null;
+  imported_at?: string | null;
+  source?: string | null;
+  modules_awake_on_the_bus?: number;
+  what_it_would_add?: string;
+  how_to_get_one?: string[];
+  what_it_is_not?: string;
+  /** Present instead of the above when no single VIN has been established. */
+  why_not_yet?: string;
+}
+
+/** The result of importing one. */
+export interface AsBuiltImport {
+  imported: boolean;
+  vin: string;
+  modules: number;
+  lines: number;
+  /** How many of those modules are not answering — the reason to have the file. */
+  modules_not_answering_on_the_bus: number;
+  source: string | null;
+}

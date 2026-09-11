@@ -14,7 +14,7 @@ import type {
   Health, IdentifyData, Measurement, ModuleIdentity, ModuleRecord, PortsResponse,
   SessionEvent, SessionSummary, SignalsData, ToolResult, ApiError, Dtc, MonitorTestsData,
   AgentStatus, InspectResponse, ChatResponse as AgentChatResponse,
-  ProvidersResponse, ProviderView, ProviderKindId, ProbeResult, Speed, ExplanationsResponse, FeaturesData, ChangePlan, ProfilesResponse, ClearResult, ReadinessData, ScanPurpose, Tone, FullScanData, ComparisonResponse, UpdateStatus,
+  ProvidersResponse, ProviderView, ProviderKindId, ProbeResult, Speed, ExplanationsResponse, FeaturesData, ChangePlan, ProfilesResponse, ClearResult, ReadinessData, ScanPurpose, Tone, FullScanData, ComparisonResponse, UpdateStatus, AsBuiltStatus, AsBuiltImport,
 } from "./types";
 
 /**
@@ -139,6 +139,17 @@ export const api = {
   disconnect: () => post<ToolResult<unknown>>("/adapter/disconnect"),
 
   identify: () => post<ToolResult<IdentifyData>>("/vehicles/identify"),
+
+  /** Whether an as-built file is held for this vehicle, and how to get one. */
+  asBuiltStatus: () => request<ToolResult<AsBuiltStatus>>("/vehicles/as-built"),
+  /** Import one. Refused unless its VIN is the connected vehicle's. */
+  importAsBuilt: (text: string, source?: string) =>
+    post<ToolResult<AsBuiltImport>>("/vehicles/as-built", { text, source }),
+  /** Forget it. It names somebody's vehicle, so removing it is one click. */
+  forgetAsBuilt: () =>
+    request<ToolResult<{ removed: boolean; vin: string }>>("/vehicles/as-built", {
+      method: "DELETE",
+    }),
 
   scanModules: () => post<ToolResult<{ modules: ModuleRecord[] }>>("/modules"),
   modules: () => request<{ modules: ModuleRecord[] }>("/modules"),

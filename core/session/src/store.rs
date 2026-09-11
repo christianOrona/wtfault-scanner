@@ -67,6 +67,23 @@ pub struct StoredCapture {
     pub capture: serde_json::Value,
 }
 
+/// One imported as-built file, as it was stored.
+///
+/// The data stays JSON here for the same reason a capture does: this crate
+/// keeps it and hands it back, and what the bytes mean belongs to the decoder
+/// that parsed them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredAsBuilt {
+    /// The VIN the file was issued for, upper case.
+    pub vin: String,
+    /// When it was imported, ISO 8601.
+    pub imported_at: String,
+    /// Where it came from, so a wrong import is traceable to a file.
+    pub source: Option<String>,
+    /// The parsed data, verbatim.
+    pub data: serde_json::Value,
+}
+
 /// Local diagnostic history.
 #[derive(Clone)]
 pub struct SessionStore {
@@ -600,6 +617,68 @@ impl SessionStore {
             out.push(r.map_err(storage)??);
         }
         Ok(out)
+    }
+
+    /// Keep an as-built file against the VIN it was issued for.
+    ///
+    /// Keyed on that VIN and nothing else, because that is what the file is
+    /// keyed on and what makes it safe to use later. A second import for the
+    /// same vehicle replaces the first: these are snapshots of one unchanging
+    /// factory record, and keeping a history of downloads of the same document
+    /// would be filing cabinet, not evidence.
+    ///
+    /// Caller's job to have checked the VIN against the connected vehicle
+    /// first — this stores what it is given.
+    pub fn store_as_built(
+        &self,
+        vin: &str,
+        source: Option<&str>,
+        data_json: &str,
+    ) -> AimResult<()> {
+        let conn = self.lock()?;
+        conn.execute(
+            "INSERT INTO as_built (vin, imported_at, source, data)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(vin) DO UPDATE SET
+                 imported_at = excluded.imported_at,
+                 source = excluded.source,
+                 data = excluded.data",
+            params![vin.to_ascii_uppercase(), aim_types::now().to_rfc3339(), source, data_json],
+        )
+        .map_err(storage)?;
+        Ok(())
+    }
+
+    /// The as-built file held for one VIN, when there is one.
+    pub fn as_built(&self, vin: &str) -> AimResult<Option<StoredAsBuilt>> {
+        let conn = self.lock()?;
+        let row: Option<(String, String, Option<String>, String)> = conn
+            .query_row(
+                "SELECT vin, imported_at, source, data FROM as_built WHERE vin = ?1",
+                params![vin.to_ascii_uppercase()],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .optional()
+            .map_err(storage)?;
+
+        let Some((vin, imported_at, source, data)) = row else { return Ok(None) };
+        let data = serde_json::from_str(&data).map_err(|e| {
+            AimError::new(ErrorCode::StorageError, format!("stored as-built is undecodable: {e}"))
+        })?;
+        Ok(Some(StoredAsBuilt { vin, imported_at, source, data }))
+    }
+
+    /// Forget the as-built file held for one VIN.
+    ///
+    /// Somebody's vehicle identity and configuration live in that row, so
+    /// removing it has to be as easy as adding it. Returns whether one was
+    /// there.
+    pub fn forget_as_built(&self, vin: &str) -> AimResult<bool> {
+        let conn = self.lock()?;
+        let n = conn
+            .execute("DELETE FROM as_built WHERE vin = ?1", params![vin.to_ascii_uppercase()])
+            .map_err(storage)?;
+        Ok(n > 0)
     }
 
     /// Connections recorded for a session, oldest first.

@@ -53,7 +53,7 @@
 use std::collections::BTreeMap;
 
 /// One vehicle's factory configuration.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct AsBuiltData {
     /// The VIN the file was issued for.
     pub vin: Option<String>,
@@ -62,7 +62,7 @@ pub struct AsBuiltData {
 }
 
 /// One configuration block: the data bytes of its lines, joined in order.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Block {
     /// Block number, as in `726-15`.
     pub number: u16,

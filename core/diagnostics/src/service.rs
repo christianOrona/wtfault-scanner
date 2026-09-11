@@ -84,6 +84,8 @@ pub mod capabilities {
     pub const WRITE_FEATURE: &str = "config.write_feature";
     /// Clear DTCs. L1, requiring an explicit confirmation.
     pub const CLEAR_DTCS: &str = "obd2.clear_dtcs";
+    /// Import a manufacturer as-built file for the connected vehicle. L0.
+    pub const IMPORT_AS_BUILT: &str = "config.import_as_built";
 }
 
 /// PIDs a freeze frame is worth reading, in the order a technician wants them.
@@ -422,6 +424,18 @@ impl DiagnosticService {
             identity.record_supported_parameters(module_key, pids);
         }
         identity
+    }
+
+    /// The as-built file held for the connected vehicle, when there is one.
+    ///
+    /// Loaded from storage on each call rather than cached: it is imported
+    /// mid-session, and a cache that missed the import would be quietly wrong
+    /// for the rest of the session.
+    pub fn as_built(&self) -> Option<aim_decoders::AsBuiltData> {
+        let identity = self.identity();
+        let vin = identity.settled("vin")?;
+        let stored = self.store.as_built(vin).ok().flatten()?;
+        serde_json::from_value(stored.data).ok()
     }
 
     /// What the knowledge providers are told about this vehicle.
@@ -1456,6 +1470,258 @@ impl DiagnosticService {
         }
     }
 
+    // ------------------------------------------------------------- as-built
+
+    /// Whether an as-built file would tell us anything, and how to get one.
+    ///
+    /// # Why this is worth saying unprompted
+    ///
+    /// An as-built file covers the **whole vehicle**. Measured on a 2019 F-250:
+    /// the file held 29 modules against the six that were awake on the bus.
+    /// Configuration for a module that is asleep, or on a bus this adapter
+    /// cannot reach, is in it regardless — and no amount of scanning gets at
+    /// that.
+    ///
+    /// The friction is not the account, which is free. It is knowing the file
+    /// exists at all. So this says so, with the VIN ready to paste.
+    ///
+    /// **Not automated retrieval.** Measured 2026-09-10: `GET /AsBuilt`
+    /// answers `302` to a login page, for everybody, so an "try online first"
+    /// step would fail for every user and cost only latency. Getting past it
+    /// would mean handling somebody's manufacturer credentials, which this
+    /// project does not do, and automated retrieval from a login-gated service
+    /// is against its terms besides. Notice, guide, import. Not scrape.
+    ///
+    /// Touches nothing.
+    pub fn as_built_status(&mut self, initiator: &str) -> ToolResult {
+        let t0 = Instant::now();
+        self.record_invocation("as_built_status", initiator, serde_json::json!({}));
+        let outcome = self
+            .authorize(capabilities::IMPORT_AS_BUILT, initiator, None)
+            .map(|_| self.as_built_status_inner());
+        self.finish("as_built_status", capabilities::IMPORT_AS_BUILT, t0, outcome)
+    }
+
+    fn as_built_status_inner(&self) -> Payload {
+        let identity = self.identity();
+        let vin = identity.settled("vin").map(String::from);
+
+        let Some(vin) = vin else {
+            return Payload {
+                data: Some(serde_json::json!({
+                    "held": false,
+                    "vin": serde_json::Value::Null,
+                    "why_not_yet":
+                        "An as-built file is issued per vehicle and found by VIN, and no single \
+                         VIN has been established for this vehicle yet.",
+                })),
+                warnings: vec![Warning::info(
+                    "vin_not_established",
+                    if identity.contested().iter().any(|f| f.field == "vin") {
+                        "Two sources gave different VINs for this vehicle, so there is no way to \
+                         know which file would be the right one. That disagreement is worth \
+                         resolving before importing anything."
+                    } else {
+                        "Identify the vehicle first. The VIN is what an as-built file is filed \
+                         under."
+                    },
+                )],
+                ..Default::default()
+            };
+        };
+
+        let held = self.store.as_built(&vin).ok().flatten();
+        let modules_awake = self.store.modules(&self.session.id).map(|m| m.len()).unwrap_or(0);
+
+        Payload {
+            data: Some(serde_json::json!({
+                "held": held.is_some(),
+                "vin": vin,
+                "imported_at": held.as_ref().map(|h| h.imported_at.clone()),
+                "source": held.as_ref().and_then(|h| h.source.clone()),
+                "modules_awake_on_the_bus": modules_awake,
+                "what_it_would_add":
+                    "The manufacturer's record of how this exact vehicle was configured at the \
+                     factory, for every module on it - including the ones asleep right now and \
+                     the ones on a bus this adapter cannot reach. On one 2019 F-250 that was 29 \
+                     modules against six awake on the bus.",
+                "how_to_get_one": [
+                    "Ford publishes it per VIN on the Motorcraft service site. The account is \
+                     free; knowing the file exists is the hard part.",
+                    format!("Search for this VIN: {vin}"),
+                    "Download the .ab file and import it below. It stays on this machine.",
+                ],
+                "what_it_is_not":
+                    "A snapshot of how the vehicle left the factory, not how it is now. Anything \
+                     a dealer or a previous owner changed since is not in it - which is exactly \
+                     what makes comparing it against a live read worth doing.",
+            })),
+            warnings: match held {
+                Some(_) => Vec::new(),
+                None => vec![Warning::info(
+                    "as_built_not_imported",
+                    format!(
+                        "No as-built file has been imported for {vin}. Without one, this app \
+                         only knows about the {modules_awake} module(s) currently answering on \
+                         the bus."
+                    ),
+                )],
+            },
+            ..Default::default()
+        }
+    }
+
+    /// Import an as-built file for the connected vehicle.
+    ///
+    /// `text` is the file's contents; `source` names where it came from so a
+    /// wrong import is traceable to a file rather than blamed on the app.
+    ///
+    /// # The VIN check is the point
+    ///
+    /// The file contains the VIN it was issued for, and this refuses any file
+    /// whose VIN is not the connected vehicle's. Importing somebody else's
+    /// as-built would silently hand you another vehicle's configuration — with
+    /// nothing about it looking wrong, because it is a perfectly valid file
+    /// describing a perfectly real truck.
+    ///
+    /// Refusing is not a judgement about the file. It is a statement that this
+    /// app cannot tell what that file means for *this* vehicle, which is true.
+    ///
+    /// Stored locally against the VIN and nothing else. Never uploaded, never
+    /// shared: it is one person's vehicle identity plus its configuration.
+    pub fn import_as_built(
+        &mut self,
+        text: &str,
+        source: Option<&str>,
+        initiator: &str,
+    ) -> ToolResult {
+        let t0 = Instant::now();
+        self.record_invocation(
+            "import_as_built",
+            initiator,
+            serde_json::json!({ "bytes": text.len(), "source": source }),
+        );
+        let outcome = self
+            .authorize(capabilities::IMPORT_AS_BUILT, initiator, None)
+            .and_then(|_| self.import_as_built_inner(text, source));
+        self.finish("import_as_built", capabilities::IMPORT_AS_BUILT, t0, outcome)
+    }
+
+    fn import_as_built_inner(&mut self, text: &str, source: Option<&str>) -> AimResult<Payload> {
+        let data = aim_decoders::AsBuiltData::parse(text).map_err(|e| {
+            AimError::new(
+                ErrorCode::BadRequest,
+                format!(
+                    "this does not look like an as-built file: {e}. Ford's is XML with elements \
+                     labelled like \"726-15-01\"."
+                ),
+            )
+        })?;
+
+        let identity = self.identity();
+        let Some(vehicle_vin) = identity.settled("vin") else {
+            return Err(AimError::new(
+                ErrorCode::PreconditionFailed,
+                "no single VIN has been established for the connected vehicle, so there is \
+                 nothing to check this file against. An as-built file belongs to one vehicle and \
+                 is only safe to use on that one.",
+            ));
+        };
+
+        let Some(file_vin) = data.vin.as_deref() else {
+            return Err(AimError::new(
+                ErrorCode::BadRequest,
+                "this file carries no VIN, so there is no way to tell which vehicle it \
+                 describes. A genuine as-built file names the vehicle it was issued for.",
+            ));
+        };
+
+        if !file_vin.eq_ignore_ascii_case(vehicle_vin) {
+            return Err(AimError::new(
+                ErrorCode::PreconditionFailed,
+                format!(
+                    "this file was issued for {file_vin} and the connected vehicle is \
+                     {vehicle_vin}. It is not being imported. Nothing is wrong with the file - it \
+                     describes a real vehicle correctly, just not this one, and its values would \
+                     be another truck's configuration presented as yours."
+                ),
+            ));
+        }
+
+        let json = serde_json::to_string(&data).map_err(|e| {
+            AimError::new(ErrorCode::StorageError, format!("could not store the parsed file: {e}"))
+        })?;
+        self.store.store_as_built(file_vin, source, &json)?;
+
+        // Which of these the bus could have told us, and which it could not.
+        // The second number is the whole argument for importing the file.
+        let on_the_bus: Vec<String> = self
+            .store
+            .modules(&self.session.id)
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|m| m.request_address.clone().or_else(|| Some(m.address.clone())))
+            .collect();
+        let unreachable = data
+            .modules
+            .keys()
+            .filter(|addr| !on_the_bus.iter().any(|m| m.eq_ignore_ascii_case(addr)))
+            .count();
+
+        Ok(Payload {
+            data: Some(serde_json::json!({
+                "imported": true,
+                "vin": file_vin,
+                "modules": data.modules.len(),
+                "lines": data.line_count(),
+                "modules_not_answering_on_the_bus": unreachable,
+                "source": source,
+            })),
+            warnings: vec![
+                Warning::info(
+                    "as_built_is_a_factory_snapshot",
+                    "This records how the vehicle left the factory. Anything a dealer, a \
+                     previous owner or this app has changed since is not in it - so where it \
+                     disagrees with a live read, the live read is what the vehicle is now and \
+                     the difference is the history.",
+                ),
+                Warning::info(
+                    "as_built_stays_here",
+                    "This file names your vehicle, so it is stored on this machine only. It is \
+                     never uploaded, and it will never be included in a profile shared with \
+                     anybody else.",
+                ),
+            ],
+            ..Default::default()
+        })
+    }
+
+    /// Forget the as-built file held for the connected vehicle.
+    ///
+    /// As easy as importing one, deliberately: it is somebody's vehicle
+    /// identity and its configuration, and data you cannot remove is data you
+    /// did not really choose to keep.
+    pub fn forget_as_built(&mut self, initiator: &str) -> ToolResult {
+        let t0 = Instant::now();
+        self.record_invocation("forget_as_built", initiator, serde_json::json!({}));
+        let outcome =
+            self.authorize(capabilities::IMPORT_AS_BUILT, initiator, None).and_then(|_| {
+                let identity = self.identity();
+                let Some(vin) = identity.settled("vin") else {
+                    return Err(AimError::new(
+                        ErrorCode::PreconditionFailed,
+                        "no VIN has been established, so there is nothing to forget.",
+                    ));
+                };
+                let removed = self.store.forget_as_built(vin)?;
+                Ok(Payload {
+                    data: Some(serde_json::json!({ "removed": removed, "vin": vin })),
+                    ..Default::default()
+                })
+            });
+        self.finish("forget_as_built", capabilities::IMPORT_AS_BUILT, t0, outcome)
+    }
+
     /// Evaluate a proposed configuration change without performing it.
     ///
     /// Read-only by construction: it inspects catalogue data and what has
@@ -1615,7 +1881,30 @@ impl DiagnosticService {
 
         let addr = RequestTarget::Physical(target.module.clone());
         let request = aim_protocols::UdsRequest::read_data_by_identifier(target.did).to_bytes();
-        let record = self.read_did(&request, &addr, Duration::from_millis(2000), target.did)?;
+        // The live read is the answer whenever there is one. When there is not
+        // — the module is asleep, or sits on a bus this adapter cannot reach —
+        // an imported as-built file may still hold the record, because the file
+        // covers the whole vehicle rather than whatever happens to be awake.
+        // Measured on a 2019 F-250: 29 modules in the file, six on the bus.
+        //
+        // Reported as what it is. The factory value is not the current value,
+        // and a person told "AutoLock is off" when the app never spoke to the
+        // door module has been told something it does not know.
+        let (record, from_the_file) =
+            match self.read_did(&request, &addr, Duration::from_millis(2000), target.did) {
+                Ok(record) => (record, false),
+                Err(live_error) => {
+                    let fallback = self.as_built().and_then(|file| {
+                        let block = aim_decoders::AsBuiltData::block_for_did(target.did)?;
+                        let bytes = file.module(&target.module)?.get(&block)?.bytes.clone();
+                        Some(bytes)
+                    });
+                    match fallback {
+                        Some(bytes) => (bytes, true),
+                        None => return Err(live_error),
+                    }
+                }
+            };
         let state = target.current(&record);
 
         let mut warnings = Vec::new();
@@ -1669,6 +1958,19 @@ impl DiagnosticService {
                 "writable": false,
             })
         });
+        if from_the_file {
+            warnings.push(Warning::caution(
+                "read_from_the_as_built_file",
+                format!(
+                    "The module at {} did not answer, so this came from the imported as-built \
+                     file instead. That is how the vehicle left the factory, not how it is now: \
+                     anything changed since - by a dealer, a previous owner, or this app - will \
+                     not show. It is worth having because the file covers modules that are \
+                     asleep or on a bus this adapter cannot reach; it is not a live reading.",
+                    target.module
+                ),
+            ));
+        }
         if from_a_similar_vehicle {
             warnings.push(Warning::caution(
                 "mapping_from_a_similar_vehicle",
@@ -1697,9 +1999,17 @@ impl DiagnosticService {
                 // A candidate is never writable on this basis, whatever the
                 // feature's own evidence says: that evidence is about a
                 // different vehicle.
-                "writable": writable && !from_a_similar_vehicle,
+                "writable": writable && !from_a_similar_vehicle && !from_the_file,
                 "measured_on_this_vehicle": !from_a_similar_vehicle,
                 "check_this": prediction,
+                // A value from the file is the factory's, and a module that
+                // would not answer a read is not one to write either.
+                "read_from_the_as_built_file": from_the_file,
+                "authority": if from_the_file {
+                    Authority::OwnerSuppliedOemData.as_str()
+                } else {
+                    Authority::MeasuredThisSession.as_str()
+                },
             })),
             warnings,
             ..Default::default()

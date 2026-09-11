@@ -250,6 +250,16 @@ impl CapabilityRegistry {
                 "config.read_feature",
                 "Read the current setting of one configurable feature",
             ),
+            // Reading a file off the user's own disk. It touches no vehicle,
+            // and it is registered here anyway so that it is recorded and
+            // gated like everything else: an import decides what the app
+            // believes about a vehicle's configuration, and something that
+            // consequential should not be the one operation with no audit
+            // trail.
+            Capability::read_only(
+                "config.import_as_built",
+                "Import a manufacturer as-built file for the connected vehicle",
+            ),
             // Previewing a change is also read-only: it evaluates every check
             // and reports what *would* happen without touching the vehicle.
             // Deliberately separate from the write, so the UI can show a person

@@ -1187,3 +1187,137 @@ fn a_candidate_is_never_writable_however_confident_it_looks() {
     // Not a permanent refusal - confirming it on this vehicle is what clears it.
     assert_eq!(c["blocking_by_design"], false);
 }
+
+// --------------------------------------------------------------- as-built
+
+/// A minimal file for the simulated vehicle. `1FT7W2BT6KEC00001` is the VIN
+/// the virtual truck reports, so this one belongs to it.
+fn as_built_for(vin: &str) -> String {
+    format!(
+        "<VEHICLE><VIN>{vin}</VIN>\
+         <DATA LABEL=\"7A0-02-01\"><CODE>0011</CODE><CODE>22b3</CODE><CODE>4455</CODE>\
+         <CODE>00</CODE></DATA>\
+         <DATA LABEL=\"9990-02-01\"><CODE>0102</CODE><CODE>0304</CODE></DATA></VEHICLE>"
+    )
+}
+
+/// The check that makes the whole feature safe. A file is a perfectly valid
+/// description of a perfectly real truck — just not this one — and importing
+/// it would hand somebody another vehicle's configuration with nothing about
+/// it looking wrong.
+#[test]
+fn an_as_built_file_for_another_vehicle_is_refused() {
+    let (mut service, _) = connected(ScenarioId::Healthy);
+    assert!(service.identify_vehicle(USER).success);
+
+    let r = service.import_as_built(&as_built_for("1FT7W2BT6KEC99999"), Some("test.ab"), USER);
+    assert!(!r.success, "a file for a different VIN must not be imported");
+    let message = r.error.as_ref().unwrap().message.to_lowercase();
+    assert!(message.contains("1ft7w2bt6kec99999"), "{message}");
+    // And it says the file is fine, which it is. The problem is the pairing.
+    assert!(message.contains("not this one"), "{message}");
+}
+
+/// And its own vehicle's file goes in.
+#[test]
+fn an_as_built_file_for_this_vehicle_is_imported_and_held() {
+    let (mut service, _) = connected(ScenarioId::Healthy);
+    assert!(service.identify_vehicle(USER).success);
+
+    let r =
+        service.import_as_built(&as_built_for(aim_simulator::SIMULATED_VIN), Some("test.ab"), USER);
+    assert!(r.success, "import failed: {:?}", r.error);
+    let data = r.data.as_ref().unwrap();
+    assert_eq!(data["vin"], aim_simulator::SIMULATED_VIN);
+    assert_eq!(data["modules"], 2);
+
+    // The argument for having the file at all: it covers modules that are not
+    // answering. 9990 is in the file and on no bus.
+    assert_eq!(data["modules_not_answering_on_the_bus"], 2);
+
+    let status = service.as_built_status(USER);
+    assert_eq!(status.data.as_ref().unwrap()["held"], true);
+
+    // As easy to remove as to add. It names somebody's vehicle.
+    assert!(service.forget_as_built(USER).success);
+    assert_eq!(service.as_built_status(USER).data.as_ref().unwrap()["held"], false);
+}
+
+/// Unprompted, and specific. Somebody who has never heard of an as-built file
+/// is told it exists, what it would add, and that their VIN is what finds it.
+#[test]
+fn a_vehicle_with_no_file_is_told_what_it_is_missing() {
+    let (mut service, _) = connected(ScenarioId::Healthy);
+    assert!(service.identify_vehicle(USER).success);
+
+    let r = service.as_built_status(USER);
+    assert!(r.success);
+    let data = r.data.as_ref().unwrap();
+    assert_eq!(data["held"], false);
+    assert_eq!(data["vin"], aim_simulator::SIMULATED_VIN);
+    assert!(data["what_it_would_add"].as_str().unwrap().contains("asleep"));
+    // The VIN is in the instructions, ready to paste. The friction is knowing
+    // the file exists, not the free account.
+    let steps = data["how_to_get_one"].as_array().unwrap();
+    assert!(steps.iter().any(|s| s.as_str().unwrap().contains(aim_simulator::SIMULATED_VIN)));
+
+    let codes: Vec<&str> = r.warnings.iter().map(|w| w.code.as_str()).collect();
+    assert!(codes.contains(&"as_built_not_imported"), "{codes:?}");
+}
+
+/// Before a VIN is established there is nothing to check a file against, and
+/// the app says that rather than importing hopefully.
+#[test]
+fn nothing_can_be_imported_before_the_vehicle_is_identified() {
+    let (mut service, _) = connected(ScenarioId::Healthy);
+    let r = service.import_as_built(&as_built_for(aim_simulator::SIMULATED_VIN), None, USER);
+    assert!(!r.success);
+    assert!(r.error.as_ref().unwrap().message.contains("no single VIN"));
+}
+
+/// A file covering a module that is asleep answers for it, and says plainly
+/// that it is the factory value rather than a live reading.
+#[test]
+fn a_module_that_does_not_answer_can_still_be_read_from_the_file() {
+    // A mapping pointing at a module that is not on the simulated bus at all.
+    let profile = r#"
+version: 1
+profile: test
+features:
+  - id: absent_module_setting
+    name: "A setting in a module that is asleep"
+    risk: convenience
+    easy: "Held in a module that is not answering."
+    technical: "Byte 3 of DE01 on the module at 9990."
+    modules: ["9990"]
+    verification: verified
+    source: "measured on the simulated vehicle"
+    mapping:
+      kind: data_identifier_bits
+      module: "9990"
+      did: 0xDE01
+      byte: 1
+      mask: 0x02
+      on: 0x02
+      off: 0x00
+"#;
+    let (mut service, _dir) = service_with_profile(profile);
+    assert!(service.identify_vehicle(USER).success);
+    assert!(
+        service
+            .import_as_built(&as_built_for(aim_simulator::SIMULATED_VIN), Some("test.ab"), USER)
+            .success
+    );
+
+    let r = service.read_feature("absent_module_setting", USER);
+    assert!(r.success, "the file should answer where the bus cannot: {:?}", r.error);
+    let data = r.data.as_ref().unwrap();
+    assert_eq!(data["state"], true, "decoded from the factory record, not guessed");
+    assert_eq!(data["read_from_the_as_built_file"], true);
+    assert_eq!(data["authority"], "owner_supplied_oem_data");
+    // A module that will not answer a read is not one to write either.
+    assert_eq!(data["writable"], false);
+
+    let codes: Vec<&str> = r.warnings.iter().map(|w| w.code.as_str()).collect();
+    assert!(codes.contains(&"read_from_the_as_built_file"), "{codes:?}");
+}
