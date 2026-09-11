@@ -166,7 +166,7 @@ pub fn run() {
             .and_then(|p| p.parent())
             .map(|dir| dir.join("providers.json"))
             .unwrap_or_else(|| std::path::PathBuf::from("providers.json")),
-        profiles_dir: profiles_dir(),
+        profiles_dir: profile_dir(),
     };
 
     let state = AppState::new(store, decoders, config);
