@@ -25,7 +25,15 @@ use std::time::Duration;
 const REPO: &str = "christianOrona/wtfault-scanner";
 
 /// Hosts a release asset may be served from.
-const ALLOWED_HOSTS: [&str; 2] = ["api.github.com", "objects.githubusercontent.com"];
+///
+/// `github.com` is the one that matters and was the one missing. Every asset
+/// GitHub reports carries a `browser_download_url` of the form
+/// `https://github.com/{owner}/{repo}/releases/download/{tag}/{name}`, which
+/// then redirects to the CDN — so an allowlist of CDN hosts alone rejects
+/// every real download while passing a test suite full of CDN URLs. Measured
+/// on 2026-09-11: the 0.3.1 banner offered 0.3.2, the person pressed the
+/// button, and the app refused its own installer.
+const ALLOWED_HOSTS: [&str; 3] = ["github.com", "api.github.com", "objects.githubusercontent.com"];
 
 /// The version this build reports.
 pub fn current_version() -> &'static str {
@@ -124,6 +132,15 @@ fn host_allowed(url: &str) -> bool {
         None => return false,
     };
     let host = rest.split('/').next().unwrap_or("");
+
+    // On `github.com` the host alone is not enough. Anyone can publish a
+    // release on github.com, so a bare host check there would accept an
+    // installer from any repository on the site. The path has to be this
+    // project's own releases — which costs nothing, because that is the only
+    // shape GitHub ever produces for our assets.
+    if host == "github.com" {
+        return url.starts_with(&format!("https://github.com/{REPO}/releases/download/"));
+    }
     ALLOWED_HOSTS.contains(&host) || host.ends_with(".githubusercontent.com")
 }
 
@@ -288,6 +305,37 @@ mod tests {
         assert!(!host_allowed("https://githubusercontent.com.evil.com/x"));
     }
 
+    /// The URL GitHub actually puts in `browser_download_url`.
+    ///
+    /// This is the one the allowlist rejected. Every test above used a CDN
+    /// host, which is where a download *ends up* after the redirect — and none
+    /// used the `github.com` address every asset actually starts from, so the
+    /// suite was green while no update could ever install. Built from `REPO`
+    /// rather than pasted, so it cannot drift away from the real thing.
+    #[test]
+    fn the_url_github_really_publishes_is_accepted() {
+        let real = format!(
+            "https://github.com/{REPO}/releases/download/v0.3.2/WTFault.Scanner_0.3.2_x64-setup.exe"
+        );
+        assert!(host_allowed(&real), "the updater must accept its own installer: {real}");
+    }
+
+    /// And `github.com` is not a blank cheque. Anyone can publish a release
+    /// there, so the host alone would accept an installer from any repository
+    /// on the site.
+    #[test]
+    fn another_projects_release_on_github_is_still_refused() {
+        assert!(!host_allowed(
+            "https://github.com/someone-else/malware/releases/download/v1/setup.exe"
+        ));
+        // Including one that merely starts with our owner's name.
+        assert!(!host_allowed(
+            "https://github.com/christianOrona-evil/x/releases/download/v1/setup.exe"
+        ));
+        // And a path that reaches our repo's name from the wrong place.
+        assert!(!host_allowed("https://github.com/evil/wtfault-scanner-setup.exe"));
+    }
+
     #[test]
     fn the_windows_installer_is_preferred_over_the_msi() {
         let assets = vec![
@@ -378,5 +426,4 @@ mod release_ordering {
             env!("CARGO_PKG_VERSION")
         );
     }
-
 }
