@@ -350,10 +350,25 @@ faults in the cars:
   the module, having the owner change the setting from the dash, capturing
   again, and diffing — then the same in reverse. One bit moved each time, three
   other body modules showed nothing.
-- **A cheap adapter cannot write.** A 13-byte configuration write comes back `?`
-  from the adapter in 11 ms — it never reaches the vehicle — while a 4-byte one
-  is answered properly by the module. Multi-frame transmit is the limit, and it
-  explains "I can read fine but writing never works" without blaming the car.
+- **A cheap adapter cannot write, and a good one needs asking differently.** A
+  13-byte configuration write comes back `?` from a clone in 11 ms — it never
+  reaches the vehicle — while a 4-byte one is answered properly. Multi-frame
+  transmit is the limit, and it explains "I can read fine but writing never
+  works" without blaming the car. But the ELM327 *request form* caps at seven
+  data bytes on every device ever made, STN firmware included: an OBDLink MX+
+  also answers `?` to that form, and segments the same request perfectly
+  through its own `STPX`. Testing one form and concluding "cannot write" told
+  the owner of a capable adapter to go and buy the adapter they already had.
+- **A write can succeed and change nothing until the key is cycled.** Measured
+  on the F-250: the module accepted the write, the read-back returned the new
+  bytes, nothing reverted — and the dash menu still showed the old setting.
+  Every machine-checkable signal said it had worked. It took an ignition cycle
+  for the module to latch it, and one key cycle stood between a correct mapping
+  and it being filed as wrong.
+- **A device's banner is a compatibility story, not an identity.** The MX+
+  reports `ELM327 v1.4b` and `OBD SOLUTIONS LLC`; `STI` answers `STN2255
+  v5.12.4` and `STDI` answers `OBDLink MX+ r3.1.3`. Matching on names in a
+  banner fails on the exact hardware the match was written for.
 - **Bluetooth pairing creates two COM ports** and only one talks to the adapter.
   Both look identical in a port list, and picking wrong looks exactly like dead
   hardware.

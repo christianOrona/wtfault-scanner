@@ -3,6 +3,77 @@
 Notable changes, newest first. Versions follow [semantic versioning](https://semver.org),
 with the caveat that everything below 1.0 is allowed to move.
 
+## [0.3.2] — 2026-09-11
+
+The release where writes actually reached a vehicle.
+
+### The headline
+
+- **First configuration write to a real vehicle.** AutoLock on a 2019 F-250,
+  `DE0E` byte 4 `01` -> `00`, read back and confirmed by the owner against the
+  dash menu. It took four fixes to get there, and none of them would have
+  worked alone.
+
+- **The part worth remembering.** Immediately after the write the dash still
+  showed the old value. Every machine-checkable signal said it had worked — the
+  module accepted it, the read-back returned the new bytes, nothing reverted —
+  and the vehicle behaved as though nothing had changed. It took an ignition
+  cycle for the module to latch it. One key cycle away from being filed as "the
+  mapping is wrong". Now recorded in the profile, pinned by a test, and warned
+  about on every successful write.
+
+### Adapters
+
+- **STN firmware is recognised by asking, not by matching a name.** `STI` was
+  gated on the banner or vendor containing "STN", "OBDLINK" or "SCANTOOL". An
+  OBDLink MX+ answers `ELM327 v1.4b` and `OBD SOLUTIONS LLC` — so the flagship
+  STN device failed all four tests and was told, in its own capability caveats,
+  to go and buy an OBDLink MX+.
+- **Long requests go through `STPX`.** The old probe tested one transmit form of
+  two; the ELM request form caps at seven data bytes on *every* device, STN
+  included. An adapter that segments perfectly well was recorded as unable to
+  write, which is the single capability gating configuration changes.
+- **Adapter fitness as data**, including whether an absence of findings means
+  anything. A clean scan through a failing link is the link's silence wearing
+  the vehicle's clothes, and the agent is now told so.
+- An interrupted command is re-sent rather than triggering a full warm start.
+  Answering #11 from the session database: all 611 `stopped` responses were in
+  one session, all on `ATSH` during an address sweep, all inside 50 ms.
+
+### Knowing what vehicle this is
+
+- **One `VehicleIdentity`** assembled from evidence that was previously
+  collected and discarded. Holds candidates rather than answers, so two sources
+  disagreeing stay visible instead of one silently winning.
+- **One interface for every source of vehicle knowledge**, ordered by authority
+  and never merged. Licence travels with the answer.
+- **As-built import**, VIN-checked. A file for another vehicle is refused with
+  both VINs named.
+- **Measured mappings are offered to similar vehicles** as candidates to check
+  by prediction, and refused a write until confirmed here.
+
+### Safety and privacy
+
+- **API keys moved to the OS credential store.** Migrated from the plaintext
+  file and then removed from it — a migration that left a copy behind would have
+  improved nothing while looking like it had.
+- **The VIN can be withheld from models outside your control.** The distinction
+  is whose machine, not local versus hosted.
+- **Imported profiles arrive unverified**, whatever the file claims about
+  itself.
+- **Guided procedures** that put the vehicle in a state and measure it there,
+  with anything needing road speed described and refused rather than walked
+  through.
+
+### Interface
+
+- A splash that closes itself, reports the boot step actually running, and
+  carries the project links.
+- "Where is it?" on a trouble code: a zone on a generic silhouette, captioned as
+  what it is.
+- The assistant can ask you questions with buttons rather than burying them in a
+  paragraph.
+
 ## [0.3.1] — 2026-09-11
 
 ### Fixed

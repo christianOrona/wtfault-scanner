@@ -6,8 +6,8 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-aim-protocols = { version = "0.3.1", path = "../protocols" }
-aim-types = { version = "0.3.1", path = "../types" }
+aim-protocols = { version = "0.3.2", path = "../protocols" }
+aim-types = { version = "0.3.2", path = "../types" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 serde_yaml_ng = "0.10.0"
