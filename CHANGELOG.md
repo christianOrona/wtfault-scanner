@@ -3,6 +3,22 @@
 Notable changes, newest first. Versions follow [semantic versioning](https://semver.org),
 with the caveat that everything below 1.0 is allowed to move.
 
+## [0.3.7] — 2026-09-11
+
+### Changed
+
+- **The splash spinner turns the whole time the card is up.** It used to stop
+  and fill once the boot steps finished, which on a fast machine is nearly
+  immediately — so the ring was a static dot for almost the entire time anyone
+  was looking at it. The card has a floor on how long it stays; the indicator
+  now matches it.
+
+- The corner no longer reads "Ready". It says what is happening, or
+  "Finishing up…" once the steps are through.
+
+The card's timing is unchanged and is worth stating plainly: it stays up for at
+least eight seconds, and longer if the core is still starting. Brand flourish.
+
 ## [0.3.6] — 2026-09-11
 
 ### Changed

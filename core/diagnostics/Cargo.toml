@@ -6,19 +6,19 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-aim-adapter = { version = "0.3.6", path = "../adapter", default-features = false }
-aim-decoders = { version = "0.3.6", path = "../decoders" }
-aim-protocols = { version = "0.3.6", path = "../protocols" }
-aim-safety = { version = "0.3.6", path = "../safety" }
-aim-session = { version = "0.3.6", path = "../session" }
-aim-transport = { version = "0.3.6", path = "../transport", default-features = false }
-aim-types = { version = "0.3.6", path = "../types" }
+aim-adapter = { version = "0.3.7", path = "../adapter", default-features = false }
+aim-decoders = { version = "0.3.7", path = "../decoders" }
+aim-protocols = { version = "0.3.7", path = "../protocols" }
+aim-safety = { version = "0.3.7", path = "../safety" }
+aim-session = { version = "0.3.7", path = "../session" }
+aim-transport = { version = "0.3.7", path = "../transport", default-features = false }
+aim-types = { version = "0.3.7", path = "../types" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 tracing = "0.1.44"
 
 [dev-dependencies]
-aim-simulator = { version = "0.3.6", path = "../../simulator" }
+aim-simulator = { version = "0.3.7", path = "../../simulator" }
 tempfile = "3.24.0"
 
 [features]

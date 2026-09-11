@@ -635,14 +635,6 @@ a.mini.button:hover { border-color: var(--accent-dim); background: #1c222c; }
   animation: splash-spin 700ms linear infinite;
 }
 .splash-ring.stalled { border-color: var(--caution); border-top-color: transparent; }
-/* Everything finished, and the card is only waiting out its minimum time. A
-   ring still turning next to the word "Ready" claims work that is over. */
-.splash-ring.done {
-  animation: none;
-  border-color: var(--accent);
-  background: var(--accent);
-  box-shadow: 0 0 10px var(--accent-glow);
-}
 @keyframes splash-spin {
   to { transform: rotate(360deg); }
 }

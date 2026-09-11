@@ -6,12 +6,12 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-aim-decoders = { version = "0.3.6", path = "../core/decoders" }
-aim-protocols = { version = "0.3.6", path = "../core/protocols" }
-aim-transport = { version = "0.3.6", path = "../core/transport", default-features = false }
-aim-types = { version = "0.3.6", path = "../core/types" }
+aim-decoders = { version = "0.3.7", path = "../core/decoders" }
+aim-protocols = { version = "0.3.7", path = "../core/protocols" }
+aim-transport = { version = "0.3.7", path = "../core/transport", default-features = false }
+aim-types = { version = "0.3.7", path = "../core/types" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 
 [dev-dependencies]
-aim-adapter = { version = "0.3.6", path = "../core/adapter", default-features = false }
+aim-adapter = { version = "0.3.7", path = "../core/adapter", default-features = false }

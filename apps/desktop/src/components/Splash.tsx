@@ -37,10 +37,9 @@ import { LICENCE, LINKS, PRODUCT_NAME } from "../branding";
 
 /** How long the artwork stays up even when the core is ready sooner.
  *
- * A floor, not a delay: it never holds a *slow* start open any longer than it
- * already would be. A constant rather than a number buried in a component,
- * because it is the kind of value somebody will want to change without going
- * looking for it. */
+ * A floor, not a delay. Brand flourish: the card gets its few seconds on
+ * screen. It never holds a *slow* start open any longer than it already would
+ * be — when the core takes longer than this, the card waits for it. */
 const MIN_VISIBLE_MS = 8000;
 
 /** One thing that has to happen before the application is usable. */
@@ -132,16 +131,17 @@ export function Splash({
           </div>
 
           {/* The corner: what is happening, and how far through it is. The ring
-              turns the whole time — steps can sit for seconds, and a screen
-              with nothing moving on it looks like a screen that has hung. */}
+              turns for as long as the card is up, because the card has a floor
+              on how long it stays and a still indicator inside a screen that is
+              not going anywhere reads as hung. */}
           <div className="splash-progress">
             <div className="splash-working">
               <span
-                className={`splash-ring${stalled ? " stalled" : !current ? " done" : ""}`}
+                className={`splash-ring${stalled ? " stalled" : ""}`}
                 aria-hidden="true"
               />
               <span className={`splash-step${stalled ? " splash-slow" : ""}`}>
-                {stalled ? "Core is slow to start…" : current ? current.label : "Ready"}
+                {stalled ? "Core is slow to start…" : current ? current.label : "Finishing up…"}
               </span>
             </div>
             <div className="splash-count">
