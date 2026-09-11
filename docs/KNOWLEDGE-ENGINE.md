@@ -206,27 +206,39 @@ names a feature or an intent; deterministic code resolves that to a request.
 
 ## D. Knowledge provider interface
 
-The one genuinely new abstraction this report proposes. Today the OBDb
-catalogue, the feature catalogue and the as-built parser are three unrelated
-things that answer overlapping questions.
+The one genuinely new abstraction this report proposed, now built in
+`core/decoders/src/knowledge.rs`. The OBDb catalogue, the feature catalogue and
+the as-built parser had grown three vocabularies for the same two ideas.
+
+As shipped, close to the sketch with two changes worth noting:
 
 ```rust
-/// Something that knows facts about vehicles.
-trait KnowledgeProvider {
-    fn id(&self) -> &str;              // "obdb", "measured", "as-built", "user"
-    fn source_kind(&self) -> SourceKind;
-    fn licence(&self) -> &str;
+pub trait KnowledgeProvider {
+    fn provider(&self) -> ProviderInfo;   // id, name, licence
 
-    /// What this provider can say about a vehicle, and how relevant it is.
-    fn signals(&self, v: &VehicleIdentity) -> Vec<Candidate<SignalDef>>;
-    fn features(&self, v: &VehicleIdentity) -> Vec<Candidate<FeatureDef>>;
-    fn dtc(&self, code: &str, v: &VehicleIdentity) -> Option<Candidate<DtcInfo>>;
+    // Each defaults to answering nothing, so a provider implements only what
+    // it can actually answer. The as-built parser knows how one vehicle was
+    // configured and nothing about what its signals mean; a trait forcing it
+    // to return something for `signals` would invite it to make something up.
+    fn signals(&self, v: &VehicleContext) -> Vec<Knowledge<SignalAnswer>>;
+    fn mappings(&self, v: &VehicleContext) -> Vec<Knowledge<MappingAnswer>>;
+    fn configuration(&self, v: &VehicleContext) -> Vec<Knowledge<ConfigurationAnswer>>;
 }
 ```
 
-Every answer carries its provider, its licence and its relevance. The resolver
-orders candidates; it does not merge them, because merging is how two sources'
-disagreement becomes invisible.
+It takes a `VehicleContext` rather than a `VehicleIdentity`: only **settled**
+fields cross over, so a field two sources disagree about arrives as unknown
+instead of as one side's answer. And there is no separate resolver —
+`KnowledgeBase` ranks on the way out, so there is no unranked path to forget.
+
+Every answer carries its provider, its licence and its authority. Licence is
+not bureaucracy here: CC BY-SA attribution has to travel with the content it
+credits, and as-built data belongs to one person and must never be bundled into
+a shared profile, so `Licence::may_redistribute()` is a real constraint on the
+application rather than a note.
+
+Ordered, never merged — including when two sources agree, because independent
+agreement is information too.
 
 **Authority order**, which we should state and enforce:
 
@@ -243,22 +255,34 @@ disagreement becomes invisible.
 
 ## E. Vehicle identity
 
-Currently a VIN decode and nothing else. Should become evidence-based, with the
-pieces we already collect:
+Was a VIN decode and nothing else; everything else was collected and discarded.
+Now assembled into one `VehicleIdentity`, readable at
+`GET /api/v1/vehicles/identity`, which touches no bus:
 
-| Evidence | Have it? |
+| Evidence | Where it lands |
 |---|---|
-| VIN, and its structural decode | yes |
-| Calibration IDs / CVN | yes |
-| ECU software/part numbers (`F188`, `F1F3`) | yes — `EDC17CP65` identified a 6.7L Power Stroke |
-| Which module addresses answered | yes |
-| Which protocol and addressing width | yes |
-| Supported PID bitmaps | yes |
-| User statement | no |
+| VIN, and its structural decode | a `vin` / `make` / `model_year` candidate |
+| Calibration IDs / CVN | an observation, attributed to the module that said it |
+| ECU software/part numbers (`F188`, `F1F3`) | an observation, named from ISO 14229 where the standard names it |
+| Which module addresses answered, and which they listen on | an observation |
+| Which protocol and addressing width | an observation |
+| Supported PID bitmaps | an observation — a build fingerprint |
+| User statement | `EvidenceSource::UserStatement`, not yet wired to a UI |
 
-That is already enough for a fingerprint. It needs assembling into one
-`VehicleIdentity` carrying candidates and what each rests on, rather than a
-single guessed answer.
+Two rules the type enforces rather than documents:
+
+**Candidates, not answers.** A field holds every value proposed for it with the
+evidence behind each. Two sources agreeing strengthen one candidate; two
+disagreeing produce two, and `settled()` returns `None` — the same answer as
+"nobody established it", because a caller proceeding as though it knows is
+wrong in both cases. This is what the as-built VIN check runs on.
+
+**No inference.** `EDC17CP65` at `F1F3` names a Bosch controller and therefore
+an engine, and that is not recorded. `F1F3` is supplier-defined and
+unpublished, so the finding is "these bytes at this identifier" and says so.
+The earlier draft of this document claimed the string "identified a 6.7L Power
+Stroke"; it identified a controller family, and the rest was a model's
+recollection wearing a part number.
 
 ---
 
@@ -272,22 +296,53 @@ One addition worth making: a provider's **relevance** must feed the gate. A
 mapping measured on a *similar* vehicle should be readable and never writable
 on that basis alone, however confident it looks.
 
+Made. `plan_change` asks `mapping_is_for_this_vehicle` and fails it for a
+candidate, so the refusal lives beside every other precondition rather than in
+the interface — a label nobody enforces is decoration. It is a soft failure,
+not a permanent one: confirming the mapping on this vehicle is what clears it.
+
 ---
 
 ## G. Implementation plan
 
 PR-sized, ordered so each step is useful alone.
 
-| # | Step | Why first |
+| # | Step | Status |
 |---|---|---|
-| 1 | Normalise `VehicleIdentity` from evidence we already collect | Everything else keys off it |
-| 2 | Extract `KnowledgeProvider`, port the three existing sources to it | No new data, pure refactor, behaviour unchanged |
-| 3 | Resolver with the authority order above, candidates never merged | Makes conflicts visible |
-| 4 | As-built import: VIN check, private storage, block↔DID bridge | Bridge already measured and committed |
-| 5 | Candidate mappings + predict-and-check verification | Half-built already |
-| 6 | Second manufacturer end to end, on a vehicle we can borrow | Proves the core is not Ford-shaped |
-| 7 | Unknown-data capture and contribution workflow | Needs 1–3 to have somewhere to put it |
-| 8 | Structured diagnostic context to the AI | Needs the normalised model |
+| 1 | Normalise `VehicleIdentity` from evidence we already collect | **done** — `core/diagnostics/src/identity.rs` |
+| 2 | Extract `KnowledgeProvider`, port the three existing sources to it | **done** — `core/decoders/src/knowledge.rs` |
+| 3 | Resolver with the authority order above, candidates never merged | **done** — `Authority` + `rank`, folded into step 2 |
+| 4 | As-built import: VIN check, private storage, block↔DID bridge | **done** — schema v4, `import_as_built` |
+| 5 | Candidate mappings + predict-and-check verification | **done** — `check_this`, gated in `plan_change` |
+| 6 | Second manufacturer end to end, on a vehicle we can borrow | needs a non-Ford vehicle |
+| 7 | Unknown-data capture and contribution workflow | next |
+| 8 | Structured diagnostic context to the AI | next |
+
+Steps 2 and 3 merged in the writing. A resolver that only ordered answers would
+have been a second thing to remember to call, and the rule it exists to enforce
+— candidates are ordered, never merged — is better as the only way the answers
+can be obtained at all. `KnowledgeBase` ranks on the way out; there is no
+unranked path to forget.
+
+### What steps 1–5 shook out
+
+Worth recording, because none of it was visible from the design:
+
+- **`matches()` is not `relevance()`.** An applicability with no constraints
+  matches every vehicle, deliberately, so that a feature which does not declare
+  itself Ford-only is not hidden from a Ford. Read as "measured on this
+  vehicle" it would have ranked the entire generic catalogue above community
+  definitions recorded for the exact model.
+- **`matches()` fails closed on an exact-VIN mismatch**, which is correct for
+  "was this measured here" and fatal for a filter: it drops precisely the
+  candidate mappings `candidate_vin_prefixes` exists to offer.
+- **A contested field must not cross the interface.** A provider handed the
+  wrong VIN answers confidently about a different vehicle. Handed no VIN it
+  says it has nothing. The second is the failure worth having, so
+  `VehicleIdentity → VehicleContext` passes only settled fields.
+- **Relevance has to reach the safety gate.** Labelling a candidate in the
+  interface and letting `plan_change` approve it would have made the label
+  decoration.
 
 Deliberately **not** on this list: replacing ISO-TP, UDS, or the transport
 layer. They work, on real vehicles, and the proposed replacements cannot be
