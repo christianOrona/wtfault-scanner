@@ -1070,3 +1070,120 @@ fn an_identity_before_any_reading_claims_nothing() {
     assert!(identity.is_empty());
     assert_eq!(identity.unresolved, vec!["vin", "make", "model", "model_year"]);
 }
+
+/// The same mapping, scoped to a truck that is not this one but closely
+/// resembles it.
+///
+/// Identical to `MIRROR_PROFILE` except for the VIN it claims to have been
+/// measured on, plus the prefix that says which vehicles it is a candidate for.
+const CANDIDATE_PROFILE: &str = r#"
+version: 1
+profile: test
+features:
+  - id: test_body_setting
+    name: "A body module setting"
+    risk: convenience
+    easy: "A comfort setting held in the body module."
+    technical: "Bit 2 of byte 3 of data identifier DE01 on the module at 7A0."
+    modules: ["7A8"]
+    verification: verified
+    source: "measured on a different vehicle"
+    applies_to:
+      vins: ["1FT7W2BT6KEC99999"]
+      candidate_vin_prefixes: ["1FT7W2BT"]
+    write_verification:
+      verification: verified
+      verified_on_vehicles: 1
+      source: "measured on a different vehicle"
+    mapping:
+      kind: data_identifier_bits
+      module: 0x7A0
+      did: 0xDE01
+      byte: 3
+      mask: 0x04
+      on: 0x04
+      off: 0x00
+"#;
+
+/// Scoping a measured mapping to one exact VIN and stopping is too strict to
+/// be useful: the next identical truck gets nothing. It is offered instead,
+/// labelled as coming from somewhere else.
+#[test]
+fn a_mapping_measured_on_a_similar_truck_is_offered_to_this_one() {
+    let (mut service, _dir) = service_with_profile(CANDIDATE_PROFILE);
+    assert!(service.identify_vehicle(USER).success);
+
+    let r = service.list_features(USER);
+    assert!(r.success);
+    let data = r.data.as_ref().unwrap();
+    let features = data["features"].as_array().unwrap();
+
+    let f = features
+        .iter()
+        .find(|f| f["id"] == "test_body_setting")
+        .expect("a mapping measured on a near-identical truck must not be invisible to this one");
+    assert_eq!(f["authority"], "measured_on_similar_vehicle");
+    assert_eq!(f["measured_on_this_vehicle"], false);
+    assert_eq!(data["from_a_similar_vehicle"], 1);
+
+    let codes: Vec<&str> = r.warnings.iter().map(|w| w.code.as_str()).collect();
+    assert!(codes.contains(&"mappings_from_a_similar_vehicle"), "{codes:?}");
+}
+
+/// Predict and check. Reading it costs nothing, and the reading is stated
+/// plainly enough to be wrong — which is what makes it evidence rather than a
+/// claim. Nothing is written to find out.
+#[test]
+fn reading_a_candidate_states_a_prediction_the_owner_can_falsify() {
+    let (mut service, _dir) = service_with_profile(CANDIDATE_PROFILE);
+    assert!(service.identify_vehicle(USER).success);
+
+    let r = service.read_feature("test_body_setting", USER);
+    assert!(r.success, "a candidate is readable: {:?}", r.error);
+    let data = r.data.as_ref().unwrap();
+
+    assert_eq!(data["readable"], true);
+    assert_eq!(data["state"], false, "the same bytes decode the same way");
+    assert_eq!(data["measured_on_this_vehicle"], false);
+
+    let check = &data["check_this"];
+    assert!(check.is_object(), "a candidate must state what it predicts");
+    let claim = check["claim"].as_str().unwrap();
+    assert!(claim.contains("OFF"), "the prediction has to be specific: {claim}");
+    assert!(check["ask"].as_str().unwrap().contains("Does your vehicle agree"));
+    assert_eq!(check["writable"], false);
+
+    let codes: Vec<&str> = r.warnings.iter().map(|w| w.code.as_str()).collect();
+    assert!(codes.contains(&"mapping_from_a_similar_vehicle"), "{codes:?}");
+}
+
+/// And the line. Fully verified for reading and writing on the truck it was
+/// measured on, and still refused here — however well the reading matched.
+/// Relevance has to reach the safety gate, because a label nobody enforces is
+/// decoration.
+#[test]
+fn a_candidate_is_never_writable_however_confident_it_looks() {
+    let (mut service, _dir) = service_with_profile(CANDIDATE_PROFILE);
+    assert!(service.identify_vehicle(USER).success);
+    prepare_for_write(&mut service);
+
+    let r = service.read_feature("test_body_setting", USER);
+    assert_eq!(r.data.as_ref().unwrap()["writable"], false);
+
+    let plan = service.preview_configuration_change(
+        "test_body_setting",
+        aim_diagnostics::DesiredValue::On,
+        USER,
+    );
+    let plan = plan.data.as_ref().unwrap();
+    assert_eq!(plan["can_apply"], false, "a candidate must never be writable");
+
+    let checks = plan["checks"].as_array().unwrap();
+    let c = checks
+        .iter()
+        .find(|c| c["id"] == "mapping_is_for_this_vehicle")
+        .expect("the gate has to ask this, not just the interface");
+    assert_eq!(c["passed"], false);
+    // Not a permanent refusal - confirming it on this vehicle is what clears it.
+    assert_eq!(c["blocking_by_design"], false);
+}

@@ -43,6 +43,7 @@
 //! "Nobody has measured this yet" and "this tool will never do that" are
 //! different sentences, and a person is owed the right one.
 
+use aim_decoders::features::MappingRelevance;
 use aim_decoders::{FeatureDef, FeatureSupport};
 use aim_types::{AdapterCapabilities, RiskClass, Vehicle};
 use serde::{Deserialize, Serialize};
@@ -318,6 +319,41 @@ pub fn plan_change(
         FeatureSupport::Writable => {
             checks.push(Check::pass("mapping_known", "Do we know where this setting lives?"))
         }
+    }
+
+    // 2b. Was it measured on *this* vehicle, or on one that resembles it?
+    //
+    //     A mapping measured on one truck and offered to a near-identical one
+    //     is a candidate: worth reading, worth checking against what the owner
+    //     can see on their dash, and never writable on that basis however
+    //     confident it looks. Two trucks with the same first eight VIN
+    //     characters usually share a configuration layout. Usually is not a
+    //     standard to write a door module to.
+    //
+    //     Checked here rather than left to the interface on purpose. The
+    //     interface is where a candidate gets labelled; this is where it gets
+    //     refused, and a label nobody enforces is decoration.
+    match f.applies_to.relevance(
+        ctx.vehicle.and_then(|v| v.make.as_deref()),
+        ctx.vehicle.and_then(|v| v.year),
+        ctx.vehicle.and_then(|v| v.vin.as_deref()),
+    ) {
+        MappingRelevance::Candidate => checks.push(Check::fail(
+            "mapping_is_for_this_vehicle",
+            "Was this mapping measured on this vehicle?",
+            "No - it was measured on a DIFFERENT vehicle that closely resembles yours, and is \
+             offered here as a candidate. It can be read, and reading it is the way to find out \
+             whether it holds: the app will tell you what it thinks the setting currently is, \
+             and you can check that against what your vehicle shows. Until something confirms \
+             it on this vehicle, it will not be written.",
+        )),
+        // Measured here, or scoped by make and year rather than by VIN. The
+        // latter is the ordinary case for a shipped profile and is handled by
+        // the verification checks above, not by this one.
+        _ => checks.push(Check::pass(
+            "mapping_is_for_this_vehicle",
+            "Was this mapping measured on this vehicle?",
+        )),
     }
 
     // 3. Is the owning module actually on this vehicle?
@@ -633,6 +669,75 @@ mod tests {
         let plan = plan_change(&request(), Some(&f), &ctx);
         assert!(!plan.can_apply);
         assert!(!check(&plan, "adapter_reliable").passed);
+    }
+
+    /// A mapping measured on a near-identical truck is offered, read, and
+    /// refused a write. Two trucks sharing the first eight VIN characters
+    /// usually share a configuration layout; usually is not a standard to
+    /// write a door module to.
+    #[test]
+    fn a_candidate_mapping_is_readable_and_never_writable() {
+        let mut f =
+            feature(RiskClass::Convenience, verified_mapping(), VerificationStatus::Verified);
+        f.applies_to = Applicability {
+            vins: vec!["1FT7W2BT7KEF00001".into()],
+            candidate_vin_prefixes: vec!["1FT7W2BT".into()],
+            ..Applicability::default()
+        };
+
+        let other_truck = Vehicle {
+            id: aim_types::VehicleId::new(),
+            vin: Some("1FT7W2BT7KEF78036".into()),
+            make: None,
+            model: None,
+            year: None,
+            trim: None,
+            engine: None,
+            transmission: None,
+            discovered_at: aim_types::now(),
+        };
+        let modules = vec!["DDM_740".to_string()];
+        let mut ctx = perfect_context(&modules);
+        ctx.vehicle = Some(&other_truck);
+
+        let plan = plan_change(&request(), Some(&f), &ctx);
+        assert!(!plan.can_apply, "a candidate must never be writable on that basis");
+        let c = check(&plan, "mapping_is_for_this_vehicle");
+        assert!(!c.passed);
+        // Not a permanent refusal: reading it on this vehicle is how it stops
+        // being a candidate.
+        assert!(!c.blocking_by_design);
+        assert!(c.detail.as_ref().unwrap().contains("candidate"));
+    }
+
+    /// And the truck it was actually measured on is unaffected.
+    #[test]
+    fn the_vehicle_it_was_measured_on_still_passes_that_check() {
+        let mut f =
+            feature(RiskClass::Convenience, verified_mapping(), VerificationStatus::Verified);
+        f.applies_to = Applicability {
+            vins: vec!["1FT7W2BT7KEF78036".into()],
+            candidate_vin_prefixes: vec!["1FT7W2BT".into()],
+            ..Applicability::default()
+        };
+
+        let its_own_truck = Vehicle {
+            id: aim_types::VehicleId::new(),
+            vin: Some("1FT7W2BT7KEF78036".into()),
+            make: None,
+            model: None,
+            year: None,
+            trim: None,
+            engine: None,
+            transmission: None,
+            discovered_at: aim_types::now(),
+        };
+        let modules = vec!["DDM_740".to_string()];
+        let mut ctx = perfect_context(&modules);
+        ctx.vehicle = Some(&its_own_truck);
+
+        let plan = plan_change(&request(), Some(&f), &ctx);
+        assert!(check(&plan, "mapping_is_for_this_vehicle").passed);
     }
 
     #[test]

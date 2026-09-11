@@ -561,12 +561,37 @@ export interface FeatureView {
   notes: string | null;
   /** False for classes this product refuses regardless of data. */
   writable_in_principle: boolean;
+  /** How much this claim has to do with the vehicle in front of us. */
+  authority: Authority;
+  /** That, in language meant for a person. */
+  authority_explanation: string;
+  /**
+   * Whether the mapping was measured on this vehicle rather than one like it.
+   *
+   * A false here is the difference between a fact and a hypothesis, and the
+   * screen has to say which it is showing. The server refuses the write either
+   * way — this exists so the person is told before they ask, not after.
+   */
+  measured_on_this_vehicle: boolean;
 }
+
+/** Where an answer came from, best first. Mirrors `aim_decoders::Authority`. */
+export type Authority =
+  | "measured_this_session"
+  | "measured_earlier"
+  | "owner_supplied_oem_data"
+  | "measured_on_similar_vehicle"
+  | "community_this_model"
+  | "community_related_model"
+  | "generic_standard"
+  | "model_knowledge";
 
 export interface FeaturesData {
   features: FeatureView[];
   catalog_size: number;
   narrowed_to_vehicle: boolean;
+  /** How many of these were measured on a different, similar vehicle. */
+  from_a_similar_vehicle: number;
 }
 
 export interface PlanCheck {

@@ -92,6 +92,14 @@ export function FeaturesPane({ connected }: { connected: boolean }) {
               {countOf(features, "described_only")} not measured yet
             </span>
           )}
+          {/* Counted separately because it is a different kind of thing, not a
+              fourth degree of the same one: these were measured, just not on
+              this vehicle. */}
+          {!!result?.data?.from_a_similar_vehicle && (
+            <span className="tag" style={{ color: "var(--caution)" }}>
+              {result.data.from_a_similar_vehicle} from a similar vehicle
+            </span>
+          )}
         </div>
         <button onClick={() => void load()} disabled={busy}>
           {busy ? <Spinner label="Reading" /> : "Refresh"}
@@ -198,6 +206,14 @@ function FeatureCard({
             <strong>{feature.name}</strong>
             <span className="tag" style={{ color: s.tone }}>{s.label}</span>
             <span className="tag">{feature.risk_label}</span>
+            {/* Said on the card rather than only inside Details. Somebody
+                scanning this list should be able to see which of these are
+                about their truck without opening each one. */}
+            {feature.authority === "measured_on_similar_vehicle" && (
+              <span className="tag" style={{ color: "var(--caution)" }}>
+                from a similar vehicle
+              </span>
+            )}
           </div>
           <div className="explain">{easy ? feature.easy : feature.technical}</div>
         </div>
@@ -209,6 +225,27 @@ function FeatureCard({
       {expanded && (
         <>
           <div className="explain" style={{ marginTop: 10 }}>{s.blurb}</div>
+
+          {/* The candidate case, and the offer that goes with it. Scoping a
+              measured mapping to one exact VIN and stopping meant the next
+              identical truck got nothing at all; offering it and saying where
+              it came from lets this vehicle settle the question, without a
+              single byte being written to find out. */}
+          {!feature.measured_on_this_vehicle && feature.support !== "described_only" && (
+            <div className="banner caution" style={{ marginTop: 10, marginBottom: 0 }}>
+              <span className="b-code">from another vehicle</span>
+              <span>
+                {feature.authority_explanation}
+                <div style={{ marginTop: 6 }}>
+                  Read it and this app will tell you what it thinks the setting currently is.
+                  Check that against what your vehicle actually shows. If they agree, that is
+                  evidence measured on <em>your</em> vehicle; if they do not, this mapping is
+                  not for your truck and will not be used on it. Either way nothing is written,
+                  and it stays unwritable until something confirms it here.
+                </div>
+              </span>
+            </div>
+          )}
 
           {feature.notes && (
             <div className="banner caution" style={{ marginTop: 10, marginBottom: 0 }}>
@@ -271,6 +308,7 @@ function FeatureCard({
               <span>{feature.id}</span>
               {feature.modules.length > 0 && <span>modules {feature.modules.join(", ")}</span>}
               <span>{feature.verification}</span>
+              <span>{feature.authority.replace(/_/g, " ")}</span>
               {feature.source && <span>from {feature.source}</span>}
             </div>
           )}

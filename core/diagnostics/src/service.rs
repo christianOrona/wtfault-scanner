@@ -1383,16 +1383,22 @@ impl DiagnosticService {
     }
 
     fn features_inner(&mut self) -> Payload {
-        let (make, year, vin) = match &self.vehicle {
-            Some(v) => (v.make.clone(), v.year, v.vin.clone()),
-            None => (None, None, None),
-        };
-        let features: Vec<serde_json::Value> = self
-            .decoders
-            .features
-            .for_vehicle(make.as_deref(), year, vin.as_deref())
-            .into_iter()
-            .map(|f| {
+        let context = self.knowledge_context();
+        let vin = context.vin.clone();
+
+        // Asked through the knowledge interface, which is what brings
+        // candidates into this list at all. A mapping measured on a
+        // near-identical truck used to be invisible here — scoped to one VIN
+        // and therefore matching nobody else — and the next owner of the same
+        // truck got a list of things nobody had ever measured.
+        let answers = self.decoders.features.mappings(&context);
+        let candidates =
+            answers.iter().filter(|k| k.authority == Authority::MeasuredOnSimilarVehicle).count();
+
+        let features: Vec<serde_json::Value> = answers
+            .iter()
+            .map(|k| {
+                let f = k.answer.feature;
                 serde_json::json!({
                     "id": f.id,
                     "name": f.name,
@@ -1407,6 +1413,13 @@ impl DiagnosticService {
                     "source": f.source,
                     "notes": f.notes,
                     "writable_in_principle": f.writable_in_principle(),
+                    // Where this claim came from and how much it has to do with
+                    // the vehicle in front of us. A candidate is readable and
+                    // never writable, and the interface has to be able to say
+                    // which of the two it is looking at.
+                    "authority": k.authority.as_str(),
+                    "authority_explanation": k.authority.explain(),
+                    "measured_on_this_vehicle": k.authority.is_about_this_vehicle(),
                 })
             })
             .collect();
@@ -1420,11 +1433,23 @@ impl DiagnosticService {
                  relevant list.",
             ));
         }
+        if candidates > 0 {
+            warnings.push(Warning::caution(
+                "mappings_from_a_similar_vehicle",
+                format!(
+                    "{candidates} of these were measured on a DIFFERENT vehicle that closely \
+                     resembles yours. {} Reading one costs nothing and is how it stops being a \
+                     guess.",
+                    Authority::MeasuredOnSimilarVehicle.explain()
+                ),
+            ));
+        }
         Payload {
             data: Some(serde_json::json!({
                 "features": features,
                 "catalog_size": self.decoders.features.len(),
                 "narrowed_to_vehicle": vin.is_some(),
+                "from_a_similar_vehicle": candidates,
             })),
             warnings,
             ..Default::default()
@@ -1546,6 +1571,15 @@ impl DiagnosticService {
         let write_evidence = feature.write_verification.clone();
         let writable = feature.support() == aim_decoders::FeatureSupport::Writable;
         let target = feature.mapping.as_ref().and_then(|m| m.as_data_identifier());
+        let relevance = {
+            let c = self.knowledge_context();
+            self.decoders
+                .features
+                .get(feature_id)
+                .map(|f| f.applies_to.relevance(c.make.as_deref(), c.year, c.vin.as_deref()))
+        };
+        let from_a_similar_vehicle =
+            relevance == Some(aim_decoders::features::MappingRelevance::Candidate);
 
         // No executable mapping. Report it as an open question with the steps
         // that would close it, rather than as a refusal.
@@ -1601,6 +1635,51 @@ impl DiagnosticService {
             ));
         }
 
+        // Predict and check. The mapping came off a different vehicle, so the
+        // only thing that can settle whether it holds *here* is somebody
+        // looking. State the prediction plainly enough to be wrong — "I think
+        // this is currently on; does your vehicle agree?" — because a
+        // prediction nobody can falsify is not evidence, it is a claim.
+        //
+        // Nothing is written to find this out, which is strictly better than
+        // discovering it by writing.
+        let prediction = from_a_similar_vehicle.then(|| {
+            let reads_as = match state {
+                Some(true) => "ON",
+                Some(false) => "OFF",
+                None => "neither on nor off",
+            };
+            serde_json::json!({
+                "claim": format!("this mapping says {name} is currently {reads_as}"),
+                "ask": format!(
+                    "Does your vehicle agree that {name} is {reads_as} right now? Check it the \
+                     way you normally would - the dash menu, the switch, or the behaviour \
+                     itself.",
+                ),
+                "if_it_agrees":
+                    "That is real evidence the mapping holds on this vehicle. Toggle the setting \
+                     with the vehicle's own controls and read again: if the bit moves the way \
+                     this mapping predicts, that is confirmation, measured on your vehicle, \
+                     without anything having been written.",
+                "if_it_disagrees":
+                    "Then this mapping does not describe your vehicle, and it will not be used \
+                     on it. That is a useful result: it was measured on a truck that resembles \
+                     yours, and now we know the resemblance does not reach this setting.",
+                "readable": true,
+                "writable": false,
+            })
+        });
+        if from_a_similar_vehicle {
+            warnings.push(Warning::caution(
+                "mapping_from_a_similar_vehicle",
+                format!(
+                    "{} It was read, not written, and it will not be written on this basis \
+                     however well the reading matches.",
+                    Authority::MeasuredOnSimilarVehicle.explain()
+                ),
+            ));
+        }
+
         Ok(Payload {
             data: Some(serde_json::json!({
                 "feature_id": feature_id,
@@ -1615,7 +1694,12 @@ impl DiagnosticService {
                 "mapping_source": source,
                 "verification": verification,
                 "write_evidence": write_evidence,
-                "writable": writable,
+                // A candidate is never writable on this basis, whatever the
+                // feature's own evidence says: that evidence is about a
+                // different vehicle.
+                "writable": writable && !from_a_similar_vehicle,
+                "measured_on_this_vehicle": !from_a_similar_vehicle,
+                "check_this": prediction,
             })),
             warnings,
             ..Default::default()
