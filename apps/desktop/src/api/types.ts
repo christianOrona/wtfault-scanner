@@ -210,6 +210,17 @@ export interface ModuleRecord {
   identity: ModuleIdentity;
   software_version: string | null;
   discovered_at: string;
+  /** Which bus it answered on. */
+  bus?: "primary" | "secondary";
+  bus_label?: string;
+  /**
+   * Whether OBD-II questions can be asked of it at all.
+   *
+   * False for body and comfort modules: they implement UDS and owe service 01
+   * nothing, so a live-data picker built on supported PIDs has nothing to show
+   * for them.
+   */
+  answers_obd2?: boolean;
 }
 
 export interface SupportedPid {

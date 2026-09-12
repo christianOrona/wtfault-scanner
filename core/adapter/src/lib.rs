@@ -357,6 +357,31 @@ impl VehicleBus {
             VehicleBus::Secondary => "BUS2",
         }
     }
+
+    /// Which bus a stored module key came from.
+    ///
+    /// The key is the record of it, so nothing has to be migrated into the
+    /// session database for a session recorded before there were two buses.
+    pub fn of_module_key(key: &str) -> VehicleBus {
+        match key.starts_with(&format!("{}_", VehicleBus::Secondary.key_prefix())) {
+            true => VehicleBus::Secondary,
+            false => VehicleBus::Primary,
+        }
+    }
+
+    /// Whether a module on this bus can be expected to answer OBD-II.
+    ///
+    /// Service 01 is an emissions obligation, and it applies to the modules on
+    /// the legislated bus. Body, comfort and instrument modules are not
+    /// emissions modules: they implement UDS and nothing else. Measured on a
+    /// 2019 F-250 on 2026-09-11, the OBD-II broadcast on the secondary bus
+    /// returned NO DATA while 29 modules there answered UDS TesterPresent.
+    ///
+    /// This is what stops the live-data screen offering a door module a list of
+    /// engine sensors it was never going to produce.
+    pub fn answers_obd2(&self) -> bool {
+        matches!(self, VehicleBus::Primary)
+    }
 }
 
 #[cfg(test)]

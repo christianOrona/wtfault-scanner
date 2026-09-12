@@ -12,13 +12,16 @@
 
 /// Rules that apply however the agent is being used.
 const COMMON: &str = r#"
-You are the diagnostic reasoning layer of AI Mechanic, a read-only vehicle
-scanner. You talk to the vehicle only through the tools you are given.
+You are the diagnostic reasoning layer of AI Mechanic. You talk to the vehicle
+only through the tools you are given, and every tool you have is a read.
 
 # What you are talking to
-A real vehicle, through a cheap ELM327-class Bluetooth adapter. It is slow, it
-drops requests, and it sometimes lies about what it supports. Treat a failed
-read as information, not as a reason to stop.
+A real vehicle, through an ELM327-class adapter. Some are cheap clones that are
+slow, drop requests, and misreport what they support; some are considerably
+better. Which one this is has been measured, and what was measured is in the
+context below — do not assume the worst case, and do not assume the best.
+
+Treat a failed read as information, not as a reason to stop.
 
 # Absolute rules
 - NEVER invent a reading, a code, a PID, a module address, or a measurement.
@@ -38,8 +41,18 @@ read as information, not as a reason to stop.
 - If the vehicle is not answering (`vehicle_not_responding`, a `degraded`
   adapter), say that plainly. "I could not read this car" is a valid answer and
   is far more useful than a confident guess.
-- You cannot clear codes, write configuration, or program anything. This build
-  is permanently read-only. If asked, say so; do not pretend to try.
+- You cannot clear codes, write configuration, or program anything, and you
+  never will be able to. That is a boundary around *you*, not around the
+  application.
+
+  The application can do those things. A person does them: they choose the
+  change, they read what it will do, and they type a confirmation. No tool you
+  are given reaches that path and no answer you write can trigger it.
+
+  So when somebody asks for a change, the true answer is "I cannot do that, and
+  here is where in the app you can" — never "this app cannot do that". Telling
+  somebody their tool cannot do something it can do is as wrong as inventing a
+  reading, and it sends them off to buy software they already own.
 
 # How to talk
 Write for someone who has never opened a bonnet. That means:
@@ -311,6 +324,51 @@ pub fn context_block(
         s.push_str("- Modules: not scanned yet\n");
     } else {
         s.push_str(&format!("- Modules found: {}\n", modules.join(", ")));
+        // A module key beginning `BUS2_` answered on the bus that carries body
+        // and comfort modules. Worth naming, because that is where nearly every
+        // configurable feature lives, and a model that does not know the bus
+        // was reached will tell somebody their adapter cannot get there.
+        let secondary = modules.iter().filter(|m| m.starts_with("BUS2_")).count();
+        if secondary > 0 {
+            s.push_str(&format!(
+                "  {secondary} of them answered on the secondary bus, the one carrying body and \
+                 comfort modules. This adapter and this vehicle reach it.\n"
+            ));
+        }
+    }
+    s
+}
+
+/// What the adapter was *measured* to be able to do.
+///
+/// Separate from link quality, which is about how reliably it is answering.
+/// This is about what it is capable of at all, and it exists because a model
+/// with no measured capabilities in front of it falls back on the stereotype of
+/// a cheap clone. Measured on 2026-09-11: it told an owner holding an OBDLink
+/// MX+ that his adapter could not reach the bus it had just been reading, and
+/// that the app could not write configuration it had already written to his
+/// truck.
+pub fn capability_block(caps: &aim_types::AdapterCapabilities) -> String {
+    let mut s = String::from("- Adapter capabilities, as measured on this connection:\n");
+
+    s.push_str(match caps.supports_transmit {
+        true => "  - Can transmit configuration writes (a person still has to confirm each one).\n",
+        false => "  - Has not been measured able to transmit configuration writes.\n",
+    });
+    s.push_str(match caps.supports_long_messages {
+        true => "  - Can send requests longer than the seven-byte ELM327 form allows.\n",
+        false => "  - Limited to seven data bytes per request, which rules out most writes.\n",
+    });
+    s.push_str(match caps.multiple_can_buses {
+        true => "  - Can switch to the secondary bus, where body and comfort modules live.\n",
+        false => {
+            "  - Cannot switch buses on command. Note that some cables carry a physical \
+             high-speed/medium-speed switch instead, which no adapter can report.\n"
+        }
+    });
+
+    if !caps.model.is_empty() {
+        s.push_str(&format!("  - Device: {}\n", caps.model));
     }
     s
 }
@@ -328,7 +386,29 @@ mod tests {
         ] {
             assert!(p.contains("NEVER invent"));
             assert!(p.contains("unverified"));
-            assert!(p.contains("read-only"));
+
+            // The boundary is around the agent, not around the application.
+            //
+            // This used to assert the literal phrase "read-only", which the
+            // prompt satisfied by telling the model the whole build was
+            // permanently read-only. It is not: configuration writes and code
+            // clearing both exist behind a typed confirmation. Measured on
+            // 2026-09-11 — an owner asked whether his mirrors could be made to
+            // fold, and was told "not with this app, and not with that
+            // adapter", on a truck this app had already written a setting to,
+            // through an adapter that had already read the bus in question.
+            //
+            // So the test now checks the true invariant and the honest framing,
+            // and a prompt that goes back to disowning the application fails.
+            assert!(p.contains("You cannot clear codes, write configuration"));
+            assert!(
+                p.contains("boundary around *you*"),
+                "the prompt must not tell the model the application cannot write"
+            );
+            assert!(
+                p.contains("The application can do those things"),
+                "the prompt must say who can, not only who cannot"
+            );
         }
     }
 

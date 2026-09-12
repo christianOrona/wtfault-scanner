@@ -938,3 +938,21 @@ a.mini.button:hover { border-color: var(--accent-dim); background: #1c222c; }
   padding: 10px 12px;
   margin-bottom: 8px;
 }
+
+/* Sidebar group heading, for splitting modules by which bus answered.
+   A flat list of thirty-six tells somebody nothing about which of them can
+   answer the question they are about to ask. */
+.list-group {
+  margin: 14px 0 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.list-note {
+  margin: 0 0 8px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-faint);
+}

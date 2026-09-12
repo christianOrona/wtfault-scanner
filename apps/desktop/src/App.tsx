@@ -328,22 +328,48 @@ export default function App() {
             <div className="section">
               <h2>{easy ? "Computers in your car" : "Modules"} ({modules.length})</h2>
               <Explain kind="concept" id="module_picker" />
-              <div className="list">
-                {modules.map((m) => (
+              {/* Split by bus, because a flat list of thirty-six is a wall.
+                  A 2019 F-250 answers with seven engine-side modules and
+                  twenty-nine body ones, and the two groups can be asked
+                  completely different questions — so a list that mixes them
+                  invites somebody to open a door module and wonder why there
+                  is no engine data in it. */}
+              {(() => {
+                const engine = modules.filter((m) => m.answers_obd2 !== false);
+                const body = modules.filter((m) => m.answers_obd2 === false);
+                const item = (m: ModuleRecord) => (
                   <button
                     key={m.id}
                     className="list-item"
                     aria-selected={m.module_key === selectedModule}
                     onClick={() => setSelectedModule(m.module_key)}
                   >
-                    <span className="li-title">{m.name ?? `OBD module at ${m.address}`}</span>
+                    <span className="li-title">{m.name ?? `Module at ${m.address}`}</span>
                     <span className="li-sub">{m.module_key} - {m.address}</span>
                   </button>
-                ))}
-                {!modules.length && !busy && (
-                  <span className="faint">No modules found. Try Rescan.</span>
-                )}
-              </div>
+                );
+                return (
+                  <>
+                    <div className="list">{engine.map(item)}</div>
+                    {body.length > 0 && (
+                      <>
+                        <h3 className="list-group">
+                          {easy ? "Body and comfort" : "Secondary bus"} ({body.length})
+                        </h3>
+                        <p className="list-note">
+                          Doors, seats, lighting and the dash. These hold most of what can be
+                          configured, and they do not report engine sensors or emissions data —
+                          so Live data and Readiness have nothing to show for them.
+                        </p>
+                        <div className="list">{body.map(item)}</div>
+                      </>
+                    )}
+                    {!modules.length && !busy && (
+                      <span className="faint">No modules found. Try Rescan.</span>
+                    )}
+                  </>
+                );
+              })()}
             </div>
 
             {vinDecoded && (
@@ -448,7 +474,16 @@ export default function App() {
                   socket and silently ended the stream. Coming back showed an
                   idle pane with no explanation, and the history was gone. */}
               <div className="tab-panel" hidden={tab !== "live"}>
-                <LivePane moduleKey={selectedModule} onEvidence={showEvidence} />
+                <LivePane
+                  moduleKey={selectedModule}
+                  // Whether this module answers OBD-II at all. A body module does
+                  // not, and offering it a picker of engine sensors produces an
+                  // empty screen that reads as a fault in the app.
+                  answersObd2={
+                    modules.find((m) => m.module_key === selectedModule)?.answers_obd2 !== false
+                  }
+                  onEvidence={showEvidence}
+                />
               </div>
               <div className="tab-panel" hidden={tab !== "ask"}>
                 <AskPane

@@ -230,15 +230,16 @@ pub async fn describe_context(state: &AppState) -> String {
                 s.vehicle().and_then(|v| v.vin.clone()),
                 modules,
                 aim_types::AdapterFitness::assess(&s.health(), &s.capabilities()),
+                s.capabilities(),
             )
         })
         .await
         .ok()
         .flatten();
 
-    let (descriptor, conn_state, vin, modules, link) = match snapshot {
-        Some(s) => (s.0, s.1, s.2, s.3, Some(s.4)),
-        None => ("none".into(), "disconnected".into(), None, Vec::new(), None),
+    let (descriptor, conn_state, vin, modules, link, caps) = match snapshot {
+        Some(s) => (s.0, s.1, s.2, s.3, Some(s.4), Some(s.5)),
+        None => ("none".into(), "disconnected".into(), None, Vec::new(), None, None),
     };
 
     // The one place the VIN enters a prompt, and therefore the only place the
@@ -251,7 +252,15 @@ pub async fn describe_context(state: &AppState) -> String {
         false => v,
     });
 
-    prompts::context_block(&descriptor, &conn_state, vin.as_deref(), None, &modules, link.as_ref())
+    let mut block =
+        prompts::context_block(&descriptor, &conn_state, vin.as_deref(), None, &modules, link.as_ref());
+    // What it can do at all, not just how well it is doing it. Without this the
+    // model falls back on the stereotype of a cheap clone and tells people
+    // their adapter cannot do things it has already done.
+    if let Some(caps) = caps {
+        block.push_str(&prompts::capability_block(&caps));
+    }
+    block
 }
 
 /// Whether the VIN must be kept out of this prompt.

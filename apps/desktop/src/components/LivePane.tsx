@@ -31,9 +31,19 @@ const ASSUMED_COST_PER_SIGNAL_MS = 75;
 
 export function LivePane({
   moduleKey,
+  answersObd2 = true,
   onEvidence,
 }: {
   moduleKey: string | null;
+  /**
+   * Whether this module answers OBD-II at all.
+   *
+   * Body and comfort modules do not. They implement UDS and owe service 01
+   * nothing, so asking one for its supported PIDs returns nothing and the
+   * picker renders empty — which reads as a broken screen rather than as a
+   * question that was never going to have an answer.
+   */
+  answersObd2?: boolean;
   onEvidence: (ref: number) => void;
 }) {
   const [signals, setSignals] = useState<ToolResult<SignalsData> | null>(null);
@@ -48,6 +58,10 @@ export function LivePane({
 
   const load = useCallback(async () => {
     if (!moduleKey) return;
+    // Do not ask a module a question it has no obligation to answer. The
+    // request would come back empty and the empty picker would be read as a
+    // fault in the app rather than as the wrong question.
+    if (!answersObd2) return;
     setBusy(true);
     setError(null);
     try {
@@ -70,7 +84,7 @@ export function LivePane({
     } finally {
       setBusy(false);
     }
-  }, [moduleKey]);
+  }, [moduleKey, answersObd2]);
 
   // Changing module must stop the stream. The socket is per-connection, not
   // per-module, so a subscription left running would keep sampling the module
@@ -160,6 +174,31 @@ export function LivePane({
   }
 
   if (!moduleKey) return <div className="empty">Select a module.</div>;
+
+  // Said rather than shown as an empty list. This module is working perfectly
+  // and simply does not answer this kind of question, which is a different
+  // thing from a module that failed to respond — and the screen has to be the
+  // one that makes the difference clear.
+  if (!answersObd2) {
+    return (
+      <div className="pane">
+        <PaneIntro kind="concept" id="live_data" />
+        <div className="card">
+          <strong>This computer does not report live sensor data.</strong>
+          <p className="muted" style={{ marginBottom: 8 }}>
+            {moduleKey} is a body or comfort module — doors, seats, lighting, the dash. Live
+            data is an emissions feature, and these modules are not emissions modules. They
+            answer a different language entirely, so there is nothing here to graph.
+          </p>
+          <p className="faint" style={{ margin: 0, fontSize: 12 }}>
+            It is not broken and it is not switched off. What these modules <em>do</em> hold is
+            configuration — look under <strong>Settings on the car</strong> — and they can
+            still report fault codes.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="pane">

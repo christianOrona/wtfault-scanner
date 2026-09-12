@@ -477,9 +477,32 @@ async fn scan_modules(State(state): State<AppState>) -> ApiResult<Json<ToolResul
     Ok(Json(state.with_service(|s| s.scan_modules("user:api")).await?))
 }
 
+/// Every module found, with which bus it answered on and what it can be asked.
+///
+/// The second fact is why this is not a plain list any more. A vehicle with two
+/// buses is mostly *not* emissions modules: a 2019 F-250 answers with 7 on the
+/// primary bus and 29 on the secondary, and those 29 implement UDS and nothing
+/// else. Offering them a live-data picker built on OBD-II service 01 produces a
+/// screen of empty rows and a person wondering what they did wrong.
+///
+/// Derived from the module key rather than stored, so sessions recorded before
+/// there was a second bus need no migration.
 async fn list_modules(State(state): State<AppState>) -> ApiResult<Json<Value>> {
     let modules = state.with_service(|s| s.store().modules(s.session_id())).await??;
-    Ok(Json(json!({ "modules": modules })))
+    let described: Vec<Value> = modules
+        .into_iter()
+        .map(|m| {
+            let bus = aim_adapter::VehicleBus::of_module_key(&m.module_key);
+            let mut v = serde_json::to_value(&m).unwrap_or(Value::Null);
+            if let Value::Object(map) = &mut v {
+                map.insert("bus".into(), serde_json::to_value(bus).unwrap_or(Value::Null));
+                map.insert("bus_label".into(), Value::String(bus.label().into()));
+                map.insert("answers_obd2".into(), Value::Bool(bus.answers_obd2()));
+            }
+            v
+        })
+        .collect();
+    Ok(Json(json!({ "modules": described })))
 }
 
 async fn module_identity(
