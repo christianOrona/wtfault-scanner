@@ -21,6 +21,11 @@ Evidence, not intention. Everything here has run against a vehicle.
 OBD-II services 01–0A, UDS 0x10/0x19/0x22/0x27/0x2E/0x3E, full-bus module sweep,
 Mode 06, readiness, live data, session comparison, flight recorder.
 
+A guided procedure reached its measured state on a real engine for the first
+time on 2026-09-11: `warm_idle` went `waiting` → `holding` → `measured` at 86 °C
+coolant and 600 rpm. It also proved the procedure was measuring nothing it
+existed for — see below.
+
 ## Findings from real sessions
 
 Mined from the local session database. These are measured counts, not guesses.
@@ -107,23 +112,37 @@ Honest gaps, in the order they matter.
   the desktop shell has only ever been built and run on Windows.
 - **Mode 06 unit scalings unverified.** Pass/fail and margin are exact because
   both sides share the scaling; the units are a best guess and labelled as one.
+  A 2019 F-250 returned zero monitor tests, which is plausible for a diesel and
+  has not been confirmed as correctly-none rather than silently-none.
+- **Nothing knows what fuel the engine burns.** PID `0x51` reports it and is
+  never asked. A gasoline-shaped procedure therefore runs on a diesel and
+  measures nothing: `warm_idle` exists for fuel trims, a diesel has none, and
+  until 2026-09-11 it reported success anyway. It now says what it could not
+  measure, but a procedure still cannot declare which engines it applies to.
+- **No diesel-specific signals.** DPF load, regeneration state, DEF level and
+  SCR temperatures are all absent. Most are manufacturer-specific rather than
+  legislated, so they belong in profile data rather than the core catalogue.
 - **No manufacturer-specific decoding.** Everything is the public standard,
   which is why it works across brands and also why a module can answer with a
   code nobody has a description for.
 - **Profile import is folder-only.** Dropping a YAML file in works; importing
   one from a URL with a verification count does not exist.
-- **The second bus is swept but has never answered.** A module scan now switches
-  to the medium-speed body bus and sweeps it when the adapter accepts the
-  bit-rate commands. No vehicle has been scanned this way yet, so there is no
-  evidence any of it reaches a real body module. An adapter that takes the
-  commands is not necessarily wired to pins 3 and 11, and nothing on the wire
-  distinguishes "this vehicle has nothing there" from "this cable cannot hear
-  it" — so silence is reported as silence and this line stays here until a real
-  module answers.
-- **A guided procedure has never reached its measured state.** The built-in
-  preconditions want a warm engine; the simulator idles at 65 °C and satisfies
-  none of them, so the `waiting` → `holding` transition has only ever been
-  reasoned about.
+- **The second bus is measured, and the code that reaches it is not yet
+  proven.** On 2026-09-11 a 2019 F-250's secondary bus was mapped by hand
+  through the adapter: 500 kbit/s on pins 3 and 11, 29 modules answering
+  TesterPresent across `700-7FF`, 22 of them holding as-built configuration
+  blocks. The app had been seeing two modules and calling that the vehicle.
+
+  Everything that measurement exposed has been fixed — the bus type no longer
+  names a speed, the capability flag is actually set, the switch uses the
+  commands measured to work, discovery sweeps by address instead of
+  broadcasting, and the range reaches the `7F1` where a real module answered.
+  **None of it has been run against a vehicle.** The hand measurement says what
+  is there; it does not say the code now finds it.
+- **Silence on the second bus stays silence.** An adapter that accepts every
+  bit-rate command is not necessarily wired to pins 3 and 11, and nothing on the
+  wire distinguishes "this vehicle has nothing there" from "this cable cannot
+  hear it".
 - **Provider API keys go to the OS credential store** where there is one. On a
   machine without one the key stays in the settings file in plain text, and the
   Settings screen says so against that key rather than leaving anyone to assume

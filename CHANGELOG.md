@@ -3,6 +3,74 @@
 Notable changes, newest first. Versions follow [semantic versioning](https://semver.org),
 with the caveat that everything below 1.0 is allowed to move.
 
+## [0.4.0] — 2026-09-11
+
+Measured on a 2019 F-250, where the app had been seeing two modules and calling
+that the vehicle. Mapping its second bus by hand found **29 more**, 22 of them
+holding configuration blocks. Everything below is what that measurement exposed.
+
+### Changed
+
+- **A bus no longer claims to know its own speed.** `VehicleBus` named two:
+  `HighSpeed` at 500 kbit/s and `MediumSpeed` at 125. That truck's second bus
+  runs at **500**. At 125 and 250 the adapter reported nothing but `CAN ERROR`;
+  at 500 the same pins carried 239 frames in five seconds. Ford called the old
+  one MS-CAN at 125 and the newer one HS-CAN2 at 500, so a type encoding either
+  number is wrong on half the fleet.
+
+  The type now names the pins — `Primary` for 6 and 14, `Secondary` for 3 and
+  11 — and the rate is searched for, fastest first, by listening for traffic.
+
+- **Discovery asks each bus a question it might answer.** The legislated
+  broadcast is right on the primary bus and useless on the secondary one: with
+  that bus demonstrably alive, `7DF 0100`, `3E00` and `0902` every one returned
+  NO DATA. Body modules are not emissions modules and owe service 01 nothing.
+
+  The secondary bus is swept by address with TesterPresent instead, and a
+  negative response counts as presence — three of those 29 modules answered
+  `7F 3E 12`, and treating a refusal as silence would have lost them.
+
+- **The sweep reaches `7FF`.** It stopped at `7EF`, the tidy end of the
+  conventional block. A module answered at `7F1`.
+
+- Module keys carry the bus they answered on, so two buses with a module at the
+  same address stay two modules.
+
+### Fixed
+
+- **`multiple_can_buses` was never set true by anything, anywhere.** Every
+  bus-switching path was unreachable on every adapter ever connected, including
+  the ones that could plainly do it. A capability nothing grants is a feature
+  nobody has.
+
+- **Bus switching used a command never confirmed to reach the second channel.**
+  `ATPB` reconfigures a protocol; on STN hardware the second channel is a
+  different thing. `STP53` selects it and `STPBR` sets its rate, both measured
+  working.
+
+- **A procedure that measured nothing reported success.** `warm_idle` exists to
+  read fuel trims at operating temperature. It named `short_term_fuel_trim_1`
+  and `long_term_fuel_trim_1`; the catalogue calls them `short_fuel_trim_b1` and
+  `long_fuel_trim_b1`. Neither resolved, so it ran on a warm engine, measured no
+  fuel trims, and said it had succeeded.
+
+  Correct ids are not enough — the truck is a diesel and has no fuel trims to
+  report. The result now carries what was declared, what was unavailable, and
+  whether it was complete, and says plainly that a missing signal can be a fact
+  about the engine rather than a fault. Two tests now compare every procedure's
+  declared signals against the signals that exist.
+
+### Known
+
+**None of the second-bus code has been run against a vehicle.** The hand
+measurement says what is there; it does not say this finds it.
+
+Silence on the secondary bus is still reported as silence. An adapter that
+accepts every bit-rate command is not necessarily wired to pins 3 and 11, and
+nothing on the wire tells the two apart.
+
+**Upgrading from 0.3.2 or earlier still needs a manual install.**
+
 ## [0.3.9] — 2026-09-11
 
 ### Added
