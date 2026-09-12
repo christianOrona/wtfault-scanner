@@ -3,6 +3,61 @@
 Notable changes, newest first. Versions follow [semantic versioning](https://semver.org),
 with the caveat that everything below 1.0 is allowed to move.
 
+## [0.4.1] — 2026-09-11
+
+Finding the second bus turned a seven-module vehicle into a thirty-six module
+one, and every screen still assumed all of them were emissions modules. This is
+the catch-up.
+
+### Fixed
+
+- **The assistant told an owner his app could not do something it had already
+  done.** Asked whether his mirrors could be set to fold, it answered "not with
+  this app, and not with that adapter" — on a truck this app had written a
+  configuration change to, through an adapter that had just read the bus in
+  question.
+
+  Its prompt said "This build is permanently read-only". That is not true: the
+  application writes configuration and clears codes behind a typed confirmation.
+  It is the *agent* that cannot, and stating that as a property of the
+  application sends people off to buy software they already own. The prompt now
+  draws the boundary where it actually is, and says who can.
+
+  The same prompt described every adapter as a cheap ELM327 clone. It now
+  receives the measured capabilities of the adapter actually connected.
+
+- **Live data offered modules that can never produce it.** 29 of the 36 modules
+  on a 2019 F-250 are body and comfort modules: they implement UDS and owe
+  OBD-II service 01 nothing. Asking one for its supported PIDs returns nothing,
+  and the picker rendered empty — which reads as a broken screen rather than as
+  a question that was never going to have an answer.
+
+  It now says what is true: this module works, it does not report live sensor
+  data, and here is what it does hold.
+
+- **The module list was thirty-six rows with nothing to separate them.** Split
+  by bus, with the body group labelled and explained.
+
+- **`scan_all_modules` appeared as a raw identifier** in the middle of plain
+  English while an inspection ran. Eight tool names were missing from the
+  dictionary that turns them into sentences, and every one of them would have
+  done the same thing when called.
+
+- **The report ended with hundreds of lines of the assistant's working.** Every
+  call, its arguments as raw JSON, every result — pinned below the answer,
+  growing with the number of modules. Collapsed behind a disclosure. Nothing is
+  deleted: it is one click away, and the flight recorder and the log file both
+  hold the same record in full.
+
+### Known
+
+An inspection interrupted by a provider running out of credit, then restarted,
+showed both runs' steps concatenated in one progress panel. Filed as #52 with
+the evidence and three candidate causes, none of them confirmed. Not fixed:
+one screenshot is not a diagnosis.
+
+**Upgrading from 0.3.2 or earlier still needs a manual install.**
+
 ## [0.4.0] — 2026-09-11
 
 Measured on a 2019 F-250, where the app had been seeing two modules and calling
