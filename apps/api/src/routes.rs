@@ -889,16 +889,61 @@ async fn update_download_status() -> Json<Value> {
 /// Separate from the session log, which records what the vehicle said. This is
 /// what was concluded from it, including the things that were ruled out — which
 /// are the expensive findings and the ones most easily lost.
-async fn vehicle_knowledge(State(state): State<AppState>) -> ApiResult<Json<Value>> {
-    let findings = state.with_service(|s| s.knowledge()).await?;
+#[derive(Debug, Deserialize)]
+struct KnowledgeQuery {
+    /// Which vehicle to report on. Omitted means the connected one.
+    #[serde(default)]
+    vin: Option<String>,
+}
+
+async fn vehicle_knowledge(
+    State(state): State<AppState>,
+    Query(q): Query<KnowledgeQuery>,
+) -> ApiResult<Json<Value>> {
+    // By VIN when asked, which is what makes this readable with nothing
+    // plugged in. A garage reviewing six trucks at a desk is the ordinary case
+    // for reporting, and requiring a connection to read what is already known
+    // would make the store useless for exactly that.
+    if let Some(vin) = q.vin {
+        let findings = state.store.knowledge(&vin).map_err(ApiError::from)?;
+        return Ok(Json(json!({
+            "vin": vin,
+            "count": findings.len(),
+            "findings": findings,
+        })));
+    }
+
+    // Connected vehicle, when there is one.
+    if let Ok(findings) = state.with_service(|s| s.knowledge()).await {
+        return Ok(Json(json!({
+            "count": findings.len(),
+            "findings": findings,
+        })));
+    }
+
+    // Otherwise: which vehicles anything is known about at all. The answer a
+    // person opening the app with nothing plugged in actually wants.
+    let vehicles = state.store.vehicles_with_knowledge().map_err(ApiError::from)?;
     Ok(Json(json!({
-        "count": findings.len(),
-        "findings": findings,
+        "vehicles": vehicles
+            .into_iter()
+            .map(|(vin, count)| json!({ "vin": vin, "findings": count }))
+            .collect::<Vec<_>>(),
     })))
 }
 
 #[derive(Debug, Deserialize)]
 struct FindingBody {
+    /// Which vehicle this is about.
+    ///
+    /// Optional: when absent the connected vehicle is used, which is the
+    /// ordinary case. Supplying one explicitly is for recording what was
+    /// learned about a vehicle that is not plugged in right now — seeding a
+    /// history from a session that has already ended, or correcting an entry
+    /// at a desk. The VIN is the key either way, so nothing can be filed
+    /// against a vehicle by accident.
+    #[serde(default)]
+    vin: Option<String>,
     subject: String,
     outcome: String,
     claim: String,
@@ -932,11 +977,30 @@ async fn record_vehicle_knowledge(
         }
     };
     let authority = body.authority.unwrap_or_else(|| String::from("measured_this_session"));
-    state
-        .with_service(move |s| {
-            s.record_finding(&body.subject, outcome, &body.claim, &body.evidence, &authority)
-        })
-        .await??;
+
+    match body.vin {
+        // Named explicitly: goes straight to the store, because there may be no
+        // session and no vehicle connected at all.
+        Some(vin) => {
+            let finding = aim_session::Finding {
+                subject: body.subject,
+                outcome,
+                claim: body.claim,
+                evidence: body.evidence,
+                authority,
+                observed_at: aim_types::now().to_rfc3339(),
+                session_id: None,
+            };
+            state.store.record_finding(&vin, &finding).map_err(ApiError::from)?;
+        }
+        None => {
+            state
+                .with_service(move |s| {
+                    s.record_finding(&body.subject, outcome, &body.claim, &body.evidence, &authority)
+                })
+                .await??;
+        }
+    }
     Ok(Json(json!({ "recorded": true })))
 }
 
