@@ -3,6 +3,61 @@
 Notable changes, newest first. Versions follow [semantic versioning](https://semver.org),
 with the caveat that everything below 1.0 is allowed to move.
 
+## [0.4.2] — 2026-09-12
+
+### Added
+
+- **Compare a vehicle against how the factory built it.** The manufacturer's
+  as-built file and a live read describe the same bytes at two moments; nothing
+  could compare them, so the file was only ever a fallback for modules that
+  would not answer.
+
+  Comparing them answers what a live read cannot. Somebody buying a vehicle
+  learns what a previous owner changed. Somebody diagnosing one learns whether a
+  setting was ever touched. And anybody working out where a feature lives gets
+  the search narrowed from every byte in a module to the few that have moved.
+
+  It does not say what a changed byte *means* — no manufacturer publishes that,
+  and this build will not invent it. A module that did not answer is listed
+  separately rather than counted as unchanged, because a silent module counted
+  as agreeing is how a comparison becomes a reassuring lie.
+
+  Nothing in it is manufacturer-specific except who publishes such a file.
+
+- **A feature's module is reached wherever it answers.** Reading or writing a
+  setting now switches to the bus that module was discovered on and switches
+  back afterwards — including when the read fails, the write is refused, or the
+  change turns out to be a no-op, because an adapter left on another bus breaks
+  every unrelated request after it.
+
+  The primary bus wins when a module was found on both, which is not
+  hypothetical: a 2019 F-250 exposes the module holding its door-lock
+  configuration on the legislated bus as well as the body bus, because the
+  gateway forwards diagnostics for it.
+
+### Fixed
+
+- **The engine is asked what it burns.** PID `0x51` reports fuel type, this
+  build has decoded it all along, and nothing had ever read it — so when a
+  procedure could not measure the fuel trims it exists for, the app explained
+  fuel trims in the abstract to a truck that could have said, in one request,
+  that it is a diesel. It now says the specific thing.
+
+### Data
+
+- Candidate mappings for mirror fold-on-lock on one 2019 F-250, **marked as
+  candidates**. Owner-community documentation names the blocks; this vehicle's
+  own factory file confirms the blocks exist and what the factory wrote in them.
+  Neither establishes that the named bit folds a mirror, so both are unverified:
+  readable, never writable, until measured on the vehicle the way every other
+  mapping here was.
+
+  The same recipe names a second block whose documented value does not fit the
+  single byte this vehicle holds there. It is written down and deliberately not
+  included.
+
+**Upgrading from 0.3.2 or earlier still needs a manual install.**
+
 ## [0.4.1] — 2026-09-11
 
 Finding the second bus turned a seven-module vehicle into a thirty-six module
