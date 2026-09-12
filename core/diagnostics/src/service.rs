@@ -1827,7 +1827,39 @@ impl DiagnosticService {
         let after = self.check_procedure_inner(procedure_id)?;
         let held_after = after.data.as_ref().and_then(|d| d["all_met"].as_bool()).unwrap_or(false);
 
+        // What was asked for against what came back.
+        //
+        // A procedure exists to establish something, and it says which signals
+        // establish it. Reading some of them and reporting success is how
+        // `warm_idle` — whose whole purpose is fuel trims at operating
+        // temperature — ran on a warm engine on a real truck, measured no fuel
+        // trims, and reported success. Two separate reasons a signal can be
+        // missing, and neither is visible in a list of the values that did
+        // arrive: the id might not exist, or this engine might not have it. A
+        // diesel has no fuel trims to report.
+        let missing: Vec<String> = procedure
+            .measure
+            .iter()
+            .filter(|wanted| !reading.values.iter().any(|v| &&v.signal_id == wanted))
+            .cloned()
+            .collect();
+
         let mut warnings = reading.warnings.clone();
+        if !missing.is_empty() {
+            warnings.push(Warning::caution(
+                "declared_measurements_missing",
+                format!(
+                    "This procedure exists to measure {}, and {} did not read on this vehicle. \
+                     What is below is what answered, not the measurement the procedure describes. \
+                     A signal can be missing because this engine does not have it — a diesel \
+                     reports no fuel trims — which is a fact about the vehicle rather than a \
+                     fault.",
+                    procedure.measure.join(", "),
+                    missing.join(", ")
+                ),
+            ));
+        }
+
         if !held_after {
             warnings.push(Warning::caution(
                 "conditions_broke_during_the_reading",
@@ -1852,6 +1884,12 @@ impl DiagnosticService {
                 "conditions_after": after.data.as_ref().map(|d| d["conditions"].clone()),
                 "held_throughout": held_after,
                 "purpose": procedure.purpose,
+                // Both lists, always. "Complete" is the honest headline: the
+                // conditions can hold perfectly while the thing being
+                // established never gets read.
+                "declared": procedure.measure,
+                "unavailable": missing,
+                "complete": missing.is_empty() && held_after,
             })),
             values: reading.values.clone(),
             warnings,

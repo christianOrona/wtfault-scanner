@@ -209,8 +209,8 @@ impl Procedure {
                     String::from("engine_rpm"),
                     String::from("coolant_temp"),
                     String::from("engine_load"),
-                    String::from("short_term_fuel_trim_1"),
-                    String::from("long_term_fuel_trim_1"),
+                    String::from("short_fuel_trim_b1"),
+                    String::from("long_fuel_trim_b1"),
                     String::from("control_module_voltage"),
                 ],
                 hold_seconds: 10,
@@ -240,8 +240,8 @@ impl Procedure {
                 ],
                 measure: vec![
                     String::from("coolant_temp"),
-                    String::from("short_term_fuel_trim_1"),
-                    String::from("long_term_fuel_trim_1"),
+                    String::from("short_fuel_trim_b1"),
+                    String::from("long_fuel_trim_b1"),
                     String::from("intake_air_temp"),
                     String::from("maf_rate"),
                 ],
@@ -470,5 +470,62 @@ mod tests {
         let cold = Precondition::CoolantAtMost { max: 30.0 };
         let text = cold.instruction();
         assert!(text.contains("overnight") || text.contains("several hours"), "{text}");
+    }
+}
+
+#[cfg(test)]
+mod catalogue_tests {
+    use super::Procedure;
+
+    /// Every signal a procedure claims to measure must actually exist.
+    ///
+    /// `warm_idle` shipped naming `short_term_fuel_trim_1` and
+    /// `long_term_fuel_trim_1`. Neither is a signal id — the catalogue calls
+    /// them `short_fuel_trim_b1` and `long_fuel_trim_b1` — so the procedure
+    /// whose stated purpose is "fuel trims at a warm idle" measured no fuel
+    /// trims at all. It reported success anyway, on a warm engine, on a real
+    /// truck, having established nothing it exists to establish.
+    ///
+    /// Nothing caught it because nothing compared the two lists. This does.
+    #[test]
+    fn every_procedure_measures_signals_that_exist() {
+        let decoders = aim_decoders::DecoderSet::generic_obd().expect("generic decoders load");
+        let mut unknown = Vec::new();
+
+        for procedure in Procedure::built_in() {
+            for signal in &procedure.measure {
+                if decoders.pids.address_of(signal).is_none() {
+                    unknown.push(format!("{}: {signal}", procedure.id));
+                }
+            }
+        }
+
+        assert!(
+            unknown.is_empty(),
+            "these procedures name signals that do not exist, so they would run and measure \
+             nothing: {unknown:?}"
+        );
+    }
+
+    /// A procedure's preconditions are read from the vehicle too, and the same
+    /// mistake would be just as quiet there — a condition on a signal that does
+    /// not exist can never be met, so the procedure would sit at `waiting`
+    /// forever with no explanation.
+    #[test]
+    fn every_precondition_watches_a_signal_that_exists() {
+        let decoders = aim_decoders::DecoderSet::generic_obd().expect("generic decoders load");
+        let mut unknown = Vec::new();
+
+        for procedure in Procedure::built_in() {
+            for condition in &procedure.conditions {
+                if let Some(signal) = condition.signal() {
+                    if decoders.pids.address_of(signal).is_none() {
+                        unknown.push(format!("{}: {signal}", procedure.id));
+                    }
+                }
+            }
+        }
+
+        assert!(unknown.is_empty(), "preconditions watching signals that do not exist: {unknown:?}");
     }
 }
