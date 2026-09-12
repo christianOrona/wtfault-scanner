@@ -4390,6 +4390,28 @@ impl DiagnosticService {
         let addr = Self::request_target(&module)?;
         let budget = Duration::from_millis(1500);
 
+        // On the bus this module answers on, like every other path that talks
+        // to one. Without it the probe asks a body module on the legislated bus
+        // and reports a closed gate — which then refuses the write for a module
+        // that would have accepted it, and looks like a security refusal rather
+        // than a question asked down the wrong wire.
+        let home = match &addr {
+            RequestTarget::Physical(a) => self.reach_module(a),
+            RequestTarget::Functional => None,
+        };
+        let outcome = self.probe_write_gate_on_its_bus(module_key, &addr, budget);
+        self.restore_bus(home);
+        outcome
+    }
+
+    fn probe_write_gate_on_its_bus(
+        &mut self,
+        module_key: &str,
+        addr: &RequestTarget,
+        budget: Duration,
+    ) -> AimResult<Payload> {
+        let addr = addr.clone();
+
         // Reserved by ISO 14229 and not used by any manufacturer for storage.
         // Chosen so that even a module that lies about not having it has
         // nothing meaningful behind it.
