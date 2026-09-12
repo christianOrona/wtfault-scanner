@@ -2444,8 +2444,26 @@ impl DiagnosticService {
         let mut unreachable = Vec::new();
         let mut differences = 0usize;
 
-        // Ordered, so two runs of this on the same vehicle are comparable.
-        let addresses: Vec<String> = file.modules.keys().cloned().collect();
+        // Grouped by bus, and each bus visited once.
+        //
+        // This switched per module and read five of twenty-nine before the rest
+        // went silent — measured on a 2019 F-250 on 2026-09-12. Every switch
+        // back to the primary bus renegotiates the protocol from scratch, so
+        // twenty-nine modules meant fifty-eight renegotiations, and the link
+        // stopped answering partway through. Ordering the work by bus turns
+        // that into one switch out and one back.
+        let mut addresses: Vec<String> = file.modules.keys().cloned().collect();
+        addresses.sort_by_key(|address| {
+            // Unknown buses sort with the primary: nothing is switched for a
+            // module no scan has placed, so they belong with the ones already
+            // reachable from where the adapter is.
+            match self.bus_for_request_address(address) {
+                Some(VehicleBus::Secondary) => 1,
+                _ => 0,
+            }
+        });
+
+        let started_on = self.adapter.current_bus();
 
         for address in addresses {
             let Some(factory) = crate::capture::factory_capture(&file, &address, now.clone())
@@ -2454,11 +2472,10 @@ impl DiagnosticService {
             };
 
             let dids: Vec<u16> = factory.records.keys().copied().collect();
-            let home = self.reach_module(&address);
-            let live = self
-                .read_config(&address, &dids, Some(String::from("as it is now")))
-                .map(|(capture, _missing)| capture);
-            self.restore_bus(home);
+            // Stay on whichever bus this module needs; the ordering above means
+            // that is at most one change, not one per module.
+            let _ = self.reach_module(&address);
+            let live = self.read_config_in_batches(&address, &dids);
 
             let live = match live {
                 Ok(live) => live,
@@ -2492,6 +2509,13 @@ impl DiagnosticService {
             }));
         }
 
+        // One trip back, at the end, rather than one per module.
+        if self.adapter.current_bus() != started_on {
+            if let Err(e) = self.adapter.select_bus(started_on) {
+                tracing::warn!(error = %e, "cannot return to the starting bus after comparing");
+            }
+        }
+
         let mut warnings = vec![Warning::info(
             "a_difference_is_not_a_finding",
             "Each difference is a byte that is not what the factory wrote. What it controls is \
@@ -2521,6 +2545,49 @@ impl DiagnosticService {
             })),
             warnings,
             ..Default::default()
+        })
+    }
+
+    /// Read a module's configuration however many identifiers it holds.
+    ///
+    /// One capture is capped, because a capture is a loop over caller-supplied
+    /// input that puts traffic on a vehicle bus. A comparison's input is not
+    /// caller-supplied — it is however many blocks the manufacturer's own file
+    /// records — and on a 2019 F-250 one module holds more than the cap, so the
+    /// whole module was skipped with a message about capture limits that had
+    /// nothing to do with the vehicle.
+    ///
+    /// The cap still applies per request; this just makes several.
+    fn read_config_in_batches(
+        &mut self,
+        address: &str,
+        dids: &[u16],
+    ) -> AimResult<crate::capture::ConfigCapture> {
+        const BATCH: usize = 64;
+        let mut records = std::collections::BTreeMap::new();
+        let mut last_error = None;
+
+        for chunk in dids.chunks(BATCH) {
+            match self.read_config(address, chunk, Some(String::from("as it is now"))) {
+                Ok((capture, _missing)) => records.extend(capture.records),
+                // A batch that returns nothing is not fatal while another might
+                // still answer: a module can hold the second half of what the
+                // file records and none of the first.
+                Err(e) => last_error = Some(e),
+            }
+        }
+
+        if records.is_empty() {
+            return Err(last_error.unwrap_or_else(|| {
+                AimError::new(ErrorCode::NoData, format!("the module at {address} returned nothing"))
+            }));
+        }
+
+        Ok(crate::capture::ConfigCapture {
+            module: address.to_string(),
+            records,
+            taken_at: aim_types::now().to_rfc3339(),
+            label: Some(String::from("as it is now")),
         })
     }
 
