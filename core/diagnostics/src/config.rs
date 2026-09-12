@@ -402,7 +402,15 @@ pub fn plan_change(
     ) {
         MappingRelevance::Candidate => checks.push(Check::fail(
             "mapping_is_for_this_vehicle",
-            "Was this mapping measured on this vehicle?",
+            // The question this check actually answers is whether the mapping
+            // is *scoped* to the vehicle in front of it — not whether anybody
+            // measured it here. Those came apart when a documented candidate
+            // became attemptable: a mapping scoped by VIN and never measured
+            // passed a check reading "Was this mapping measured on this
+            // vehicle?", which is the kind of quiet false claim this project
+            // exists not to make. `mapping_known` is where measurement is
+            // reported, and it says plainly when there has been none.
+            "Is this mapping meant for this vehicle?",
             "No - it was measured on a DIFFERENT vehicle that closely resembles yours, and is \
              offered here as a candidate. It can be read, and reading it is the way to find out \
              whether it holds: the app will tell you what it thinks the setting currently is, \
@@ -414,7 +422,15 @@ pub fn plan_change(
         // the verification checks above, not by this one.
         _ => checks.push(Check::pass(
             "mapping_is_for_this_vehicle",
-            "Was this mapping measured on this vehicle?",
+            // The question this check actually answers is whether the mapping
+            // is *scoped* to the vehicle in front of it — not whether anybody
+            // measured it here. Those came apart when a documented candidate
+            // became attemptable: a mapping scoped by VIN and never measured
+            // passed a check reading "Was this mapping measured on this
+            // vehicle?", which is the kind of quiet false claim this project
+            // exists not to make. `mapping_known` is where measurement is
+            // reported, and it says plainly when there has been none.
+            "Is this mapping meant for this vehicle?",
         )),
     }
 

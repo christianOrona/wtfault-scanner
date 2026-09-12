@@ -1556,3 +1556,152 @@ mod open_failure_tests {
         let _ = std::fs::remove_file(&path);
     }
 }
+
+// ------------------------------------------------------------- knowledge
+
+/// What was concluded about one vehicle, as opposed to what it said.
+///
+/// See the `vehicle_knowledge` table comment for why this is kept separately
+/// from the evidence that produced it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Finding {
+    /// Stable dotted identifier for what this is about. Reused so a later
+    /// finding about the same subject replaces the earlier one.
+    pub subject: String,
+    /// Whether the thing holds, does not hold, or was merely seen.
+    pub outcome: FindingOutcome,
+    /// One sentence, present tense, readable on its own.
+    pub claim: String,
+    /// How it is known. A finding without this is not worth keeping.
+    pub evidence: String,
+    /// Where it sits against the authority ranking, as its serialized name.
+    pub authority: String,
+    /// When it was established, RFC 3339.
+    pub observed_at: String,
+    /// The session that produced it, when one did.
+    pub session_id: Option<String>,
+}
+
+/// Whether a finding says a thing holds, does not hold, or was just seen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FindingOutcome {
+    /// Tested and true on this vehicle.
+    Established,
+    /// Tested and false on this vehicle.
+    ///
+    /// As valuable as `Established` and more expensive to learn, because
+    /// nothing suggests it in advance.
+    RuledOut,
+    /// Seen, without a test behind it. A reading, a count, a topology.
+    Observed,
+}
+
+impl FindingOutcome {
+    fn as_str(&self) -> &'static str {
+        match self {
+            FindingOutcome::Established => "established",
+            FindingOutcome::RuledOut => "ruled_out",
+            FindingOutcome::Observed => "observed",
+        }
+    }
+
+    fn parse(s: &str) -> FindingOutcome {
+        match s {
+            "established" => FindingOutcome::Established,
+            "ruled_out" => FindingOutcome::RuledOut,
+            _ => FindingOutcome::Observed,
+        }
+    }
+}
+
+impl SessionStore {
+    /// Record something established about a vehicle.
+    ///
+    /// Replaces any earlier finding on the same subject for the same VIN: a
+    /// later measurement supersedes an earlier one, and a store that kept both
+    /// would grow until nothing could be put in front of a model.
+    pub fn record_finding(&self, vin: &str, finding: &Finding) -> AimResult<()> {
+        let conn = self.lock()?;
+        conn.execute(
+            "INSERT INTO vehicle_knowledge
+                 (vin, subject, outcome, claim, evidence, authority, observed_at, session_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             ON CONFLICT(vin, subject) DO UPDATE SET
+                 outcome = excluded.outcome,
+                 claim = excluded.claim,
+                 evidence = excluded.evidence,
+                 authority = excluded.authority,
+                 observed_at = excluded.observed_at,
+                 session_id = excluded.session_id",
+            params![
+                vin.to_ascii_uppercase(),
+                finding.subject,
+                finding.outcome.as_str(),
+                finding.claim,
+                finding.evidence,
+                finding.authority,
+                finding.observed_at,
+                finding.session_id,
+            ],
+        )
+        .map_err(storage)?;
+        Ok(())
+    }
+
+    /// Everything known about one vehicle, newest first.
+    pub fn knowledge(&self, vin: &str) -> AimResult<Vec<Finding>> {
+        let conn = self.lock()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT subject, outcome, claim, evidence, authority, observed_at, session_id
+                 FROM vehicle_knowledge WHERE vin = ?1
+                 ORDER BY observed_at DESC",
+            )
+            .map_err(storage)?;
+        let rows = stmt
+            .query_map(params![vin.to_ascii_uppercase()], |r| {
+                Ok(Finding {
+                    subject: r.get(0)?,
+                    outcome: FindingOutcome::parse(&r.get::<_, String>(1)?),
+                    claim: r.get(2)?,
+                    evidence: r.get(3)?,
+                    authority: r.get(4)?,
+                    observed_at: r.get(5)?,
+                    session_id: r.get(6)?,
+                })
+            })
+            .map_err(storage)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(storage)
+    }
+
+    /// Which vehicles anything is known about.
+    ///
+    /// The list a garage needs: six trucks, six sets of findings, nothing
+    /// leaking between them.
+    pub fn vehicles_with_knowledge(&self) -> AimResult<Vec<(String, usize)>> {
+        let conn = self.lock()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT vin, COUNT(*) FROM vehicle_knowledge
+                 GROUP BY vin ORDER BY MAX(observed_at) DESC",
+            )
+            .map_err(storage)?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as usize)))
+            .map_err(storage)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(storage)
+    }
+
+    /// Forget one finding, by subject.
+    pub fn forget_finding(&self, vin: &str, subject: &str) -> AimResult<bool> {
+        let conn = self.lock()?;
+        let n = conn
+            .execute(
+                "DELETE FROM vehicle_knowledge WHERE vin = ?1 AND subject = ?2",
+                params![vin.to_ascii_uppercase(), subject],
+            )
+            .map_err(storage)?;
+        Ok(n > 0)
+    }
+}

@@ -471,6 +471,47 @@ impl DiagnosticService {
         serde_json::from_value(stored.data).ok()
     }
 
+    // ------------------------------------------------------------ knowledge
+
+    /// Record something established about the connected vehicle.
+    ///
+    /// Needs a settled VIN: knowledge is keyed on the vehicle it is about, and
+    /// a finding filed against an unidentified truck would be a finding nobody
+    /// could ever attribute or trust.
+    pub fn record_finding(
+        &mut self,
+        subject: &str,
+        outcome: aim_session::FindingOutcome,
+        claim: &str,
+        evidence: &str,
+        authority: &str,
+    ) -> AimResult<()> {
+        let identity = self.identity();
+        let Some(vin) = identity.settled("vin") else {
+            return Err(AimError::new(
+                ErrorCode::PreconditionFailed,
+                "nothing can be recorded about a vehicle whose VIN is not established",
+            ));
+        };
+        let finding = aim_session::Finding {
+            subject: subject.to_string(),
+            outcome,
+            claim: claim.to_string(),
+            evidence: evidence.to_string(),
+            authority: authority.to_string(),
+            observed_at: aim_types::now().to_rfc3339(),
+            session_id: Some(self.session.id.to_string()),
+        };
+        self.store.record_finding(vin, &finding)
+    }
+
+    /// Everything known about the connected vehicle.
+    pub fn knowledge(&self) -> Vec<aim_session::Finding> {
+        let identity = self.identity();
+        let Some(vin) = identity.settled("vin") else { return Vec::new() };
+        self.store.knowledge(vin).unwrap_or_default()
+    }
+
     /// What the knowledge providers are told about this vehicle.
     ///
     /// Derived from [`DiagnosticService::identity`] rather than from the
@@ -2971,7 +3012,15 @@ impl DiagnosticService {
         dids: &[u16],
         label: Option<String>,
     ) -> AimResult<Payload> {
-        let (capture, missing) = self.read_config(module, dids, label)?;
+        // On the module's own bus. Third path to need this and the third to
+        // have been written without it — see the note on `reach_module`. A
+        // capture asked on the wrong bus returns nothing and reports it as a
+        // module that holds no configuration, which is a statement about the
+        // vehicle made from a question asked down the wrong wire.
+        let home = self.reach_module(module);
+        let result = self.read_config(module, dids, label);
+        self.restore_bus(home);
+        let (capture, missing) = result?;
         let records = capture.records.clone();
 
         let mut warnings = Vec::new();

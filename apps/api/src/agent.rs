@@ -231,15 +231,18 @@ pub async fn describe_context(state: &AppState) -> String {
                 modules,
                 aim_types::AdapterFitness::assess(&s.health(), &s.capabilities()),
                 s.capabilities(),
+                s.knowledge(),
             )
         })
         .await
         .ok()
         .flatten();
 
-    let (descriptor, conn_state, vin, modules, link, caps) = match snapshot {
-        Some(s) => (s.0, s.1, s.2, s.3, Some(s.4), Some(s.5)),
-        None => ("none".into(), "disconnected".into(), None, Vec::new(), None, None),
+    let (descriptor, conn_state, vin, modules, link, caps, knowledge) = match snapshot {
+        Some(s) => (s.0, s.1, s.2, s.3, Some(s.4), Some(s.5), s.6),
+        None => {
+            ("none".into(), "disconnected".into(), None, Vec::new(), None, None, Vec::new())
+        }
     };
 
     // The one place the VIN enters a prompt, and therefore the only place the
@@ -260,6 +263,10 @@ pub async fn describe_context(state: &AppState) -> String {
     if let Some(caps) = caps {
         block.push_str(&prompts::capability_block(&caps));
     }
+    // What this application has already established about THIS vehicle, so a
+    // model does not re-derive it or, worse, propose something already shown
+    // not to work here.
+    block.push_str(&aim_diagnostics::knowledge::for_prompt(&knowledge));
     block
 }
 

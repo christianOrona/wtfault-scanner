@@ -223,3 +223,78 @@ features:
       mask: 0x08
       on: 0x08
       off: 0x00
+
+  # The second half of the documented recipe: block 12 on each door module.
+  #
+  # The community notation is "740-12-01 Fxxx", where x means "leave as it is".
+  # This vehicle holds a single 0x00 byte in that block, so the only reading of
+  # that notation which fits is: set the high nibble to F, leave the low nibble.
+  # That is 0x00 -> 0xF0, and it is an INFERENCE about notation, not a value
+  # anybody has published for this block.
+  #
+  # It is recorded here so the inference is visible and arguable rather than
+  # buried in whoever ran the experiment. At least one owner reportedly needed
+  # 0xFC instead, which is the next hypothesis if this one produces nothing —
+  # and a separate session, because two changes at once test neither.
+
+  - id: mirror_fold_enable_driver
+    name: "Driver door: mirror fold enable byte"
+    risk: convenience
+
+    easy: >-
+      The second of two settings the mirror fold modification changes on the
+      driver's door. On its own it does nothing visible; it is meant to be
+      changed together with the other one.
+
+    technical: >-
+      Driver door module as-built block 12, identifier 0xDE0B, a single byte
+      reading 0x00 from the factory. Target 0xF0 is an inference from the
+      community notation "Fxxx" applied to a one-byte record.
+
+    modules: ["748"]
+    applies_to:
+      vins: ["1FT7W2BT7KEF78036"]
+
+    verification: unverified
+    source: >-
+      inferred from community notation for as-built block 740-12-01, not
+      measured and not published as a byte value for this block
+
+    mapping:
+      kind: data_identifier_bits
+      module: "740"
+      did: 0xDE0B
+      byte: 0
+      mask: 0xF0
+      on: 0xF0
+      off: 0x00
+
+  - id: mirror_fold_enable_passenger
+    name: "Passenger door: mirror fold enable byte"
+    risk: convenience
+
+    easy: >-
+      The same second setting on the passenger door. Both doors have to match
+      or the truck is configured to fold one mirror.
+
+    technical: >-
+      Passenger door module as-built block 12, identifier 0xDE0B, same
+      inference as the driver side.
+
+    modules: ["749"]
+    applies_to:
+      vins: ["1FT7W2BT7KEF78036"]
+
+    verification: unverified
+    source: >-
+      inferred from community notation for as-built block 741-12-01, not
+      measured and not published as a byte value for this block
+
+    mapping:
+      kind: data_identifier_bits
+      module: "741"
+      did: 0xDE0B
+      byte: 0
+      mask: 0xF0
+      on: 0xF0
+      off: 0x00

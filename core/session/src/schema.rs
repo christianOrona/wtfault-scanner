@@ -267,6 +267,59 @@ CREATE TABLE as_built (
 );
 "#,
     },
+    Migration {
+        version: 5,
+        name: "remember what has been established about each vehicle",
+        sql: r#"
+-- ------------------------------------------------------------ knowledge
+-- What is known about one vehicle, learned rather than shipped.
+--
+-- # Why this exists
+--
+-- Everything else here records what a vehicle *said*. This records what was
+-- *concluded*, which is the expensive part and the part that was being thrown
+-- away. Two sessions on a 2019 F-250 established that a documented mirror-fold
+-- mapping does nothing on it, that its second bus runs at 500 kbit/s, and that
+-- both door modules accept writes without security. None of that survived the
+-- process exiting, so the next session rediscovered it or, worse, did not.
+--
+-- # Why negative findings matter as much
+--
+-- "This does not work here" is as useful as "this does" and costs far more to
+-- learn, because nothing suggests it in advance. A store that only kept
+-- successes would quietly invite the same failed experiment every week.
+--
+-- # Keyed on VIN
+--
+-- One row per fact per vehicle, so a garage with six trucks keeps six sets and
+-- nothing leaks between them. `subject` plus `vin` is unique: a finding about
+-- the same thing supersedes the older one rather than accumulating, which is
+-- what keeps the set small enough to put in front of a model.
+CREATE TABLE vehicle_knowledge (
+    vin          TEXT NOT NULL,
+    -- Stable dotted identifier for what this is about, e.g.
+    -- `bus.secondary.rate` or `feature.mirror_fold_on_lock_driver`. Chosen by
+    -- the writer and reused so a later finding replaces an earlier one.
+    subject      TEXT NOT NULL,
+    -- established | ruled_out | observed
+    outcome      TEXT NOT NULL,
+    -- One sentence, present tense, readable on its own.
+    claim        TEXT NOT NULL,
+    -- How it is known. A claim with no evidence line is not recorded.
+    evidence     TEXT NOT NULL,
+    -- Where it sits against `aim_decoders::Authority`, lowest ordinal first.
+    authority    TEXT NOT NULL,
+    observed_at  TEXT NOT NULL,
+    -- The session it came from, when it came from one. Not a foreign key:
+    -- knowledge outlives the session that produced it, and deleting old
+    -- sessions must not delete what they taught.
+    session_id   TEXT,
+    PRIMARY KEY (vin, subject)
+);
+
+CREATE INDEX idx_knowledge_vin ON vehicle_knowledge(vin, observed_at DESC);
+"#,
+    },
 ];
 
 /// Bring `conn` up to the latest schema version, returning that version.

@@ -42,6 +42,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/features/{id}", get(read_feature))
         .route("/api/v1/config/capture", post(capture_configuration))
         .route("/api/v1/config/compare-to-factory", post(compare_to_factory))
+        .route(
+            "/api/v1/vehicles/knowledge",
+            get(vehicle_knowledge).post(record_vehicle_knowledge),
+        )
         .route("/api/v1/config/diff", post(diff_captures))
         .route("/api/v1/config/captures", get(list_captures))
         .route("/api/v1/catalog/signals", get(catalog_signals))
@@ -878,6 +882,62 @@ async fn update_download() -> Json<Value> {
 /// How far along the background download is.
 async fn update_download_status() -> Json<Value> {
     Json(serde_json::to_value(crate::update::download_state()).unwrap_or(Value::Null))
+}
+
+/// What this application has established about the connected vehicle.
+///
+/// Separate from the session log, which records what the vehicle said. This is
+/// what was concluded from it, including the things that were ruled out — which
+/// are the expensive findings and the ones most easily lost.
+async fn vehicle_knowledge(State(state): State<AppState>) -> ApiResult<Json<Value>> {
+    let findings = state.with_service(|s| s.knowledge()).await?;
+    Ok(Json(json!({
+        "count": findings.len(),
+        "findings": findings,
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+struct FindingBody {
+    subject: String,
+    outcome: String,
+    claim: String,
+    evidence: String,
+    #[serde(default)]
+    authority: Option<String>,
+}
+
+/// Record something established about the connected vehicle.
+///
+/// A POST rather than something the app infers: a finding is a claim, and a
+/// claim needs somebody or something willing to stand behind it. Evidence is
+/// required by the type, because a finding nobody can attribute is a rumour.
+async fn record_vehicle_knowledge(
+    State(state): State<AppState>,
+    Json(body): Json<FindingBody>,
+) -> ApiResult<Json<Value>> {
+    if body.claim.trim().is_empty() || body.evidence.trim().is_empty() {
+        return Err(ApiError::bad_request(
+            "a finding needs both a claim and the evidence behind it",
+        ));
+    }
+    let outcome = match body.outcome.as_str() {
+        "established" => aim_session::FindingOutcome::Established,
+        "ruled_out" => aim_session::FindingOutcome::RuledOut,
+        "observed" => aim_session::FindingOutcome::Observed,
+        other => {
+            return Err(ApiError::bad_request(format!(
+                "{other:?} is not an outcome; use established, ruled_out or observed"
+            )))
+        }
+    };
+    let authority = body.authority.unwrap_or_else(|| String::from("measured_this_session"));
+    state
+        .with_service(move |s| {
+            s.record_finding(&body.subject, outcome, &body.claim, &body.evidence, &authority)
+        })
+        .await??;
+    Ok(Json(json!({ "recorded": true })))
 }
 
 /// What on this vehicle is no longer how the factory built it.
