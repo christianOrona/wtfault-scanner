@@ -3566,6 +3566,39 @@ impl DiagnosticService {
         let mut evidence = None;
 
         for module in &modules {
+            // A module that does not speak OBD-II is asked in the language it
+            // does speak.
+            //
+            // Services 03, 07 and 0A are emissions services. A body module owes
+            // them nothing and answers none of them, so asking produced an
+            // empty list — and an empty list of fault codes does not read as
+            // "wrong question", it reads as "this module is fine".
+            //
+            // Measured on a 2019 F-250 on 2026-09-12: this path reported zero
+            // codes for the driver door module while another tool reading the
+            // same module over UDS found B1C09 stored. That zero was then used
+            // as evidence in a diagnosis. Nothing about the module was wrong;
+            // the question was.
+            if !VehicleBus::of_module_key(&module.module_key).answers_obd2() {
+                match self.uds_dtcs_for(module) {
+                    Ok((mut found, ev)) => {
+                        if evidence.is_none() {
+                            evidence = ev;
+                        }
+                        reports.append(&mut found);
+                    }
+                    Err(e) => warnings.push(Warning::caution(
+                        "module_did_not_report_codes",
+                        format!(
+                            "{} did not answer a UDS request for its fault codes ({}). That is \
+                             not the same as having none.",
+                            module.module_key, e.message
+                        ),
+                    )),
+                }
+                continue;
+            }
+
             for status in [DtcStatus::Confirmed, DtcStatus::Pending, DtcStatus::Permanent] {
                 let service = match status {
                     DtcStatus::Confirmed => Service::StoredDtcs,
@@ -5033,6 +5066,78 @@ impl DiagnosticService {
             return None;
         }
         Some(String::from_utf8_lossy(body).trim().to_string())
+    }
+
+    /// Read one module's fault codes over UDS.
+    ///
+    /// For modules that do not implement the OBD-II emissions services — body,
+    /// comfort and instrument modules, which is most of a vehicle. ISO 14229
+    /// service 0x19 with a status mask of 0xFF asks for every code whatever its
+    /// status bits, and is a public standard that works identically across
+    /// manufacturers.
+    fn uds_dtcs_for(
+        &mut self,
+        module: &Module,
+    ) -> AimResult<(Vec<DtcReport>, Option<i64>)> {
+        let addr = Self::request_target(module)?;
+        let home = match &addr {
+            RequestTarget::Physical(a) => self.reach_module(a),
+            RequestTarget::Functional => None,
+        };
+        let request = aim_protocols::UdsRequest::read_dtc_by_status_mask(0xFF).to_bytes();
+        let replies = self.adapter.request_pdu(&request, &addr, Duration::from_millis(2500));
+        self.restore_bus(home);
+
+        let messages = replies?;
+        let Some(message) = messages.first() else {
+            return Err(AimError::no_data("the module did not answer a UDS fault request"));
+        };
+        // Decoded straight into reports rather than through the JSON shape the
+        // full scan uses, so both DTC paths produce the same type and the
+        // interface has one thing to render.
+        let body = match message.payload.split_first() {
+            Some((0x59, rest)) => rest.get(1..).unwrap_or(&[]),
+            _ => {
+                return Err(AimError::new(
+                    ErrorCode::NegativeResponse,
+                    format!("{} refused a UDS fault request", module.module_key),
+                ))
+            }
+        };
+        let evidence = self.recorder.last_response_event();
+
+        let reports = aim_protocols::decode_dtc_by_status_mask(body)
+            .iter()
+            .map(|d| {
+                let info = self.decoders.dtcs.describe(&d.base_code).ok();
+                DtcReport {
+                    code: d.code.clone(),
+                    // UDS reports status as bits rather than as a service, so
+                    // the distinction comes from the bits themselves.
+                    status: match d.confirmed() {
+                        true => DtcStatus::Confirmed,
+                        false => DtcStatus::Pending,
+                    },
+                    module: module.module_key.clone(),
+                    description: info.as_ref().and_then(|i| i.description.clone()),
+                    structural_summary: info
+                        .as_ref()
+                        .map(|i| i.structural_summary.clone())
+                        .unwrap_or_default(),
+                    verification: info
+                        .as_ref()
+                        .map(|i| i.verification)
+                        .unwrap_or(aim_types::VerificationStatus::Unverified),
+                    is_generic: info.as_ref().map(|i| i.is_generic).unwrap_or(false),
+                    region: info
+                        .as_ref()
+                        .map(|i| aim_decoders::region_for_dtc(&d.code, i.system, i.is_generic))
+                        .unwrap_or(aim_decoders::Region::Unknown),
+                }
+            })
+            .collect();
+
+        Ok((reports, evidence))
     }
 
     fn decode_uds_dtcs(&self, payload: &[u8], module_key: &str) -> DtcReadOutcome {
