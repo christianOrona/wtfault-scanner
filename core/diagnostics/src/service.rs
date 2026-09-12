@@ -1933,16 +1933,30 @@ impl DiagnosticService {
             .cloned()
             .collect();
 
+        // Ask the vehicle what it burns, rather than describing the general
+        // case. PID 0x51 has been decoded by this build all along and nothing
+        // ever read it, so a diesel was told about fuel trims in the abstract
+        // while being unable to report them for a reason it could have stated.
+        let fuel = self.fuel_type(&module);
+
         let mut warnings = reading.warnings.clone();
         if !missing.is_empty() {
+            let because = match fuel.as_deref() {
+                Some("Diesel") => String::from(
+                    " This engine reports its fuel type as diesel, and a diesel has no fuel \
+                     trims to report: they describe a correction around a petrol engine's \
+                     stoichiometric target, which a diesel does not run to.",
+                ),
+                Some(other) => format!(" This engine reports its fuel type as {other}."),
+                None => String::new(),
+            };
             warnings.push(Warning::caution(
                 "declared_measurements_missing",
                 format!(
                     "This procedure exists to measure {}, and {} did not read on this vehicle. \
-                     What is below is what answered, not the measurement the procedure describes. \
-                     A signal can be missing because this engine does not have it — a diesel \
-                     reports no fuel trims — which is a fact about the vehicle rather than a \
-                     fault.",
+                     What is below is what answered, not the measurement the procedure \
+                     describes.{because} A signal that an engine cannot produce is a fact about \
+                     the vehicle rather than a fault.",
                     procedure.measure.join(", "),
                     missing.join(", ")
                 ),
@@ -1976,6 +1990,7 @@ impl DiagnosticService {
                 // Both lists, always. "Complete" is the honest headline: the
                 // conditions can hold perfectly while the thing being
                 // established never gets read.
+                "fuel_type": fuel,
                 "declared": procedure.measure,
                 "unavailable": missing,
                 "complete": missing.is_empty() && held_after,
@@ -1984,6 +1999,29 @@ impl DiagnosticService {
             warnings,
             evidence: reading.raw_evidence_ref,
             ..Default::default()
+        })
+    }
+
+    /// What this engine burns, according to the engine.
+    ///
+    /// Service 01 PID 0x51, which this build has decoded since before it could
+    /// read a second bus and which nothing ever asked for. `None` when the
+    /// module does not report it, which many do not — that is an absence of
+    /// information, not an engine with no fuel.
+    ///
+    /// Worth asking because whole classes of measurement do not exist on some
+    /// engines. Fuel trims are the example that caught this project out: they
+    /// are a correction around a petrol engine's stoichiometric target, a
+    /// diesel does not run to one, and a procedure built around them reported
+    /// success on a diesel having measured none of them.
+    fn fuel_type(&mut self, module_key: &str) -> Option<String> {
+        let result = self.read_pid(module_key, "fuel_type", "user:procedure");
+        if !result.success {
+            return None;
+        }
+        result.values.first().and_then(|v| match &v.value {
+            aim_types::Value::Text(t) => Some(t.clone()),
+            _ => None,
         })
     }
 
