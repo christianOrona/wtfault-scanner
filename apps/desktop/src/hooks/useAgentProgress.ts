@@ -42,6 +42,16 @@ const PLAIN: Record<string, string> = {
   preview_configuration_change: "Working out what a change would involve",
   list_features: "Looking up configurable settings",
   clear_dtcs: "Clearing stored codes",
+  // These reach the log too and had no entry, so they rendered as raw
+  // identifiers in the middle of plain English — `scan_all_modules` appeared
+  // exactly like that on a real inspection.
+  scan_all_modules: "Asking every computer in the car for its faults",
+  as_built_status: "Checking for a factory configuration file",
+  forget_as_built: "Forgetting the factory configuration file",
+  list_captures: "Looking at what has been recorded",
+  list_catalog_signals: "Looking up what this vehicle can report",
+  connect: "Connecting to the vehicle",
+  disconnect: "Disconnecting",
 };
 
 const describe = (tool: string, args: unknown): string => {
