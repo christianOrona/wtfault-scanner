@@ -757,6 +757,40 @@ features:
         assert!(c.get("mirror_auto_fold").is_some());
     }
 
+    /// A candidate stays a candidate.
+    ///
+    /// The two mirror fold-on-lock entries came from owner-community
+    /// documentation and a cross-check against one vehicle's factory file.
+    /// Neither is a measurement, so neither may ever authorise a write — and
+    /// the difference between "documented somewhere" and "observed on this
+    /// truck" is the whole reason writing a door module here has not gone
+    /// wrong.
+    ///
+    /// If somebody upgrades one of these to verified, it must be because they
+    /// measured it, and this test should be updated in the same commit that
+    /// records the measurement.
+    #[test]
+    fn documented_candidates_cannot_authorise_a_write() {
+        let c = catalog();
+        for id in ["mirror_fold_on_lock_driver", "mirror_fold_on_lock_passenger"] {
+            let f = c.get(id).unwrap_or_else(|| panic!("{id} is missing from the catalogue"));
+            assert_eq!(
+                f.verification,
+                aim_types::VerificationStatus::Unverified,
+                "{id} claims to be verified without a measurement behind it"
+            );
+            assert_ne!(
+                f.support(),
+                FeatureSupport::Writable,
+                "{id} would authorise writing a bit nobody has watched move"
+            );
+            // Scoped to the one vehicle its factory file was read from. A
+            // candidate that applied to every truck of the year would be a
+            // guess aimed at strangers.
+            assert!(!f.applies_to.vins.is_empty(), "{id} is not scoped to a VIN");
+        }
+    }
+
     #[test]
     fn no_real_vehicle_feature_claims_a_verified_mapping() {
         // The honest position for this build. Every real-vehicle mapping here
