@@ -787,6 +787,33 @@ export interface DownloadState {
   error: string | null;
 }
 
+/**
+ * Something this application has established about one vehicle.
+ *
+ * Distinct from a reading: a reading is what the vehicle said, a finding is
+ * what was concluded from it. Ruled-out findings are the expensive ones and
+ * are shown first.
+ */
+export type FindingOutcome = "established" | "ruled_out" | "observed";
+
+export interface VehicleFinding {
+  subject: string;
+  outcome: FindingOutcome;
+  claim: string;
+  evidence: string;
+  authority: string;
+  observed_at: string;
+  session_id: string | null;
+}
+
+export interface VehicleKnowledge {
+  vin?: string;
+  count?: number;
+  findings?: VehicleFinding[];
+  /** Present only when nothing is connected and no VIN was named. */
+  vehicles?: { vin: string; findings: number }[];
+}
+
 /** A run of the application that started and, one way or another, stopped. */
 export interface RunMarker {
   version: string;

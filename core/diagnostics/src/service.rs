@@ -505,6 +505,36 @@ impl DiagnosticService {
         self.store.record_finding(vin, &finding)
     }
 
+    /// Record a finding without letting it break anything.
+    ///
+    /// Everything that learns something calls this, so it must never turn a
+    /// successful diagnostic operation into a failed one. A vehicle with no
+    /// settled VIN, a locked database, a disk that is full: all of them mean
+    /// this session teaches nothing, and none of them mean the read the person
+    /// asked for should fail.
+    ///
+    /// Deliberately not returning a result. A caller that could handle a
+    /// failure here would have to decide what to do about it, and the answer is
+    /// always "carry on".
+    fn learned(
+        &mut self,
+        subject: &str,
+        outcome: aim_session::FindingOutcome,
+        claim: impl Into<String>,
+        evidence: impl Into<String>,
+    ) {
+        let claim = claim.into();
+        if let Err(e) = self.record_finding(
+            subject,
+            outcome,
+            &claim,
+            &evidence.into(),
+            "measured_this_session",
+        ) {
+            tracing::debug!(error = %e, subject, "nothing recorded about this vehicle");
+        }
+    }
+
     /// Everything known about the connected vehicle.
     pub fn knowledge(&self) -> Vec<aim_session::Finding> {
         let identity = self.identity();
@@ -1173,6 +1203,33 @@ impl DiagnosticService {
 
         if all.is_empty() {
             return Err(AimError::no_data("no module answered the discovery request"));
+        }
+
+        // What this scan taught, kept past the session.
+        //
+        // The rate especially: it is searched for by trying bit rates until one
+        // carries traffic, and rediscovering it on every connect costs a second
+        // and a half of probing for an answer this vehicle already gave.
+        let secondary = all.iter().filter(|m| m.module_key.starts_with("BUS2_")).count();
+        if secondary > 0 {
+            if let Some(kbits) = self.adapter.secondary_bus_kbits() {
+                self.learned(
+                    "bus.secondary.rate",
+                    aim_session::FindingOutcome::Observed,
+                    format!("The second CAN bus, on pins 3 and 11, runs at {kbits} kbit/s."),
+                    "Found by trying each candidate rate and listening for traffic.",
+                );
+            }
+            self.learned(
+                "bus.secondary.modules",
+                aim_session::FindingOutcome::Observed,
+                format!(
+                    "{secondary} modules answer on the secondary bus and {} on the primary.",
+                    all.len() - secondary
+                ),
+                "Counted by a module scan: broadcast on the primary bus, TesterPresent address \
+                 sweep on the secondary.",
+            );
         }
 
         Ok(Payload {
@@ -3188,6 +3245,36 @@ impl DiagnosticService {
         };
         let outcome = self.apply_change_on_its_bus(feature_id, desired);
         self.restore_bus(home);
+
+        // Recorded as what it is: bytes written and read back.
+        //
+        // Deliberately `Observed` and never `Established`. A module accepting a
+        // value and reporting it back says the write landed; it says nothing
+        // about whether the vehicle behaves differently. Measured on a 2019
+        // F-250: four bytes written, all four read back correctly, latched
+        // through an ignition cycle, and the mirrors did not move. Only a
+        // person looking at the vehicle can close that gap, and recording this
+        // as established would have written down the opposite of what happened.
+        if let Ok(payload) = &outcome {
+            let changed =
+                payload.data.as_ref().and_then(|d| d["changed"].as_bool()).unwrap_or(false);
+            if changed {
+                let before = payload.data.as_ref().and_then(|d| d["before"].as_str()).unwrap_or("");
+                let after = payload.data.as_ref().and_then(|d| d["after"].as_str()).unwrap_or("");
+                let module = module.clone().unwrap_or_default();
+                self.learned(
+                    &format!("feature.{feature_id}.written"),
+                    aim_session::FindingOutcome::Observed,
+                    format!(
+                        "The bytes behind {feature_id} were written on module {module} and read \
+                         back as asked. Whether the vehicle behaves differently is not recorded \
+                         here."
+                    ),
+                    format!("Written {before} -> {after} and read back immediately."),
+                );
+            }
+        }
+
         outcome
     }
 
@@ -4536,6 +4623,42 @@ impl DiagnosticService {
             if let RequestTarget::Physical(a) = &addr {
                 self.write_gate_open.insert(a.clone());
             }
+        }
+
+        // And remembered past this process. The in-memory set above is lost on
+        // every restart, which cost three separate retries in one session on a
+        // truck: probe, restart for a code change, write refused because the
+        // gate the module had already opened was forgotten.
+        if let RequestTarget::Physical(a) = &addr {
+            let (outcome, claim) = match refusal {
+                Some(aim_protocols::RefusalKind::NotPresent) => (
+                    aim_session::FindingOutcome::Established,
+                    format!(
+                        "The module at {a} accepts configuration writes without a security \
+                         handshake."
+                    ),
+                ),
+                Some(aim_protocols::RefusalKind::SecurityRequired) => (
+                    aim_session::FindingOutcome::RuledOut,
+                    format!(
+                        "The module at {a} will not accept a write without a seed/key exchange \
+                         this build does not have."
+                    ),
+                ),
+                _ => (
+                    aim_session::FindingOutcome::Observed,
+                    format!("The module at {a} gave no clear answer about whether it takes writes."),
+                ),
+            };
+            self.learned(
+                &format!("module.{a}.write_gate"),
+                outcome,
+                claim,
+                format!(
+                    "Probed with identifier {ABSENT_DID:04X} after confirming it absent: the \
+                     module's refusal was read for its reason rather than its existence."
+                ),
+            );
         }
 
         let verdict = match refusal {

@@ -18,6 +18,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { api, describeError } from "../api/client";
+import { VehicleKnowledgePanel } from "./VehicleKnowledgePanel";
 import type { ChangePlan, FeatureView, FeaturesData, ToolResult } from "../api/types";
 import { ErrorBanner, FailedResult, Spinner, Warnings } from "./primitives";
 import { PaneIntro, useExplain } from "../explain";
@@ -71,6 +72,11 @@ export function FeaturesPane({ connected }: { connected: boolean }) {
   return (
     <div className="pane">
       <PaneIntro kind="concept" id="vehicle_features" />
+
+      {/* What this truck has already taught us, including what it has ruled
+          out. Above the catalogue on purpose: this screen should not keep
+          offering something that has been tried here and did not work. */}
+      <VehicleKnowledgePanel />
 
       <div className="row" style={{ justifyContent: "space-between", marginBottom: 12 }}>
         <div className="row">

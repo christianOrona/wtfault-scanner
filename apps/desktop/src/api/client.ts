@@ -14,7 +14,7 @@ import type {
   Health, IdentifyData, Measurement, ModuleIdentity, ModuleRecord, PortsResponse,
   SessionEvent, SessionSummary, SignalsData, ToolResult, ApiError, Dtc, MonitorTestsData,
   AgentStatus, InspectResponse, ChatResponse as AgentChatResponse,
-  ProvidersResponse, ProviderView, ProviderKindId, ProbeResult, Speed, ExplanationsResponse, FeaturesData, ChangePlan, ProfilesResponse, ClearResult, ReadinessData, ScanPurpose, Tone, FullScanData, ComparisonResponse, UpdateStatus, DownloadState, SupportReport, AsBuiltStatus, AsBuiltImport,
+  ProvidersResponse, ProviderView, ProviderKindId, ProbeResult, Speed, ExplanationsResponse, FeaturesData, ChangePlan, ProfilesResponse, ClearResult, ReadinessData, ScanPurpose, Tone, FullScanData, ComparisonResponse, UpdateStatus, DownloadState, VehicleKnowledge, SupportReport, AsBuiltStatus, AsBuiltImport,
 } from "./types";
 
 /**
@@ -128,6 +128,14 @@ export const api = {
   /** Install what has been downloaded. The app closes and comes back updated. */
   updateApply: () =>
     post<{ started: boolean; installer: string; note: string }>("/update/apply", {}),
+  /** What this application has established about a vehicle — including what it
+   *  has ruled out, which is the expensive kind.
+   *
+   *  Readable with nothing plugged in: pass a VIN for a specific vehicle, or
+   *  omit it for the connected one. With neither, the answer is the list of
+   *  vehicles anything is known about. */
+  vehicleKnowledge: (vin?: string) =>
+    request<VehicleKnowledge>(vin ? `/vehicles/knowledge?vin=${enc(vin)}` : "/vehicles/knowledge"),
   /** What this machine knows about how the app is running, and how the last run
    *  ended. Reads local state; sends nothing anywhere. */
   supportReport: () => request<SupportReport>("/support/report"),

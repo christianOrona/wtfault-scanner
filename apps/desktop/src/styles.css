@@ -956,3 +956,30 @@ a.mini.button:hover { border-color: var(--accent-dim); background: #1c222c; }
   line-height: 1.5;
   color: var(--text-faint);
 }
+
+/* What has been established about the vehicle in front of you.
+   Ruled-out entries are marked in the caution colour rather than the error
+   one: a thing that was tried and did not work is a finding, not a fault. */
+.knowledge-list { display: flex; flex-direction: column; gap: 8px; }
+.knowledge-item { display: flex; gap: 10px; align-items: flex-start; }
+.knowledge-mark {
+  flex: 0 0 auto;
+  min-width: 82px;
+  padding: 1px 7px;
+  border-radius: 4px;
+  border: 1px solid var(--line);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  text-align: center;
+  color: var(--text-faint);
+}
+.knowledge-mark.ruled_out { color: var(--caution); border-color: #5c4a1e; background: #2a2413; }
+.knowledge-mark.established { color: var(--ok); border-color: #1e5c3a; background: #132a1e; }
+.knowledge-claim { font-size: 12.5px; line-height: 1.45; }
+.knowledge-evidence {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-faint);
+  line-height: 1.45;
+}
