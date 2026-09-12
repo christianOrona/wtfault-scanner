@@ -143,6 +143,16 @@ Honest gaps, in the order they matter.
   bit-rate command is not necessarily wired to pins 3 and 11, and nothing on the
   wire distinguishes "this vehicle has nothing there" from "this cable cannot
   hear it".
+- **No configuration mapping can be obtained without a vehicle.** There is no
+  open, redistributable dataset of as-built bit meanings for any manufacturer:
+  OBDb documents signals rather than configuration, the one open Ford decoder
+  found covers a single infotainment module and keeps its definitions in code,
+  and the rest is forum prose. A mapping therefore comes from measuring a
+  vehicle — capture, change the setting by some other means, capture, diff — and
+  that middle step is not a software problem. Candidates from community
+  documentation can be carried, and this build will read one and refuse to write
+  it, which is the correct behaviour and also a hard ceiling on how much can be
+  finished at a desk.
 - **Provider API keys go to the OS credential store** where there is one. On a
   machine without one the key stays in the settings file in plain text, and the
   Settings screen says so against that key rather than leaving anyone to assume
