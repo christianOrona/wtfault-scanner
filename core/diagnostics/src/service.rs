@@ -2360,6 +2360,132 @@ impl DiagnosticService {
         self.finish("read_feature", capabilities::READ_FEATURE, t0, outcome)
     }
 
+    /// What on this vehicle is no longer how the factory built it.
+    ///
+    /// Reads each module the as-built file describes and compares it against
+    /// the factory record. Every difference is a byte somebody changed — a
+    /// dealer, a previous owner, a workshop, or this application.
+    ///
+    /// # Why this is worth its own capability
+    ///
+    /// It answers three questions that otherwise need a specialist. Somebody
+    /// buying a vehicle learns what has been altered. Somebody diagnosing one
+    /// learns whether a setting was ever touched, which a live read alone
+    /// cannot tell them. And anybody working out where a feature lives gets the
+    /// search narrowed from every byte in a module to the few that have moved —
+    /// which is the difference between mapping a setting in an afternoon and
+    /// mapping it never.
+    ///
+    /// # What it is not
+    ///
+    /// It says a byte changed. It does not say what that byte means: no
+    /// manufacturer publishes that, and this project will not invent it. A
+    /// difference here is a place to look, not a finding.
+    pub fn compare_to_factory(&mut self, initiator: &str) -> ToolResult {
+        let t0 = Instant::now();
+        self.record_invocation("compare_to_factory", initiator, serde_json::json!({}));
+        let outcome = self
+            .authorize(capabilities::READ_FEATURE, initiator, None)
+            .and_then(|_| self.compare_to_factory_inner());
+        self.finish("compare_to_factory", capabilities::READ_FEATURE, t0, outcome)
+    }
+
+    fn compare_to_factory_inner(&mut self) -> AimResult<Payload> {
+        self.require_usable()?;
+        let Some(file) = self.as_built() else {
+            return Err(AimError::new(
+                ErrorCode::PreconditionFailed,
+                "no as-built file has been imported for this vehicle, so there is nothing to \
+                 compare against. The manufacturer publishes one per VIN; the Settings on the car \
+                 screen says how to get it.",
+            ));
+        };
+
+        let now = aim_types::now().to_rfc3339();
+        let mut compared = Vec::new();
+        let mut unreachable = Vec::new();
+        let mut differences = 0usize;
+
+        // Ordered, so two runs of this on the same vehicle are comparable.
+        let addresses: Vec<String> = file.modules.keys().cloned().collect();
+
+        for address in addresses {
+            let Some(factory) = crate::capture::factory_capture(&file, &address, now.clone())
+            else {
+                continue;
+            };
+
+            let dids: Vec<u16> = factory.records.keys().copied().collect();
+            let home = self.reach_module(&address);
+            let live = self
+                .read_config(&address, &dids, Some(String::from("as it is now")))
+                .map(|(capture, _missing)| capture);
+            self.restore_bus(home);
+
+            let live = match live {
+                Ok(live) => live,
+                // A module that does not answer is not a module that agrees
+                // with the factory. Reported separately, because a silent
+                // module counted as "unchanged" is how a comparison becomes a
+                // reassuring lie.
+                Err(e) => {
+                    unreachable.push(serde_json::json!({
+                        "module": address,
+                        "blocks_in_the_file": dids.len(),
+                        "why": e.message,
+                    }));
+                    continue;
+                }
+            };
+
+            let diff = crate::capture::diff(&factory, &live);
+            differences += diff.changes.len();
+            compared.push(serde_json::json!({
+                "module": address,
+                "blocks_compared": dids.len(),
+                "comparable": diff.is_comparable(),
+                "changes": diff.changes,
+                // A block the module returned at a different length than the
+                // file records is not a changed setting; it is a sign the two
+                // are not describing the same thing.
+                "length_mismatches": diff.length_mismatches,
+                "only_in_the_file": diff.only_in_before,
+                "only_on_the_vehicle": diff.only_in_after,
+            }));
+        }
+
+        let mut warnings = vec![Warning::info(
+            "a_difference_is_not_a_finding",
+            "Each difference is a byte that is not what the factory wrote. What it controls is \
+             not recorded anywhere this app can read, so treat these as places to look rather \
+             than as settings that have been identified.",
+        )];
+        if !unreachable.is_empty() {
+            warnings.push(Warning::caution(
+                "some_modules_did_not_answer",
+                format!(
+                    "{} of the modules in the file did not answer, so nothing is known about \
+                     whether they still match it. They are listed separately rather than counted \
+                     as unchanged.",
+                    unreachable.len()
+                ),
+            ));
+        }
+
+        Ok(Payload {
+            data: Some(serde_json::json!({
+                "vin": file.vin,
+                "modules_in_the_file": file.modules.len(),
+                "modules_compared": compared.len(),
+                "modules_that_did_not_answer": unreachable,
+                "bytes_differing": differences,
+                "modules": compared,
+            })),
+            warnings,
+            ..Default::default()
+        })
+    }
+
     /// Which bus a module answering at this request address was found on.
     ///
     /// `None` when no scan has seen it, in which case the caller must not
@@ -2664,12 +2790,22 @@ impl DiagnosticService {
         self.finish("capture_configuration", capabilities::READ_FEATURE, t0, outcome)
     }
 
-    fn capture_inner(
+    /// Read a module's configuration into a capture.
+    ///
+    /// Extracted so that capturing and comparing-to-factory read a vehicle the
+    /// same way. Two loops that both "read some identifiers" drift, and a
+    /// comparison that read differently from the capture it is compared against
+    /// would produce differences that are artefacts of this code rather than
+    /// facts about the vehicle.
+    ///
+    /// Returns the identifiers the module did not hold alongside the capture:
+    /// that is a fact about the module worth reporting, not an error.
+    fn read_config(
         &mut self,
         module: &str,
         dids: &[u16],
         label: Option<String>,
-    ) -> AimResult<Payload> {
+    ) -> AimResult<(crate::capture::ConfigCapture, Vec<String>)> {
         // A cap, because this is a loop over caller-supplied input that puts
         // traffic on a vehicle bus.
         const MAX_IDENTIFIERS: usize = 64;
@@ -2720,6 +2856,18 @@ impl DiagnosticService {
             taken_at: aim_types::now().0.to_string(),
             label,
         };
+
+        Ok((capture, missing))
+    }
+
+    fn capture_inner(
+        &mut self,
+        module: &str,
+        dids: &[u16],
+        label: Option<String>,
+    ) -> AimResult<Payload> {
+        let (capture, missing) = self.read_config(module, dids, label)?;
+        let records = capture.records.clone();
 
         let mut warnings = Vec::new();
         if !missing.is_empty() {

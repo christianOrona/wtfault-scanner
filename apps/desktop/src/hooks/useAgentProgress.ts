@@ -65,6 +65,7 @@ const PLAIN: Record<string, string> = {
   import_as_built: "Reading the factory configuration file",
   probe_module_capabilities: "Asking a module what it supports",
   probe_write_gate: "Checking whether this module accepts changes",
+  compare_to_factory: "Comparing the car against how it left the factory",
 };
 
 const describe = (tool: string, args: unknown): string => {

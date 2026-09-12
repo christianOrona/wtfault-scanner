@@ -258,3 +258,132 @@ mod tests {
         assert!(!d.is_unambiguous(), "nothing moved, so nothing can be proposed");
     }
 }
+
+/// The factory record for one module, shaped like a capture.
+///
+/// # Why this conversion exists
+///
+/// The manufacturer's as-built file and a live read describe the same bytes at
+/// two different moments — the day the vehicle was built, and now. Comparing
+/// them answers a question nothing else can: *what on this vehicle is not how
+/// it left the factory?*
+///
+/// That matters for three different people. Somebody buying a used vehicle
+/// learns what a previous owner changed. Somebody diagnosing one learns whether
+/// a setting was ever touched. And anybody mapping a feature gets the search
+/// narrowed from every byte in a module to the handful that have ever moved.
+///
+/// Nothing here is manufacturer-specific except who publishes such a file. The
+/// comparison works on any vehicle a factory record can be obtained for.
+///
+/// Returns `None` when the file has nothing for this module — which is not the
+/// same as the module having no configuration, and the caller must not report
+/// it as such.
+pub fn factory_capture(
+    file: &aim_decoders::AsBuiltData,
+    module: &str,
+    taken_at: String,
+) -> Option<ConfigCapture> {
+    let blocks = file.module(module)?;
+    let records: BTreeMap<u16, Vec<u8>> = blocks
+        .values()
+        .filter_map(|block| {
+            aim_decoders::AsBuiltData::did_for_block(block.number)
+                .map(|did| (did, block.bytes.clone()))
+        })
+        .collect();
+
+    (!records.is_empty()).then(|| ConfigCapture {
+        module: module.to_string(),
+        records,
+        taken_at,
+        label: Some(String::from("as the factory built it")),
+    })
+}
+
+#[cfg(test)]
+mod factory_tests {
+    use super::*;
+
+    fn file_with(module: &str, blocks: &[(u16, &[u8])]) -> aim_decoders::AsBuiltData {
+        let mut modules = BTreeMap::new();
+        let mut inner = BTreeMap::new();
+        for (number, bytes) in blocks {
+            inner.insert(
+                *number,
+                aim_decoders::asbuilt::Block {
+                    number: *number,
+                    bytes: bytes.to_vec(),
+                    line_checksums: Vec::new(),
+                },
+            );
+        }
+        modules.insert(module.to_string(), inner);
+        aim_decoders::AsBuiltData { vin: Some(String::from("TESTVIN")), modules }
+    }
+
+    /// Block 1 is `DE00`, and a capture read from the vehicle is keyed by
+    /// identifier. Getting this off by one would compare every block against
+    /// its neighbour and report the whole module as changed.
+    #[test]
+    fn factory_blocks_become_the_identifiers_a_capture_uses() {
+        let file = file_with("726", &[(1, &[0x01, 0x02]), (2, &[0x03]), (15, &[0xFF])]);
+        let capture = factory_capture(&file, "726", String::from("t")).expect("a capture");
+
+        assert_eq!(capture.records.get(&0xDE00), Some(&vec![0x01, 0x02]));
+        assert_eq!(capture.records.get(&0xDE01), Some(&vec![0x03]));
+        assert_eq!(capture.records.get(&0xDE0E), Some(&vec![0xFF]));
+        assert_eq!(capture.module, "726");
+    }
+
+    /// A module the file says nothing about is not a module with no
+    /// configuration, and the difference must not be flattened into an empty
+    /// capture that then compares as "everything changed".
+    #[test]
+    fn a_module_absent_from_the_file_yields_nothing_rather_than_an_empty_capture() {
+        let file = file_with("726", &[(1, &[0x01])]);
+        assert!(factory_capture(&file, "7A7", String::from("t")).is_none());
+    }
+
+    /// The factory record and a live read of the same unchanged module must
+    /// compare as identical, or every comparison would report false changes.
+    #[test]
+    fn an_unchanged_module_differs_from_the_factory_in_nothing() {
+        let file = file_with("726", &[(1, &[0x10, 0x20]), (2, &[0x30])]);
+        let factory = factory_capture(&file, "726", String::from("t")).expect("a capture");
+
+        let live = ConfigCapture {
+            module: String::from("726"),
+            records: factory.records.clone(),
+            taken_at: String::from("later"),
+            label: Some(String::from("as it is now")),
+        };
+
+        let d = diff(&factory, &live);
+        assert!(d.is_comparable());
+        assert!(d.changes.is_empty(), "an untouched module reported changes: {d:?}");
+    }
+
+    /// And one changed bit is found, with the mask naming which.
+    #[test]
+    fn a_single_changed_bit_is_located() {
+        let file = file_with("726", &[(15, &[0x00, 0x00, 0x00, 0x00, 0x01])]);
+        let factory = factory_capture(&file, "726", String::from("t")).expect("a capture");
+
+        let mut records = factory.records.clone();
+        records.insert(0xDE0E, vec![0x00, 0x00, 0x00, 0x00, 0x00]);
+        let live = ConfigCapture {
+            module: String::from("726"),
+            records,
+            taken_at: String::from("later"),
+            label: None,
+        };
+
+        let d = diff(&factory, &live);
+        assert!(d.is_unambiguous(), "{d:?}");
+        let change = &d.changes[0];
+        assert_eq!(change.did, 0xDE0E);
+        assert_eq!(change.byte, 4);
+        assert_eq!(change.changed_mask, 0x01);
+    }
+}

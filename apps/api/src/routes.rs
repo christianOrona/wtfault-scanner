@@ -41,6 +41,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/features", get(features))
         .route("/api/v1/features/{id}", get(read_feature))
         .route("/api/v1/config/capture", post(capture_configuration))
+        .route("/api/v1/config/compare-to-factory", post(compare_to_factory))
         .route("/api/v1/config/diff", post(diff_captures))
         .route("/api/v1/config/captures", get(list_captures))
         .route("/api/v1/catalog/signals", get(catalog_signals))
@@ -877,6 +878,14 @@ async fn update_download() -> Json<Value> {
 /// How far along the background download is.
 async fn update_download_status() -> Json<Value> {
     Json(serde_json::to_value(crate::update::download_state()).unwrap_or(Value::Null))
+}
+
+/// What on this vehicle is no longer how the factory built it.
+///
+/// A POST because it reads every module the as-built file describes, which is
+/// real traffic on a vehicle bus rather than a lookup.
+async fn compare_to_factory(State(state): State<AppState>) -> ApiResult<Json<ToolResult>> {
+    Ok(Json(state.with_service(|s| s.compare_to_factory("user:api")).await?))
 }
 
 /// Everything a person would be asked for when reporting a problem, gathered in
