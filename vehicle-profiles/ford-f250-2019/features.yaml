@@ -111,3 +111,115 @@ features:
       mask: 0x01
       on: 0x01
       off: 0x00
+
+  # ---------------------------------------------------------------- mirrors
+  #
+  # TWO CANDIDATES, NOT MEASUREMENTS. Read the distinction before using them.
+  #
+  # Everything above this line was measured on this truck. These two were not.
+  # They come from Ford owner-community documentation of the as-built blocks
+  # that carry mirror fold-on-lock, cross-checked against this vehicle's own
+  # factory as-built file — which does hold both blocks, at the values below.
+  #
+  # That cross-check is worth something and is not verification. It establishes
+  # that the blocks exist on this truck and what the factory wrote in them. It
+  # does not establish that the bit named here is the one that folds a mirror.
+  #
+  # So they are marked unverified, which in this application means: readable,
+  # never writable. Reading one on the vehicle and finding 0xA0 where the file
+  # says 0xA0 confirms the app is looking at the right record — no more.
+  #
+  # HOW TO TURN THESE INTO MEASUREMENTS, which is the only way they become
+  # writable:
+  #
+  #   1. Capture DE02 from 740 and 741.
+  #   2. Change fold-on-lock by some means that is not this application — the
+  #      dash menu if this truck exposes it, or another tool.
+  #   3. Capture again, and diff.
+  #   4. If exactly one bit moved in each module, that is the mapping, and it
+  #      replaces what is written here regardless of whether it agrees.
+  #
+  # Step 2 is the whole difficulty, and it is not a software problem.
+  #
+  # A NOTE ON THE SECOND BLOCK. The community recipe also names 740-12-01 and
+  # 741-12-01, wanting a value beginning F. This vehicle's file holds a single
+  # data byte of 0x00 in each, which that value does not fit — so either the
+  # recipe is for a different build or the field is wider than it appears here.
+  # It is deliberately NOT included below. A guessed write to a door module is
+  # how a door module stops working.
+  #
+  # Both mirrors are separate modules and therefore separate entries. Folding
+  # needs both; changing one leaves a truck that folds one mirror.
+
+  - id: mirror_fold_on_lock_driver
+    name: "Fold the driver's mirror when the truck is locked"
+    risk: convenience
+
+    easy: >-
+      The driver's mirror pulls itself in when you lock the truck, and swings
+      back out when you unlock it. The mirror motors and the switch on the door
+      are already fitted to this truck; this is the setting that decides whether
+      locking the doors uses them.
+
+    technical: >-
+      Driver door module as-built block 3, read with ISO 14229 service 0x22 at
+      identifier 0xDE02. The bit below is the one owner-community documentation
+      names for fold-on-lock. It has not been observed changing on this vehicle.
+
+    modules: ["748"]
+
+    applies_to:
+      vins: ["1FT7W2BT7KEF78036"]
+
+    # Unverified, and therefore readable but never writable. The source is
+    # documentation written by people who are not this project, checked against
+    # this vehicle's factory record but not against its behaviour.
+    verification: unverified
+    source: >-
+      candidate from Ford owner-community documentation of as-built block
+      740-03-01, cross-checked on 2026-09-12 against this vehicle's own
+      Motorcraft as-built file, which holds 0xA0 0x00 in that block. Not
+      measured on the vehicle and not written.
+
+    mapping:
+      kind: data_identifier_bits
+      module: "740"
+      did: 0xDE02
+      byte: 0
+      mask: 0x08
+      on: 0x08
+      off: 0x00
+
+  - id: mirror_fold_on_lock_passenger
+    name: "Fold the passenger mirror when the truck is locked"
+    risk: convenience
+
+    easy: >-
+      The same setting for the passenger side. Both mirrors are controlled by
+      their own door module, so both have to be set or the truck folds one
+      mirror and leaves the other out.
+
+    technical: >-
+      Passenger door module as-built block 3, identifier 0xDE02, same bit as the
+      driver side. Also a candidate rather than a measurement.
+
+    modules: ["749"]
+
+    applies_to:
+      vins: ["1FT7W2BT7KEF78036"]
+
+    verification: unverified
+    source: >-
+      candidate from Ford owner-community documentation of as-built block
+      741-03-01, cross-checked on 2026-09-12 against this vehicle's own
+      Motorcraft as-built file, which holds 0xA0 0x00 in that block. Not
+      measured on the vehicle and not written.
+
+    mapping:
+      kind: data_identifier_bits
+      module: "741"
+      did: 0xDE02
+      byte: 0
+      mask: 0x08
+      on: 0x08
+      off: 0x00
