@@ -32,10 +32,22 @@
 //! What remains between a person and a change is deliberately two different
 //! kinds of obstacle, and the interface must never blur them:
 //!
-//! 1. **Evidence.** A feature needs a mapping that has been verified against a
-//!    real vehicle. Every mapping in the shipped catalogue is `null`, because
-//!    this project has measured none. That is a gap, it is fillable, and a
-//!    profile file fills it without rebuilding the app.
+//! 1. **Evidence.** A feature needs a mapping, and how much evidence stands
+//!    behind it decides what may be done with it. A mapping measured on a
+//!    vehicle can be written. A mapping that exists only as documentation can
+//!    be read, and — for cosmetic and convenience settings on a module already
+//!    shown to accept writes — attempted as an experiment whose result the
+//!    vehicle decides.
+//!
+//!    That last case exists because the rule without it had a consequence
+//!    nobody intended: measuring a mapping requires changing the setting by
+//!    some other means, so anything a vehicle's own menus do not expose could
+//!    never be changed here. Which is most of what somebody comes for. A 2019
+//!    F-250 has no dash entry for folding its mirrors on lock, and no amount of
+//!    reading produces one.
+//!
+//!    So the write becomes the measurement, and it is labelled an experiment
+//!    until the vehicle behaves differently.
 //! 2. **Policy.** Anything above [`aim_safety::MAX_ENABLED_RISK`] is refused
 //!    permanently — the braking, steering and throttle path, immobilisers and
 //!    keys, firmware. No amount of evidence changes that answer.
@@ -298,6 +310,56 @@ pub fn plan_change(
                  for security. Nobody has yet written *this* setting, so this is a first \
                  attempt: it will be read back afterwards, and only what the module reports \
                  then counts as having happened.",
+            ));
+        }
+        // A documented candidate, on a convenience feature, whose owning module
+        // has been shown to accept writes.
+        //
+        // # Why this is allowed at all
+        //
+        // The rule this sits beside says a mapping must be measured before it
+        // can be written, and the only way to measure one is to change the
+        // setting by some other means — the vehicle's own menu, or another
+        // tool. Which means that for anything the menu does *not* expose, this
+        // application could never change it. That is most of what somebody
+        // comes here for: a 2019 F-250 has no dash entry for folding its
+        // mirrors on lock, and no amount of reading will produce one.
+        //
+        // So the write is the measurement. Change the bit, cycle the key, and
+        // look at the vehicle: it either does the thing or it does not. That is
+        // the same standard every mapping in this project has met, arrived at
+        // from the other direction.
+        //
+        // # Why it is safe enough to offer
+        //
+        // Four things have to hold, and each removes a way this goes wrong.
+        // The risk class is convenience, so nothing that stops or steers a
+        // vehicle is reachable. The module has been shown to accept writes, so
+        // this is not a blind poke at silence. The record reads back
+        // afterwards, so a refusal or an unexpected value is visible rather
+        // than assumed. And the bytes as they stand are captured first, so
+        // putting them back is exact rather than reconstructed.
+        //
+        // What it is not is verified, and the plan says so in those words. An
+        // experiment that happens to work is evidence; an experiment described
+        // as a certainty is the thing this project exists not to do.
+        FeatureSupport::ReadOnly
+            if matches!(
+                f.risk,
+                aim_types::RiskClass::Cosmetic | aim_types::RiskClass::Convenience
+            ) && gate_measured_open(f, ctx) =>
+        {
+            checks.push(Check::pass_with_detail(
+                "mapping_known",
+                "Do we know where this setting lives, and that it can be changed?",
+                "Where this setting lives has NOT been measured on a vehicle — it comes from \
+                 documentation written by people outside this project. The module that owns it \
+                 has been shown to accept writes, the change is a convenience setting, and the \
+                 bytes as they stand now will be recorded before anything is written so they \
+                 can be put back exactly.\n\nThis is an experiment, and the vehicle decides it. \
+                 Write it, cycle the ignition, and look: if the vehicle does the thing, that is \
+                 the measurement this mapping never had. If it does not, the original bytes go \
+                 back and the mapping was wrong.",
             ));
         }
         FeatureSupport::ReadOnly => checks.push(Check::fail(
@@ -943,7 +1005,7 @@ mod first_write {
 
     /// An open gate never rescues a mapping nobody measured.
     #[test]
-    fn an_open_gate_does_not_rescue_an_undid_mapping() {
+    fn an_unverified_convenience_mapping_is_offered_as_an_experiment_and_called_one() {
         let mut f = feature(RiskClass::Convenience, did_mapping(), VerificationStatus::Unverified);
         f.write_verification = None;
 
@@ -954,9 +1016,76 @@ mod first_write {
         let mut ctx = perfect_context(&modules);
         ctx.write_gate_open_modules = &gates;
         let plan = plan_change(&request(), Some(&f), &ctx);
+
+        // This used to refuse outright, on the rule that a mapping must be
+        // measured before it is written. The rule had a consequence nobody
+        // intended: the only way to measure one is to change the setting by
+        // some other means, so anything a vehicle's own menu does not expose
+        // could never be changed here — which is most of what somebody comes
+        // to this application for.
+        //
+        // So it is allowed, for convenience settings, on a module already shown
+        // to accept writes, and the write is the measurement.
+        let c = check(&plan, "mapping_known");
+        assert!(c.passed, "an unverified convenience mapping should be offered as an experiment");
+
+        // What must never happen is it being described as established. The
+        // detail has to say, in words, that this is not measured.
+        let detail = c.detail.clone().unwrap_or_default();
+        assert!(
+            detail.contains("NOT been measured"),
+            "an experiment must not be described as a verified mapping: {detail}"
+        );
+        assert!(
+            detail.contains("experiment"),
+            "the plan must call this what it is: {detail}"
+        );
+        assert!(
+            detail.contains("put back"),
+            "the plan must say the original bytes are recoverable: {detail}"
+        );
+    }
+
+    /// The loosening above is scoped to convenience, and nothing else.
+    ///
+    /// Every other risk class is refused before this check is reached, and that
+    /// ordering is the reason an unverified mapping cannot reach a brake
+    /// controller by way of an experiment.
+    #[test]
+    fn an_experiment_is_never_offered_above_convenience_risk() {
+        for risk in [RiskClass::SafetyCritical, RiskClass::Service, RiskClass::DiagnosticControl] {
+            let mut f = feature(risk, did_mapping(), VerificationStatus::Unverified);
+            f.write_verification = None;
+
+            let owning =
+                f.mapping.as_ref().and_then(|m| m.as_data_identifier()).map(|t| t.module).unwrap();
+            let gates = vec![owning];
+            let modules: Vec<String> = Vec::new();
+            let mut ctx = perfect_context(&modules);
+            ctx.write_gate_open_modules = &gates;
+            let plan = plan_change(&request(), Some(&f), &ctx);
+
+            assert!(
+                !plan.can_apply,
+                "{risk:?} must never be reachable by experiment, however open the gate"
+            );
+        }
+    }
+
+    /// An open gate is still not a mapping when the module was never shown to
+    /// take writes. Without this the experiment would be a blind poke.
+    #[test]
+    fn an_experiment_needs_the_module_to_have_accepted_a_write() {
+        let mut f = feature(RiskClass::Convenience, did_mapping(), VerificationStatus::Unverified);
+        f.write_verification = None;
+
+        let modules: Vec<String> = Vec::new();
+        let ctx = perfect_context(&modules);
+        // No module listed as having an open write gate.
+        let plan = plan_change(&request(), Some(&f), &ctx);
         assert!(
             !check(&plan, "mapping_known").passed,
-            "knowing a module takes writes is not knowing where the setting lives"
+            "an unmeasured mapping on a module that has never accepted a write is a blind poke"
         );
     }
 }
