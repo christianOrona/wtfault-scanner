@@ -298,3 +298,60 @@ features:
       mask: 0xF0
       on: 0xF0
       off: 0x00
+
+  # ------------------------------------------------- double honk on exit
+  #
+  # MEASURED, and the first mapping in this project established by watching a
+  # named setting move rather than by reading a forum.
+  #
+  #   Setting    "Double Honk On Leaving Cabine" in the body control module
+  #   Run 1      Enabled -> Disabled, earlier the same day
+  #   Run 2      Disabled -> Enabled, and confirmed by the owner hearing it
+  #
+  # The second run was a single-variable experiment: nothing else on the vehicle
+  # was changed between the two backups, and exactly one line of one block moved.
+  #
+  #   726 block 41 line 2   00 00 01 01 01  ->  00 01 01 01 01
+  #
+  # Block 41 is identifier 0xDE28 (0xDE00 + 40), the same numbering that puts
+  # AutoLock's block 15 at 0xDE0E. Line 1 of the block carries the first five
+  # bytes, so line 2 byte 1 is byte 6 of the record.
+  #
+  # Reading is verified. WRITING from this application has not been done: the
+  # change was made by another tool, and a module accepting a write from one
+  # program is not evidence that it will accept one from another. The first
+  # write here will be a first write, and is treated as one.
+
+  - id: double_honk_on_leaving
+    name: "Double horn chirp when you walk away"
+    risk: cosmetic
+
+    easy: >-
+      The truck honks twice when you leave it locked with the engine running, or
+      when it thinks you have walked away with the key. Turning this off stops
+      the noise and changes nothing else about how the truck behaves.
+
+    technical: >-
+      Body control module as-built block 41, identifier 0xDE28, byte 6, bit 0.
+      Measured by toggling the setting named "Double Honk On Leaving Cabine" and
+      diffing whole-module as-built backups either side: exactly one line moved.
+
+    modules: ["726"]
+
+    applies_to:
+      vins: ["1FT7W2BT7KEF78036"]
+
+    verification: verified
+    source: >-
+      measured on this vehicle 2026-09-12 by diffing body control module
+      as-built backups across a single named change, Disabled to Enabled, with
+      nothing else altered between them and the result confirmed audibly
+
+    mapping:
+      kind: data_identifier_bits
+      module: "726"
+      did: 0xDE28
+      byte: 6
+      mask: 0x01
+      on: 0x01
+      off: 0x00
