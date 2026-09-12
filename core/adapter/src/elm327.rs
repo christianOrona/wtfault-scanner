@@ -134,6 +134,10 @@ pub struct Elm327Adapter {
     /// Set when the device answered `STI`, proving STN-series firmware rather
     /// than a clone that borrowed the name.
     stn_confirmed: bool,
+    /// Bit rate found on the secondary bus, once one has been. `None` until a
+    /// probe has actually established it — the rate is a property of the
+    /// vehicle, not of this type.
+    secondary_kbits: Option<u32>,
     /// Set when the ELM327 request form was *measured* to refuse a long
     /// request and `STPX` was measured to carry one. Not the same as
     /// [`AdapterCapabilities::supports_long_messages`], which says only that
@@ -161,7 +165,7 @@ impl Elm327Adapter {
             headers_enabled: false,
             spaces_enabled: true,
             current_header: None,
-            current_bus: crate::VehicleBus::HighSpeed,
+            current_bus: crate::VehicleBus::Primary,
             preferred_protocol: None,
             response_window_ms: RESPONSE_WINDOW_DEFAULT_MS,
             proven_window_ms: None,
@@ -173,6 +177,7 @@ impl Elm327Adapter {
             latency_total_ms: 0,
             latency_samples: 0,
             stn_confirmed: false,
+            secondary_kbits: None,
             long_via_stpx: false,
             probes: 0,
             battery_voltage: None,
@@ -421,6 +426,21 @@ impl Elm327Adapter {
         if sti.class.is_success() && !sti.lines.is_empty() {
             let firmware = sti.lines.join(" ").trim().to_string();
             self.stn_confirmed = true;
+
+            // STN firmware carries `STP`, which selects the secondary channel
+            // directly, and `STPBR`, which sets its rate. Both were measured
+            // working on an OBDLink MX+ on 2026-09-11.
+            //
+            // This flag was never set anywhere before, by anything. The code
+            // that switches bus was gated on it, so the second bus was
+            // unreachable on every adapter ever connected — including the ones
+            // that could plainly do it. A capability nothing grants is a
+            // feature nobody has.
+            //
+            // It says the *adapter* can ask. Whether the cable reaches pins 3
+            // and 11, and whether the vehicle has anything there, are separate
+            // questions that only the vehicle can answer.
+            self.caps.multiple_can_buses = true;
 
             // `STDI` names the product properly. The banner is an ELM327
             // compatibility story the device tells so that old software keeps
@@ -1158,6 +1178,130 @@ impl Elm327Adapter {
     /// is the device reporting that it segmented, transmitted, and waited for a
     /// flow-control frame that never came. Only a syntax refusal means it
     /// cannot.
+    /// Back to the bus every OBD-II tool reaches.
+    ///
+    /// `ATSP0` rather than a remembered protocol number: the primary bus is
+    /// whatever the vehicle negotiates, and the adapter is better at finding
+    /// that than a cached answer from before the bus was changed.
+    fn select_primary_bus(&mut self) -> AimResult<()> {
+        if !self.configure("ATSP0", "return to the primary bus")? {
+            return Err(AimError::new(
+                ErrorCode::AdapterRejectedCommand,
+                "the adapter refused to return to the primary bus",
+            ));
+        }
+        self.current_header = None;
+        self.current_bus = crate::VehicleBus::Primary;
+        Ok(())
+    }
+
+    /// Switch to the pins-3-and-11 channel and find what speed it runs at.
+    ///
+    /// # Why the speed is searched for
+    ///
+    /// It used to be assumed: 125 kbit/s, written into the type. Measured on a
+    /// 2019 F-250 on 2026-09-11, that bus runs at **500 kbit/s** — at 125 and
+    /// 250 the adapter reported nothing but `CAN ERROR`, and at 500 the same
+    /// pins carried 239 frames in five seconds with 29 modules answering.
+    ///
+    /// Ford called the old one MS-CAN at 125 and the newer one HS-CAN2 at 500,
+    /// and other manufacturers chose differently again. So the rate is searched
+    /// for, fastest first, and a rate that produces a bus error is not the
+    /// rate.
+    ///
+    /// # Why `STP` rather than `ATPB`
+    ///
+    /// `STP53` selects ISO 15765 on the secondary channel and `STPBR` sets its
+    /// bit rate, both measured working on the hardware above. The `ATPB` route
+    /// this replaced was never confirmed to reach the second channel at all —
+    /// it configures a *protocol*, and on this device the second channel is a
+    /// different thing from a reconfigured first one.
+    fn select_secondary_bus(&mut self) -> AimResult<()> {
+        if !self.stn_confirmed {
+            return Err(AimError::new(
+                ErrorCode::OperationNotAllowed,
+                "reaching the secondary bus needs STN-series firmware; this device did not \
+                 identify as one",
+            ));
+        }
+
+        // ISO 15765 (ISO-TP), 11-bit ids, on the secondary channel. The rate
+        // this selects is a default that the next command overrides.
+        if !self.configure("STP53", "select the secondary bus")? {
+            return Err(AimError::new(
+                ErrorCode::AdapterRejectedCommand,
+                "the adapter refused to select the secondary bus",
+            ));
+        }
+        self.current_header = None;
+        self.current_bus = crate::VehicleBus::Secondary;
+
+        // A rate already established on this vehicle is not searched for again.
+        if let Some(kbits) = self.secondary_kbits {
+            self.set_secondary_rate(kbits)?;
+            return Ok(());
+        }
+
+        for kbits in crate::SECONDARY_BUS_RATES {
+            self.set_secondary_rate(kbits)?;
+            if self.secondary_bus_carries_traffic() {
+                tracing::info!(kbits, "the secondary bus answers at this rate");
+                self.secondary_kbits = Some(kbits);
+                return Ok(());
+            }
+        }
+
+        // Every rate tried and none of them carried anything. That is reported
+        // as what it is. The caller must not turn it into "this vehicle has no
+        // second bus": a cable not wired to pins 3 and 11 looks exactly the
+        // same from here, and no adapter can report its own wiring.
+        tracing::info!(
+            rates = ?crate::SECONDARY_BUS_RATES,
+            "nothing answered on the secondary bus at any rate tried"
+        );
+        Ok(())
+    }
+
+    /// Set the secondary channel's bit rate.
+    fn set_secondary_rate(&mut self, kbits: u32) -> AimResult<()> {
+        let baud = kbits * 1000;
+        if !self.configure(&format!("STPBR {baud}"), "set the secondary bus bit rate")? {
+            return Err(AimError::new(
+                ErrorCode::AdapterRejectedCommand,
+                format!("the adapter refused {kbits} kbit/s on the secondary bus"),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Whether anything is transmitting on the bus as currently configured.
+    ///
+    /// Listens rather than asks. A request would only find a module that
+    /// happens to answer the address it was sent to; a body bus is full of
+    /// periodic traffic, so the question "is this the right bit rate" is
+    /// answered by whether any frame arrives intact at all.
+    ///
+    /// `CAN ERROR` is the answer at a wrong rate — the controller cannot frame
+    /// what it is hearing — and is what makes this discriminate rather than
+    /// merely time out.
+    fn secondary_bus_carries_traffic(&mut self) -> bool {
+        let Ok(response) = self.send_probe("ATMA", SECONDARY_BUS_LISTEN) else {
+            return false;
+        };
+        // Stop the monitor. It streams until something interrupts it, and
+        // leaving it running would make every later command look like traffic.
+        let _ = self.send_probe("", self.config.at_timeout);
+
+        response.lines.iter().any(|line| {
+            let l = line.trim();
+            !l.is_empty()
+                && !l.eq_ignore_ascii_case("STOPPED")
+                && !l.to_ascii_uppercase().contains("CAN ERROR")
+                && !l.to_ascii_uppercase().contains("BUFFER FULL")
+                && !l.starts_with('>')
+        })
+    }
+
     fn measure_stn_long_messages(&mut self) -> bool {
         // No `h:` parameter. This runs before `ATDPN` has been asked, so the
         // negotiated protocol is not known yet and there is no functional
@@ -1509,40 +1653,19 @@ impl DiagnosticAdapter for Elm327Adapter {
         if !self.caps.multiple_can_buses {
             return Err(AimError::new(
                 ErrorCode::OperationNotAllowed,
-                "this adapter did not accept the commands needed to change bus speed, so only \
-                 the high-speed bus is reachable with it",
+                "this adapter did not accept the commands needed to reach a second bus, so only \
+                 the primary bus is reachable with it",
             ));
         }
 
-        // Programmable protocol B, which is where a non-default bit rate lives
-        // on ELM327-class hardware. The divisor is 500 / rate: 0x01 for the
-        // 500 kbit/s bus, 0x04 for 125 kbit/s.
-        //
-        // `ATPB` takes two bytes: the first configures the protocol options
-        // (0xC0 selects 11-bit ids with a variable data-length code), the
-        // second is the divisor.
-        let divisor = 500 / bus.kbits().max(1);
-        let ok = self.configure(
-            &format!("ATPB C0 {divisor:02X}"),
-            "set the bus bit rate for a protocol change",
-        )?;
-        if !ok {
-            return Err(AimError::new(
-                ErrorCode::AdapterRejectedCommand,
-                format!("the adapter refused to configure the {}", bus.label()),
-            ));
+        match bus {
+            crate::VehicleBus::Primary => self.select_primary_bus(),
+            crate::VehicleBus::Secondary => self.select_secondary_bus(),
         }
-        if !self.configure("ATSPB", "switch to the reconfigured protocol")? {
-            return Err(AimError::new(
-                ErrorCode::AdapterRejectedCommand,
-                "the adapter refused to switch to the reconfigured protocol",
-            ));
-        }
+    }
 
-        // The header cache describes the old bus and is now meaningless.
-        self.current_header = None;
-        self.current_bus = bus;
-        Ok(())
+    fn secondary_bus_kbits(&self) -> Option<u32> {
+        self.secondary_kbits
     }
 
     fn current_bus(&self) -> crate::VehicleBus {
@@ -1636,6 +1759,14 @@ const THROUGHPUT_CEILING: f64 = 100.0;
 /// text-terminal round trip that limits a generic ELM327. Clamping such a
 /// device to the generic ceiling would make the app slower on better hardware
 /// for no reason other than a constant.
+/// How long to listen for traffic when deciding whether a bit rate is right.
+///
+/// A body bus with the key on transmits continuously, so a short window is
+/// plenty: measured on a 2019 F-250, 239 frames arrived in five seconds. Long
+/// enough to be sure, short enough that three wrong rates cost a second and a
+/// half between them.
+const SECONDARY_BUS_LISTEN: std::time::Duration = std::time::Duration::from_millis(500);
+
 const THROUGHPUT_CEILING_STN: f64 = 400.0;
 
 /// True for errors that mean the link itself is gone rather than the request

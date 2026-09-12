@@ -216,9 +216,18 @@ pub trait DiagnosticAdapter: Send {
         ))
     }
 
+    /// Bit rate found on the secondary bus, in kbit/s, once a probe has
+    /// established one.
+    ///
+    /// `None` when nothing has been established, which is not the same as the
+    /// bus being absent.
+    fn secondary_bus_kbits(&self) -> Option<u32> {
+        None
+    }
+
     /// Which bus the adapter is currently on.
     fn current_bus(&self) -> VehicleBus {
-        VehicleBus::HighSpeed
+        VehicleBus::Primary
     }
 
     /// Hint which protocol worked here last time, so it is tried first.
@@ -280,35 +289,58 @@ mod tests {
 
 /// Which vehicle bus an adapter is talking to.
 ///
-/// Named by what they carry rather than by a manufacturer's abbreviation, so
-/// the concept survives contact with vehicles that call them something else.
-/// Ford says HS-CAN and MS-CAN; the standard says neither.
+/// Named by the pins rather than by a speed, because the speed is not a
+/// property of the bus this enum can know.
+///
+/// This used to be `HighSpeed` and `MediumSpeed`, with 500 and 125 kbit/s
+/// written into the type. That was wrong on the first vehicle it met: a 2019
+/// F-250's second bus runs at **500 kbit/s**, and a sweep at the assumed 125
+/// produced nothing but `CAN ERROR` — measured on 2026-09-11, where 500 kbit/s
+/// on the same pins carried 239 frames in five seconds and 29 modules answered.
+///
+/// Ford called the slow one MS-CAN and the newer fast one HS-CAN2, and a type
+/// that encodes either number is a type that is wrong on half the fleet. So the
+/// bus says which pins, and the rate is discovered from the vehicle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VehicleBus {
-    /// The 500 kbit/s bus carrying powertrain and everything the emissions
-    /// standard requires. Every OBD-II tool reaches this one.
-    HighSpeed,
-    /// The slower bus - 125 kbit/s on the vehicles that have one - carrying
-    /// body, comfort and convenience modules. Reaching it needs an adapter
-    /// wired to pins 3 and 11 as well as the usual 6 and 14.
-    MediumSpeed,
+    /// Pins 6 and 14. Powertrain and everything the emissions standard
+    /// requires. Every OBD-II tool reaches this one, always at 500 kbit/s for
+    /// CAN vehicles.
+    Primary,
+    /// Pins 3 and 11. Body, comfort and instrument modules — most of a vehicle,
+    /// and nearly everything configurable. Reaching it needs an adapter wired
+    /// to those pins, which no adapter can report about itself.
+    ///
+    /// The rate varies by manufacturer and model year and is discovered, not
+    /// assumed.
+    Secondary,
 }
 
+/// Bit rates a secondary bus is worth trying, fastest first.
+///
+/// Fastest first because it is the one modern vehicles use, and because a
+/// wrong rate costs a probe rather than a wrong answer.
+pub const SECONDARY_BUS_RATES: [u32; 3] = [500, 250, 125];
+
 impl VehicleBus {
-    /// Bit rate in kbit/s.
-    pub fn kbits(&self) -> u32 {
+    /// Bit rate in kbit/s, where it is a property of the bus rather than of the
+    /// vehicle.
+    ///
+    /// `None` for the secondary bus: that is the whole point of this type. Ask
+    /// the adapter what it found instead.
+    pub fn kbits(&self) -> Option<u32> {
         match self {
-            VehicleBus::HighSpeed => 500,
-            VehicleBus::MediumSpeed => 125,
+            VehicleBus::Primary => Some(500),
+            VehicleBus::Secondary => None,
         }
     }
 
     /// Human label.
     pub fn label(&self) -> &'static str {
         match self {
-            VehicleBus::HighSpeed => "high-speed bus (500 kbit/s)",
-            VehicleBus::MediumSpeed => "medium-speed body bus (125 kbit/s)",
+            VehicleBus::Primary => "primary bus (pins 6 and 14)",
+            VehicleBus::Secondary => "secondary bus (pins 3 and 11)",
         }
     }
 
@@ -321,8 +353,8 @@ impl VehicleBus {
     /// always been, so existing stored sessions keep matching.
     pub fn key_prefix(&self) -> &'static str {
         match self {
-            VehicleBus::HighSpeed => "ECU",
-            VehicleBus::MediumSpeed => "MSCAN",
+            VehicleBus::Primary => "ECU",
+            VehicleBus::Secondary => "BUS2",
         }
     }
 }
@@ -333,27 +365,47 @@ mod bus_tests {
 
     /// Two buses, one address, two modules.
     ///
-    /// A body module on the slow bus can answer at the same address as a
-    /// powertrain module on the fast one. They are unrelated, and a key built
-    /// from the address alone would file the second on top of the first — the
-    /// scan would report finding fewer modules the more buses it swept.
+    /// A body module on the secondary bus can answer at the same address as a
+    /// powertrain module on the primary one — measured on a 2019 F-250, where
+    /// both buses have modules in the `7xx` range. They are unrelated, and a
+    /// key built from the address alone would file the second on top of the
+    /// first: the scan would report finding fewer modules the more buses it
+    /// swept.
     #[test]
     fn a_module_key_distinguishes_the_bus_it_answered_on() {
-        let high = format!("{}_{}", VehicleBus::HighSpeed.key_prefix(), "7E8");
-        let medium = format!("{}_{}", VehicleBus::MediumSpeed.key_prefix(), "7E8");
-        assert_ne!(high, medium);
-        // The high-speed form is what module keys have always been, so sessions
+        let primary = format!("{}_{}", VehicleBus::Primary.key_prefix(), "7E8");
+        let secondary = format!("{}_{}", VehicleBus::Secondary.key_prefix(), "7E8");
+        assert_ne!(primary, secondary);
+        // The primary form is what module keys have always been, so sessions
         // recorded before there was a second bus still match.
-        assert_eq!(high, "ECU_7E8");
+        assert_eq!(primary, "ECU_7E8");
     }
 
-    /// The divisor the bus switch is built on. 500/125 = 4, and a bus whose
-    /// rate did not divide cleanly would silently configure the wrong speed.
+    /// The secondary bus does not get to claim a speed.
+    ///
+    /// It had one written into it — 125 kbit/s — and the first vehicle this met
+    /// runs its second bus at 500. A type that answers this question without
+    /// asking the vehicle is a type that is confidently wrong.
     #[test]
-    fn every_bus_rate_divides_the_programmable_base() {
-        for bus in [VehicleBus::HighSpeed, VehicleBus::MediumSpeed] {
-            assert_ne!(bus.kbits(), 0, "a zero bit rate would divide by zero");
-            assert_eq!(500 % bus.kbits(), 0, "{} needs a fractional divisor", bus.label());
+    fn only_the_primary_bus_has_a_rate_worth_asserting() {
+        assert_eq!(VehicleBus::Primary.kbits(), Some(500));
+        assert_eq!(
+            VehicleBus::Secondary.kbits(),
+            None,
+            "the secondary bus rate is discovered from the vehicle, never assumed"
+        );
+    }
+
+    /// Every rate worth trying divides the programmable base cleanly, because a
+    /// fractional divisor would silently configure the wrong speed.
+    #[test]
+    fn every_candidate_rate_divides_the_programmable_base() {
+        for kbits in super::SECONDARY_BUS_RATES {
+            assert_ne!(kbits, 0, "a zero bit rate would divide by zero");
+            assert_eq!(500 % kbits, 0, "{kbits} kbit/s needs a fractional divisor");
         }
+        // Fastest first: modern vehicles use it, and the F-250 that prompted
+        // this would have been found on the first attempt.
+        assert_eq!(super::SECONDARY_BUS_RATES[0], 500);
     }
 }

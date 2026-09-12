@@ -101,12 +101,29 @@ pub mod capabilities {
 ///
 /// Swept exhaustively rather than from a per-manufacturer list, because a list
 /// is a guess about a vehicle and a sweep is a measurement of one.
-const UDS_SCAN_RANGE: std::ops::RangeInclusive<u16> = 0x700..=0x7EF;
+/// Ends at `0x7FF` rather than `0x7EF`. Measured on a 2019 F-250's secondary
+/// bus on 2026-09-11: a module answered TesterPresent at `7F1`, sixteen
+/// addresses past where this range used to stop. The old bound was the
+/// conventional OBD-II block, and conventions are where modules are *usually*
+/// found rather than where they are.
+const UDS_SCAN_RANGE: std::ops::RangeInclusive<u16> = 0x700..=0x7FF;
 
 /// Consecutive timeouts before a signal stops being asked for.
 ///
 /// Three, because two can be coincidence on a busy bus and four is another
 /// twenty-four seconds of somebody waiting.
+/// Something that answered a discovery probe.
+///
+/// Carries the address it replied from and, when the probe chose one, the
+/// address it was asked at. A broadcast cannot know the second and derives it
+/// by convention; a sweep knows it because it picked it.
+struct Responder {
+    /// Address the module replied from.
+    address: String,
+    /// Address a request should be sent to, where that is known.
+    request_address: Option<String>,
+}
+
 const SIGNAL_TIMEOUT_STRIKES: usize = 3;
 
 /// The diagnostic request identifiers a full-vehicle scan sweeps, written in
@@ -1035,7 +1052,7 @@ impl DiagnosticService {
         let home = self.adapter.current_bus();
         let mut buses = vec![home];
         if self.adapter.capabilities().multiple_can_buses {
-            for bus in [VehicleBus::HighSpeed, VehicleBus::MediumSpeed] {
+            for bus in [VehicleBus::Primary, VehicleBus::Secondary] {
                 if bus != home {
                     buses.push(bus);
                 }
@@ -1079,6 +1096,11 @@ impl DiagnosticService {
                 "label": bus.label(),
                 "reached": true,
                 "modules": found.len(),
+                // What the bus actually runs at, where that had to be found
+                // out. The primary bus states its own; the secondary one is
+                // whatever answered, and recording it is how the next scan of
+                // this vehicle skips the search.
+                "kbits": bus.kbits().or_else(|| self.adapter.secondary_bus_kbits()),
                 "note": if found.is_empty() {
                     // Deliberately not a conclusion about the vehicle.
                     Some(format!(
@@ -1125,9 +1147,16 @@ impl DiagnosticService {
     }
 
     /// The discovery sweep on whichever bus the adapter is currently on.
-    fn scan_one_bus(&mut self, bus: VehicleBus) -> AimResult<Vec<Module>> {
+    /// Something that answered, and what it was asked.
+    ///
+    /// The two discovery strategies know different things. A broadcast learns
+    /// only the address a module replied *from* and has to derive the request
+    /// address by convention; a sweep already knows what it asked, because it
+    /// chose it. Keeping both means neither has to pretend.
+    fn discover_by_broadcast(&mut self) -> AimResult<Vec<Responder>> {
         // Service 01 PID 00 is the one request every OBD-II module must answer,
-        // which makes it the discovery probe.
+        // which makes it the discovery probe on the bus where that obligation
+        // exists.
         let request = ObdRequest::current_data(0x00);
         let messages = match self.request(&request, &RequestTarget::Functional) {
             Ok(m) => m,
@@ -1136,35 +1165,95 @@ impl DiagnosticService {
             Err(e) if e.code == ErrorCode::NoData => Vec::new(),
             Err(e) => return Err(e),
         };
-        let protocol = self.adapter.protocol();
 
-        let mut discovered = Vec::new();
-        for message in &messages {
-            // The bus is part of the identity, not a label on it. Two buses can
-            // both have a module at 7E8, and a key that ignored which bus it
-            // came from would quietly overwrite one with the other.
-            let key = match bus {
-                VehicleBus::HighSpeed => format!("ECU_{}", message.address),
-                other => format!("{}_{}", other.key_prefix(), message.address),
-            };
-            let module = Module {
-                id: aim_types::ModuleId::new(),
-                session_id: self.session.id.clone(),
-                module_key: key.clone(),
-                // Derivable here: this came from a functional broadcast, and
-                // the legislated block is the one place response and request
-                // addresses are related by the standard.
+        Ok(messages
+            .iter()
+            .map(|message| Responder {
+                address: message.address.clone(),
+                // Derivable here, and only here: this came from a functional
+                // broadcast, and the legislated block is the one place response
+                // and request addresses are related by the standard.
                 request_address: RequestTarget::from_response_address(&message.address).and_then(
                     |t| match t {
                         RequestTarget::Physical(a) => Some(a),
                         RequestTarget::Functional => None,
                     },
                 ),
+            })
+            .collect())
+    }
+
+    /// Ask every diagnostic address in turn whether anybody is home.
+    ///
+    /// Slower than a broadcast and the only thing that works where modules have
+    /// no obligation to answer one. A negative response counts: a module that
+    /// refuses the request has told us it exists, which is the question being
+    /// asked. Measured on a 2019 F-250, three of twenty-nine modules answered
+    /// `7F 3E 12` — subfunction not supported — and treating that as silence
+    /// would have lost them.
+    fn discover_by_address_sweep(&mut self) -> AimResult<Vec<Responder>> {
+        let probe = aim_protocols::UdsRequest::tester_present(false).to_bytes();
+        let (budget, _) = self.calibrate_probe_budget();
+        let mut found = Vec::new();
+
+        for address in scan_addresses(self.adapter.protocol()) {
+            let target = RequestTarget::Physical(address.clone());
+            let replies = match self.adapter.request_pdu(&probe, &target, budget) {
+                Ok(replies) => replies,
+                // Nobody there, or the bus said nothing. Either way this
+                // address is not a module and the sweep moves on.
+                Err(_) => continue,
+            };
+            for reply in replies {
+                found.push(Responder {
+                    address: reply.address.clone(),
+                    // Known rather than derived: this is the address the
+                    // request was sent to.
+                    request_address: Some(address.clone()),
+                });
+            }
+        }
+
+        Ok(found)
+    }
+
+    fn scan_one_bus(&mut self, bus: VehicleBus) -> AimResult<Vec<Module>> {
+        // Which question to ask depends on which bus is being asked.
+        //
+        // The legislated broadcast is the right probe on the primary bus and
+        // finds nothing at all on the secondary one. Measured on a 2019 F-250
+        // on 2026-09-11: with the second bus confirmed alive — 239 frames in
+        // five seconds — `7DF 0100`, `3E00` and `0902` every one returned NO
+        // DATA, while a TesterPresent sweep of the same bus found 29 modules.
+        //
+        // Body modules are not emissions modules. They have no obligation to
+        // answer service 01 and they do not. A sweep that asked them anyway
+        // would have reported an empty bus and been believed.
+        let responders = match bus {
+            VehicleBus::Primary => self.discover_by_broadcast()?,
+            VehicleBus::Secondary => self.discover_by_address_sweep()?,
+        };
+        let protocol = self.adapter.protocol();
+
+        let mut discovered = Vec::new();
+        for responder in &responders {
+            // The bus is part of the identity, not a label on it. Two buses can
+            // both have a module at 7E8, and a key that ignored which bus it
+            // came from would quietly overwrite one with the other.
+            let key = match bus {
+                VehicleBus::Primary => format!("ECU_{}", responder.address),
+                other => format!("{}_{}", other.key_prefix(), responder.address),
+            };
+            let module = Module {
+                id: aim_types::ModuleId::new(),
+                session_id: self.session.id.clone(),
+                module_key: key.clone(),
+                request_address: responder.request_address.clone(),
                 // Named by address until the module tells us otherwise. Which
-                // module sits at which OBD address is vehicle-specific, and
+                // module sits at which address is vehicle-specific, and
                 // guessing would be an invention.
-                name: format!("OBD module at {}", message.address),
-                address: message.address.clone(),
+                name: format!("OBD module at {}", responder.address),
+                address: responder.address.clone(),
                 protocol,
                 identity: ModuleIdentity::default(),
                 software_version: None,
@@ -1175,7 +1264,7 @@ impl DiagnosticService {
                 &self.session.id,
                 EventKind::ModuleDiscovered {
                     module_key: key.clone(),
-                    address: message.address.clone(),
+                    address: responder.address.clone(),
                 },
             );
             discovered.push(stored);
@@ -4741,6 +4830,26 @@ mod tests {
         // Nothing 11-bit leaks into the 29-bit sweep or the reverse.
         assert!(addrs.iter().all(|a| a.len() == 8));
         assert!(eleven.iter().all(|a| a.len() == 3));
+    }
+
+    /// The sweep reaches the addresses vehicles actually use, not the ones the
+    /// convention says they should.
+    ///
+    /// Measured on a 2019 F-250's secondary bus on 2026-09-11: a module
+    /// answered TesterPresent at `7F1`. The range stopped at `7EF` — the tidy
+    /// end of the conventional OBD-II block — so that module, and any other
+    /// past it, could never have been found.
+    #[test]
+    fn the_sweep_reaches_past_the_conventional_block() {
+        let addrs = scan_addresses(aim_types::ObdProtocol::Iso15765Can11_500);
+        assert!(
+            addrs.contains(&String::from("7F1")),
+            "a module measured at 7F1 on a real vehicle must be inside the sweep"
+        );
+        assert!(addrs.contains(&String::from("7FF")), "the range runs to the end of the block");
+        // Still not the broadcast: probing it makes every emissions ECU answer
+        // at once, which is a different question from "who is at this address".
+        assert!(!addrs.contains(&String::from("7DF")));
     }
 
     /// A record is shown as text only when it plainly is text, so a part number
