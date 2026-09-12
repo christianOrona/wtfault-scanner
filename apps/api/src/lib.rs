@@ -19,6 +19,7 @@ pub mod error;
 pub mod routes;
 pub mod state;
 pub mod support;
+pub mod vocabulary;
 pub mod update;
 pub mod ws;
 

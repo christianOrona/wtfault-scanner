@@ -320,9 +320,18 @@ line between them.
 
 **Works today, verified on hardware**
 
-- OBD-II services 01–0A and UDS 0x10/0x19/0x22/0x3E over an ELM327-class adapter
+- OBD-II services 01–0A and UDS 0x10/0x19/0x22/0x27/0x2E/0x3E over an
+  ELM327-class adapter
 - **11-bit and 29-bit CAN.** Verified on a 2019 Ford F-250 (11-bit) and a 2023
   Honda Odyssey (29-bit), which are different enough to have caught real bugs
+- **Both CAN buses.** Body, comfort and instrument modules live on the second
+  one, and reaching it is the difference between seeing a powertrain and seeing
+  a vehicle: the same F-250 answers with 7 modules on the legislated bus and 29
+  on the other. Its bit rate is discovered rather than assumed, because that
+  truck runs its second bus at 500 kbit/s where the convention says 125
+- **One configuration change, written to a real vehicle and confirmed by its
+  owner** — door auto-lock on that F-250, verified after an ignition cycle.
+  One is not a catalogue, and every other mapping still ships as `null`
 - Full-bus module sweep, live data, Mode 06, readiness, session comparison
 - **Read-only capability probing** — which identifiers a module holds, which
   diagnostic sessions it grants, and whether it implements security access
@@ -345,6 +354,16 @@ faults in the cars:
   protocol returns NO DATA" into a VIN, two modules, readiness and live data —
   and auto-detection then succeeded on the *first* probe, because the protocol
   sweep had only ever been compensating for our own malformed request.
+- **It was seeing a seventh of the truck.** The F-250 answers with 7 modules on
+  the legislated bus and **29 more** on the second one — doors, seats, lighting,
+  the dash, 22 of them holding factory configuration blocks. Three separate
+  assumptions kept all of that invisible: the capability flag that gates bus
+  switching was never set true by anything, anywhere; the second bus was
+  hardcoded at 125 kbit/s when that truck runs it at **500**; and discovery
+  asked the OBD-II broadcast, which body modules have no obligation to answer
+  and do not — service 01 returns NO DATA across the whole bus while every one
+  of those 29 answers UDS. Any one of the three alone would have reported an
+  empty bus, convincingly.
 - **The first configuration mapping measured on a real vehicle.** AutoLock on the
   F-250: module `72E`, identifier `DE0E`, byte 4, bit 0. Measured by capturing
   the module, having the owner change the setting from the dash, capturing
@@ -385,6 +404,13 @@ faults in the cars:
 - **Manufacturer-specific decoding is not there yet.** Everything is the public
   standard, which is why it works across brands; it also means a module can
   answer with a code nobody has a description for.
+- **Nothing knows what fuel the engine burns.** PID `0x51` reports it and is
+  never asked, so a gasoline-shaped procedure runs on a diesel and measures
+  nothing: the warm-idle baseline exists to read fuel trims, a diesel has none,
+  and it reported success anyway until it was run on one. It now says what it
+  could not measure — but a procedure still cannot declare which engines it
+  applies to, and no diesel-specific signals (particulate filter load,
+  regeneration state, exhaust fluid) are decoded at all.
 - **Profile import is folder-only.** Dropping a YAML file in works; importing one
   from a URL, with a count of how many people have verified it, does not exist.
 - **RAM 2018 and newer** put a Security Gateway between the port and the bus. No
@@ -499,7 +525,11 @@ additional terms.
 
 ### A word about what this touches
 
-It talks to a vehicle. Read-only by construction, but a vehicle is not a text
-editor: run it on a car you own or have permission to work on, and do not read
-live data while driving. The licences above disclaim warranty, and that
-disclaimer is not decoration here.
+It talks to a vehicle, and it can change one. Reading is free; writing a
+configuration setting takes a typed confirmation, and the assistant cannot
+reach that path at all. Programming and flashing are compiled out, and nothing
+in the braking, steering or throttle path is in scope at any level.
+
+A vehicle is not a text editor. Run it on a car you own or have permission to
+work on, and do not read live data while driving. The licences above disclaim
+warranty, and that disclaimer is not decoration here.

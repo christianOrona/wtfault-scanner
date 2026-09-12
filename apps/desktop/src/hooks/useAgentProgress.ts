@@ -52,6 +52,19 @@ const PLAIN: Record<string, string> = {
   list_catalog_signals: "Looking up what this vehicle can report",
   connect: "Connecting to the vehicle",
   disconnect: "Disconnecting",
+  // Found by the test that compares this list against the tools that actually
+  // reach the recorder. Every one of these would have appeared as a raw
+  // identifier the first time it ran.
+  read_pid: "Reading one sensor",
+  read_feature: "Looking up one setting",
+  read_catalog_signal: "Reading a value from the catalogue",
+  check_procedure: "Checking whether the car is in the right state",
+  run_procedure: "Taking a measurement under held conditions",
+  capture_configuration: "Recording a module's current configuration",
+  apply_configuration_change: "Writing a setting to the car",
+  import_as_built: "Reading the factory configuration file",
+  probe_module_capabilities: "Asking a module what it supports",
+  probe_write_gate: "Checking whether this module accepts changes",
 };
 
 const describe = (tool: string, args: unknown): string => {

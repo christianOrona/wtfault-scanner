@@ -4,8 +4,13 @@ How the crates fit together, why the boundaries sit where they do, and where
 the agent runtime plugs in when it is built.
 
 `docs/HANDOFF.md` is the spec. This document explains the implementation of
-Phase 0 + Phase 1: a simulator-backed, read-only diagnostic core with a
-localhost API.
+Phase 0 + Phase 1: a simulator-backed diagnostic core with a localhost API.
+
+> **This describes a phase, not the current application.** Phase 0 + 1 were
+> read-only; the shipped app is not. Configuration writes exist behind a typed
+> confirmation and have been performed on a real vehicle, the agent and the
+> Tauri shell both exist, and a scan reaches a second CAN bus. Where this
+> document and `STATUS.md` disagree, `STATUS.md` is the one kept current.
 
 ---
 
@@ -282,6 +287,11 @@ one capability at a time, capturing the whole flight-recorder trace.
 ---
 
 ## Deliberate omissions
+
+> Omissions **of Phase 0 + 1**. Most have since been built — writes, the agent,
+> the shell, and Ford-specific data measured on a real truck rather than
+> guessed. They are kept here because *why* each was left out is still the
+> reasoning the built version had to satisfy.
 
 - **No Ford-specific anything.** No module addresses, no OEM PIDs, no magic
   bytes. `7EA` and `7EB` are named by address because which module answers

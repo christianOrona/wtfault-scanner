@@ -28,6 +28,6 @@
       "icons/icon.ico"
     ],
     "shortDescription": "OBD-II diagnostics explained in plain English, with the evidence attached",
-    "longDescription": "Reads a vehicle over an ELM327-class adapter, explains what it found in language anyone can follow, and shows the raw adapter exchange behind every value. Read-only: no writes, no configuration, no programming."
+    "longDescription": "Reads a vehicle over an ELM327-class adapter, explains what it found in language anyone can follow, and shows the raw adapter exchange behind every value. Reading needs no confirmation. Changing a configuration setting needs a typed one, and the assistant cannot reach that path at all. No ECU programming, no flashing, nothing in the braking, steering or throttle path."
   }
 }
