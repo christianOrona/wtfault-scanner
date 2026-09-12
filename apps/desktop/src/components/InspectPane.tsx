@@ -628,8 +628,24 @@ export function TraceList({
   onEvidence: (ref: number) => void;
 }) {
   if (!trace.length) return null;
+  const reads = trace.filter((e) => e.type === "tool").length;
   return (
-    <div className="events" style={{ marginTop: 8 }}>
+    // Collapsed, because it grew with the vehicle.
+    //
+    // A truck with two buses answers with thirty-six modules, and the agent's
+    // working — every call, its arguments as raw JSON, every result — ran to
+    // hundreds of lines pinned to the end of the report. Somebody looking for
+    // what to do about their truck had to scroll past all of it.
+    //
+    // It is not deleted, and it is not summarised. It is one click away here,
+    // the flight recorder holds the same record in full, and since 0.3.8 so
+    // does the log file. Evidence nobody can find is not evidence; evidence
+    // between somebody and their answer is not either.
+    <details style={{ marginTop: 8 }}>
+      <summary className="faint" style={{ cursor: "pointer", fontSize: 12 }}>
+        every read the assistant made ({reads})
+      </summary>
+      <div className="events" style={{ marginTop: 8 }}>
       {trace.map((e, i) => {
         if (e.type === "thinking") {
           return (
@@ -659,6 +675,7 @@ export function TraceList({
           </div>
         );
       })}
-    </div>
+      </div>
+    </details>
   );
 }
