@@ -2081,9 +2081,10 @@ impl DiagnosticService {
                 "modules_awake_on_the_bus": modules_awake,
                 "what_it_would_add":
                     "The manufacturer's record of how this exact vehicle was configured at the \
-                     factory, for every module on it - including the ones asleep right now and \
-                     the ones on a bus this adapter cannot reach. On one 2019 F-250 that was 29 \
-                     modules against six awake on the bus.",
+                     factory, for every module on it - including any asleep right now, and any \
+                     on a bus this adapter cannot reach. It is also the only way to see what a \
+                     setting was originally, which is what tells you whether something has been \
+                     changed since.",
                 "how_to_get_one": [
                     "Ford publishes it per VIN on the Motorcraft service site. The account is \
                      free; knowing the file exists is the hard part.",
@@ -2359,6 +2360,67 @@ impl DiagnosticService {
         self.finish("read_feature", capabilities::READ_FEATURE, t0, outcome)
     }
 
+    /// Which bus a module answering at this request address was found on.
+    ///
+    /// `None` when no scan has seen it, in which case the caller must not
+    /// switch anywhere: a guess would move the adapter off a bus that is
+    /// working for a module that may be reachable right where it is.
+    ///
+    /// The primary bus wins when a module was found on both. That is not
+    /// hypothetical — a 2019 F-250 exposes the module holding its door-lock
+    /// configuration at `72E` on the legislated bus as well as on the body bus,
+    /// because the gateway forwards diagnostics for it. Staying put is faster,
+    /// and it is how that vehicle's one verified configuration write worked
+    /// before anything here could change bus at all.
+    fn bus_for_request_address(&self, address: &str) -> Option<VehicleBus> {
+        let modules = self.store.modules(&self.session.id).ok()?;
+        let buses: Vec<VehicleBus> = modules
+            .iter()
+            .filter(|m| m.request_address.as_deref() == Some(address))
+            .map(|m| VehicleBus::of_module_key(&m.module_key))
+            .collect();
+
+        match buses.contains(&VehicleBus::Primary) {
+            true => Some(VehicleBus::Primary),
+            false => buses.first().copied(),
+        }
+    }
+
+    /// Put the adapter on the bus this module answers on.
+    ///
+    /// Returns the bus to go back to, when a change was made. Most of a vehicle
+    /// is not on the legislated bus — 29 of 36 modules on the truck this was
+    /// measured against — and a feature whose module sits there cannot be read
+    /// or written from where the adapter starts.
+    fn reach_module(&mut self, address: &str) -> Option<VehicleBus> {
+        let wanted = self.bus_for_request_address(address)?;
+        let home = self.adapter.current_bus();
+        if wanted == home {
+            return None;
+        }
+        match self.adapter.select_bus(wanted) {
+            Ok(()) => {
+                tracing::info!(address, bus = ?wanted, "switched bus to reach a module");
+                Some(home)
+            }
+            // Reported by the read that follows, which will fail with the
+            // module's own silence rather than with a bus error nobody asked
+            // about. Switching back is unnecessary: nothing moved.
+            Err(e) => {
+                tracing::warn!(error = %e, address, "cannot switch to this module's bus");
+                None
+            }
+        }
+    }
+
+    /// Undo [`Self::reach_module`]. Safe to call with `None`.
+    fn restore_bus(&mut self, home: Option<VehicleBus>) {
+        let Some(home) = home else { return };
+        if let Err(e) = self.adapter.select_bus(home) {
+            tracing::warn!(error = %e, "cannot return to the previous bus");
+        }
+    }
+
     fn read_feature_inner(&mut self, feature_id: &str) -> AimResult<Payload> {
         let Some(feature) = self.decoders.features.get(feature_id) else {
             return Err(AimError::new(
@@ -2420,11 +2482,18 @@ impl DiagnosticService {
 
         let addr = RequestTarget::Physical(target.module.clone());
         let request = aim_protocols::UdsRequest::read_data_by_identifier(target.did).to_bytes();
+        // Go to where this module answers, if that is somewhere else. Most of a
+        // vehicle is not on the legislated bus, and the settings people want to
+        // change are mostly on the modules that are not.
+        let home = self.reach_module(&target.module);
         // The live read is the answer whenever there is one. When there is not
         // — the module is asleep, or sits on a bus this adapter cannot reach —
         // an imported as-built file may still hold the record, because the file
         // covers the whole vehicle rather than whatever happens to be awake.
-        // Measured on a 2019 F-250: 29 modules in the file, six on the bus.
+        // Measured on a 2019 F-250: 29 modules in its as-built file, and 29 on
+        // its second bus once this build could reach one. The file used to be
+        // the only way to see most of them; it is now the way to see what they
+        // left the factory as, which is a different and still useful thing.
         //
         // Reported as what it is. The factory value is not the current value,
         // and a person told "AutoLock is off" when the app never spoke to the
@@ -2440,10 +2509,18 @@ impl DiagnosticService {
                     });
                     match fallback {
                         Some(bytes) => (bytes, true),
-                        None => return Err(live_error),
+                        None => {
+                            // Before the error leaves: an adapter abandoned on
+                            // the bus a failed read went looking on would make
+                            // every unrelated request afterwards fail in a way
+                            // nobody would connect to reading a feature.
+                            self.restore_bus(home);
+                            return Err(live_error);
+                        }
                     }
                 }
             };
+        self.restore_bus(home);
         let state = target.current(&record);
 
         let mut warnings = Vec::new();
@@ -2785,7 +2862,34 @@ impl DiagnosticService {
         self.finish("apply_configuration_change", capabilities::WRITE_FEATURE, t0, outcome)
     }
 
+    /// Write a setting, from wherever its module answers.
+    ///
+    /// The switch is done out here rather than inside, because the write has
+    /// several ways to stop early — a refusal, a gate that will not open, bytes
+    /// that come back wrong — and an adapter left on another bus by any one of
+    /// them would break every unrelated request afterwards.
     fn apply_change_inner(
+        &mut self,
+        feature_id: &str,
+        desired: crate::config::DesiredValue,
+    ) -> AimResult<Payload> {
+        let module = self
+            .decoders
+            .features
+            .get(feature_id)
+            .and_then(|f| f.mapping.as_ref().and_then(|m| m.as_data_identifier()))
+            .map(|t| t.module);
+
+        let home = match &module {
+            Some(address) => self.reach_module(address),
+            None => None,
+        };
+        let outcome = self.apply_change_on_its_bus(feature_id, desired);
+        self.restore_bus(home);
+        outcome
+    }
+
+    fn apply_change_on_its_bus(
         &mut self,
         feature_id: &str,
         desired: crate::config::DesiredValue,
