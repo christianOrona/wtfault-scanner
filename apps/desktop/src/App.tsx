@@ -445,6 +445,28 @@ export default function App() {
                 </div>
               )}
 
+              {/* Work in progress, where the person is actually looking.
+
+                  The spinner for this lives in the title bar, which is a fine
+                  place for a status light and a poor one for the only sign
+                  that a scan is running. Somebody who has just connected sees
+                  a tab strip, a sidebar reading "computers in your car (0)",
+                  and a blank pane, and reasonably concludes nothing is
+                  happening. It is. */}
+              {busy && (
+                <div style={{ padding: "12px 16px 0", flex: "0 0 auto" }}>
+                  <div className="banner info">
+                    <span className="b-code">working</span>
+                    <span>
+                      <strong>{busy}.</strong> Sweeping both networks takes a minute or two.
+                      Most of what it finds is body and comfort modules, which have to be
+                      asked one address at a time — the list on the left fills in as they
+                      answer.
+                    </span>
+                  </div>
+                </div>
+              )}
+
               {/* The two agent panes stay mounted and are hidden when
                   inactive, unlike every other tab.
 

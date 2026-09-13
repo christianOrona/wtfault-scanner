@@ -336,7 +336,7 @@ features:
       Measured by toggling the setting named "Double Honk On Leaving Cabine" and
       diffing whole-module as-built backups either side: exactly one line moved.
 
-    modules: ["726"]
+    modules: ["72E"]
 
     applies_to:
       vins: ["1FT7W2BT7KEF78036"]

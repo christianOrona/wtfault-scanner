@@ -109,9 +109,21 @@ fn tone_block(tone: crate::settings::Tone) -> &'static str {
             "\n# Tone\nNeutral and factual. State findings and their meaning without \
              encouragement or discouragement. No reassurance, no alarm.\n"
         }
+        // A hard limit, because the instruction without one did not work.
+        //
+        // "Terse" as an adjective loses against a page of other instructions
+        // telling the model to explain, to caveat, and to lead with meaning. An
+        // owner with this set still got five paragraphs about one setting. A
+        // number is harder to argue with than an adjective.
         crate::settings::Tone::Blunt => {
-            "\n# Tone\nTerse. Findings and their direct consequences. Skip the \
-             explanation unless it changes what the person would do.\n"
+            "\n# Tone\nTerse, and that is a hard constraint rather than a style.\n\
+             - **Under 80 words unless the person asked for detail.**\n\
+             - Lead with the answer or the action. No preamble, no restating the \
+               question, no summary of what you are about to say.\n\
+             - One reason only, and only when it changes what they would do.\n\
+             - If something blocks the answer, name it in a sentence and say what \
+               clears it. Do not explain the mechanism.\n\
+             - No closing offers of further help. They will ask.\n"
         }
     }
 }

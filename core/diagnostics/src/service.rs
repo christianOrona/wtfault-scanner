@@ -4448,12 +4448,30 @@ impl DiagnosticService {
         // bailed, the sweep ran at the uncalibrated deadline, and found nothing.
         // The first successful scan poisoned every scan after it — which is
         // exactly the "worked once and never again" this was reported as.
-        let known: Vec<(String, RequestTarget)> = self
-            .store
-            .modules(&self.session.id)
-            .unwrap_or_default()
+        // A few candidates, engine-side first — not every module on the vehicle.
+        //
+        // Calibration asks a module it knows is present whether it can answer
+        // inside a deadline. Two probes each, three deadlines, two probe types.
+        // Against six modules that is cheap. Against the thirty-one a two-bus
+        // truck now reports it is up to three hundred and seventy-two requests
+        // before the scan has started, and on a 2019 F-250 with the engine off
+        // it spent thirty-five seconds doing exactly that and then reported
+        // that nothing answered consistently.
+        //
+        // Engine-side modules first because they are awake whenever the key is
+        // on. Body modules doze, and a dozing module teaches nothing about how
+        // long a deadline should be.
+        const MAX_CALIBRATION_CANDIDATES: usize = 4;
+
+        let mut all: Vec<Module> = self.store.modules(&self.session.id).unwrap_or_default();
+        all.sort_by_key(|m| match VehicleBus::of_module_key(&m.module_key) {
+            VehicleBus::Primary => 0,
+            VehicleBus::Secondary => 1,
+        });
+        let known: Vec<(String, RequestTarget)> = all
             .into_iter()
             .filter_map(|m| Self::request_target(&m).ok().map(|t| (m.module_key.clone(), t)))
+            .take(MAX_CALIBRATION_CANDIDATES)
             .collect();
         if known.is_empty() {
             // Nothing to calibrate against - a full scan run before anything

@@ -29,11 +29,15 @@ param(
 $repo = Split-Path -Parent $PSScriptRoot
 $db = Join-Path $env:APPDATA "ai-mechanic\data\sessions.sqlite"
 $profiles = Join-Path $repo "vehicle-profiles"
+# The same providers.json the desktop app uses. Without this the core looks
+# somewhere else, finds no model configured, and the whole assistant appears
+# missing — which cost a six-minute release build to work around once.
+$settings = Join-Path $env:APPDATA "ai-mechanicdataproviders.json"
 
 # The same database the installed app uses, so an imported as-built file, a
 # discovered module list and a recorded session are all still there. Testing
 # against an empty database is testing a different vehicle.
-$args = @("run", "-p", "aim-api", "--", "--port", $Port, "--db", $db, "--profiles", $profiles)
+$args = @("run", "-p", "aim-api", "--", "--port", $Port, "--db", $db, "--profiles", $profiles, "--settings", $settings)
 if ($Serial) { $args += @("--serial", $Serial) } else { $args += "--simulator" }
 
 Write-Host "core on http://127.0.0.1:$Port  db=$db" -ForegroundColor Cyan
