@@ -983,3 +983,25 @@ a.mini.button:hover { border-color: var(--accent-dim); background: #1c222c; }
   color: var(--text-faint);
   line-height: 1.45;
 }
+
+/* The strip under the header that says what the car is being asked.
+   Full width and above the panes on purpose: the thing it replaced was a
+   spinner inside whichever pane started the work, which is invisible from
+   every other pane and from the assistant. See BusyBar.tsx. */
+.busybar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+  padding: 7px 14px;
+  font-size: 12px;
+  background: var(--bg-inset);
+  border-bottom: 1px solid var(--accent);
+}
+.busybar .spacer { flex: 1; }
+.busybar .mono { font-family: var(--mono); color: var(--accent); }
+/* The last line is context, not a warning; it must not compete with the
+   operation name for attention. */
+.busybar .faint { font-size: 11px; }
+.busybar-what { display: inline-block; }
+.busybar-what::first-letter { text-transform: uppercase; }

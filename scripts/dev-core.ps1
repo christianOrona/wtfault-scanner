@@ -32,7 +32,7 @@ $profiles = Join-Path $repo "vehicle-profiles"
 # The same providers.json the desktop app uses. Without this the core looks
 # somewhere else, finds no model configured, and the whole assistant appears
 # missing — which cost a six-minute release build to work around once.
-$settings = Join-Path $env:APPDATA "ai-mechanicdataproviders.json"
+$settings = Join-Path $env:APPDATA "ai-mechanic\data\providers.json"
 
 # The same database the installed app uses, so an imported as-built file, a
 # discovered module list and a recorded session are all still there. Testing

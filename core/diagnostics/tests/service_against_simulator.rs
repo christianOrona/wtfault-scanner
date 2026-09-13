@@ -1472,3 +1472,84 @@ fn nothing_shipped_asks_somebody_to_drive_and_read_at_once() {
         assert!(p.safe_for_one_person(), "{} needs a second person", p.id);
     }
 }
+
+/// A rescan must not lose the modules a full scan found.
+///
+/// # The bug this pins
+///
+/// A rescan discovers the primary bus with the legislated broadcast, which is
+/// the right probe for emissions modules and reaches nothing else. A full scan
+/// sweeps addresses, which reaches everything. So on a vehicle where a body
+/// module is present on the primary bus — through a gateway, which is how a
+/// 2019 F-250 exposes its body controller at 72E — the two disagreed, and
+/// pressing Rescan dropped from the answer exactly the modules a configuration
+/// change needs.
+///
+/// The stored list survives: modules are upserted and never deleted, which is
+/// why the assertions below check what the scan *returned* as well as what the
+/// database holds. Without the fix the database is right and the answer is
+/// wrong, and the answer is what the screen draws and what the assistant reads.
+///
+/// Quietly, too. "Three modules" is a believable answer for a truck, and
+/// nothing on the screen said the number had just gone down.
+///
+/// The simulator models this directly: 768 and 7A8 answer UDS and implement no
+/// service 01 PIDs at all, so the broadcast cannot see them.
+#[test]
+fn a_rescan_keeps_the_modules_only_a_full_scan_can_find() {
+    let (mut service, _) = connected(ScenarioId::Healthy);
+
+    // The broadcast alone, on a session that knows nothing yet. This is the
+    // honest limit of a broadcast and the test asserts it rather than hiding
+    // it: nobody can confirm an address nobody has ever seen.
+    let first = service.scan_modules(USER);
+    assert!(first.success, "{:?}", first.error);
+    let after_broadcast = module_keys(&service);
+    assert!(after_broadcast.contains("ECU_7E8"), "the engine controller answers the broadcast");
+    assert!(
+        !after_broadcast.contains("ECU_7A8"),
+        "a module implementing no service 01 PIDs cannot answer a service 01 broadcast"
+    );
+
+    // The full scan sweeps addresses and finds them.
+    let full = service.scan_all_modules(USER);
+    assert!(full.success, "{:?}", full.error);
+    let after_full = module_keys(&service);
+    assert!(after_full.contains("ECU_7A8"), "the address sweep reaches the body module");
+    assert!(after_full.contains("ECU_768"));
+
+    // And now the rescan — the regression. It must confirm the addresses the
+    // full scan established rather than reporting the broadcast's view as the
+    // whole vehicle.
+    let again = service.scan_modules(USER);
+    assert!(again.success, "{:?}", again.error);
+    let after_rescan = module_keys(&service);
+    assert!(
+        after_rescan.contains("ECU_7A8"),
+        "a rescan dropped the body module; it is on the bus and it answers TesterPresent"
+    );
+    assert!(after_rescan.contains("ECU_768"));
+    assert!(after_rescan.contains("ECU_7E8"));
+
+    // The reported list, not merely the stored one: the screen renders what the
+    // scan returned, and a scan that stores a module and omits it from its own
+    // answer is the same bug one layer down.
+    let reported: std::collections::BTreeSet<String> = again.data.as_ref().unwrap()["modules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["module_key"].as_str().unwrap_or_default().to_string())
+        .collect();
+    assert!(reported.contains("ECU_7A8"), "reported modules were {reported:?}");
+}
+
+/// Every module key this session has on record.
+fn module_keys(service: &DiagnosticService) -> std::collections::BTreeSet<String> {
+    service
+        .store()
+        .modules(service.session_id())
+        .unwrap()
+        .into_iter()
+        .map(|m| m.module_key)
+        .collect()
+}

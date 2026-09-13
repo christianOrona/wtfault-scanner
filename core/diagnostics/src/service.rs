@@ -1227,8 +1227,8 @@ impl DiagnosticService {
                     "{secondary} modules answer on the secondary bus and {} on the primary.",
                     all.len() - secondary
                 ),
-                "Counted by a module scan: broadcast on the primary bus, TesterPresent address \
-                 sweep on the secondary.",
+                "Counted by a module scan: the legislated broadcast plus the addresses already \
+                 known on the primary bus, and a TesterPresent address sweep on the secondary.",
             );
         }
 
@@ -1289,6 +1289,30 @@ impl DiagnosticService {
     /// asked. Measured on a 2019 F-250, three of twenty-nine modules answered
     /// `7F 3E 12` — subfunction not supported — and treating that as silence
     /// would have lost them.
+    /// Every (request, response) address pair this vehicle has already answered
+    /// on, for one bus.
+    ///
+    /// Evidence rather than a range. A module is listed here because it was
+    /// discovered and recorded, and the request address is the one a scan
+    /// actually sent to — outside the legislated block there is no formula
+    /// relating the two, so a pair that has been observed is the only kind
+    /// worth having.
+    ///
+    /// Nothing is concluded from a module being absent here: a vehicle that has
+    /// never been scanned has none, and that says nothing about the vehicle.
+    fn known_addresses_on(&self, bus: VehicleBus) -> Vec<(String, String)> {
+        self.store
+            .modules(&self.session.id)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|m| VehicleBus::of_module_key(&m.module_key) == bus)
+            .filter_map(|m| match Self::request_target(&m) {
+                Ok(RequestTarget::Physical(request)) => Some((request, m.address)),
+                _ => None,
+            })
+            .collect()
+    }
+
     fn discover_by_address_sweep(&mut self) -> AimResult<Vec<Responder>> {
         let probe = aim_protocols::UdsRequest::tester_present(false).to_bytes();
         let (budget, _) = self.calibrate_probe_budget();
@@ -1327,10 +1351,58 @@ impl DiagnosticService {
         // Body modules are not emissions modules. They have no obligation to
         // answer service 01 and they do not. A sweep that asked them anyway
         // would have reported an empty bus and been believed.
-        let responders = match bus {
+        let mut responders = match bus {
             VehicleBus::Primary => self.discover_by_broadcast()?,
             VehicleBus::Secondary => self.discover_by_address_sweep()?,
         };
+
+        // The broadcast is not the whole primary bus.
+        //
+        // Service 01 reaches the modules that are obliged to answer it, and on
+        // a gateway vehicle that is not the same set as the modules reachable
+        // on those wires. Measured on a 2019 F-250: the body controller answers
+        // on the primary bus at 72E, because the gateway forwards it there —
+        // and it answers nothing the broadcast asks, because it is not an
+        // emissions module.
+        //
+        // The effect was that a rescan reported two modules where a full scan
+        // had reported thirty-one. The stored list survives — modules are
+        // upserted, never deleted — so this is not lost data; it is a scan
+        // whose *answer* contradicts the database behind it, and the answer is
+        // what the screen renders and what the assistant is handed. The body
+        // controller a configuration write needs disappeared from view every
+        // time somebody pressed Rescan, quietly, because two modules is a
+        // plausible answer for a truck.
+        //
+        // Asking every address would fix it and turn a two-second rescan into a
+        // minute. So this asks only the addresses this vehicle has already been
+        // seen to answer on — evidence, not a range — which is cheap because
+        // they answer, and complete for every module already known. Finding a
+        // module nobody has ever seen is what the full scan is for, and it says
+        // so on its own screen.
+        if bus == VehicleBus::Primary {
+            let already: std::collections::BTreeSet<String> =
+                responders.iter().map(|r| r.address.clone()).collect();
+            for (request_addr, response_addr) in self.known_addresses_on(bus) {
+                if already.contains(&response_addr) {
+                    continue;
+                }
+                let target = RequestTarget::Physical(request_addr.clone());
+                let budget = self.adapter.capabilities().discovery_budget().read;
+                let probe = aim_protocols::UdsRequest::tester_present(false).to_bytes();
+                let answered = match self.adapter.request_pdu(&probe, &target, budget) {
+                    Ok(replies) => replies.iter().any(|m| m.address == response_addr),
+                    Err(_) => false,
+                };
+                if answered {
+                    responders.push(Responder {
+                        address: response_addr,
+                        request_address: Some(request_addr),
+                    });
+                }
+            }
+        }
+
         let protocol = self.adapter.protocol();
 
         let mut discovered = Vec::new();
@@ -4011,7 +4083,44 @@ impl DiagnosticService {
         // Addressed the way this vehicle is actually addressed. Sweeping
         // 11-bit identifiers on a 29-bit vehicle reaches nothing and reports it
         // as an empty vehicle.
-        let addresses = scan_addresses(self.adapter.protocol());
+        let mut addresses = scan_addresses(self.adapter.protocol());
+
+        // Ask the modules this vehicle is already known to have, first.
+        //
+        // A blind sweep spends nearly all of its time waiting out silence: an
+        // address with nothing on it costs the whole deadline, and 255 of them
+        // at 250 ms is over a minute before anything appears on screen. The
+        // modules already in this session answer in milliseconds, and their
+        // addresses are the only ones we have evidence for.
+        //
+        // So they go first — the result starts filling immediately — and then
+        // they come *out* of the sweep, which no longer re-probes addresses it
+        // has an answer for. Measured on a 2019 F-250 with thirty-one recorded
+        // modules that is thirty-one fewer blind probes and a scan that shows
+        // its first module inside a second rather than after a minute.
+        //
+        // A known module that does not answer is left in the sweep rather than
+        // dropped. Modules doze, and "we asked once and it was quiet" is not
+        // evidence that something has been removed from the vehicle.
+        let known_addresses = self.known_addresses_on(self.adapter.current_bus());
+        for (request_addr, response_addr) in &known_addresses {
+            let target = RequestTarget::Physical(request_addr.clone());
+            let answered = match self.adapter.request_pdu(&probe, &target, budget.read) {
+                Ok(replies) => replies.iter().any(|m| &m.address == response_addr),
+                Err(e) if e.code == ErrorCode::TransportDisconnected => return Err(e),
+                Err(_) => false,
+            };
+            if answered {
+                found.push((request_addr.clone(), response_addr.clone()));
+                addresses.retain(|a| a != request_addr);
+            }
+        }
+        tracing::info!(
+            known = known_addresses.len(),
+            confirmed = found.len(),
+            remaining = addresses.len(),
+            "confirmed the modules already on record before sweeping"
+        );
 
         // Calibrate the deadline against a module already known to be there.
         //
@@ -4035,6 +4144,12 @@ impl DiagnosticService {
                 ),
             ));
         }
+
+        // What the sweep itself has to beat. Without this the second probe type
+        // would never be tried on a vehicle that has been scanned before: the
+        // pass above leaves `found` non-empty, and the old test for "did this
+        // sweep reach anything" was "is `found` non-empty".
+        let confirmed_from_record = found.len();
 
         for (attempt, probe) in [(0usize, probe.clone()), (1, fallback_probe())].into_iter() {
             let mut answered = 0usize;
@@ -4072,7 +4187,7 @@ impl DiagnosticService {
                 errored,
                 "discovery sweep finished"
             );
-            if !found.is_empty() {
+            if found.len() > confirmed_from_record {
                 if attempt == 1 {
                     warnings.push(Warning::info(
                         "discovery_used_the_fallback_probe",
@@ -4206,7 +4321,11 @@ impl DiagnosticService {
                 "modules": modules,
                 "module_count": modules.len(),
                 "fault_count": total_faults,
-                "addresses_probed": addresses.len(),
+                "addresses_probed": addresses.len() + known_addresses.len(),
+                // Separated because they cost very different amounts of time,
+                // and a scan that took a minute is worth being able to explain.
+                "addresses_swept_blind": addresses.len(),
+                "addresses_already_on_record": known_addresses.len(),
             })),
             warnings,
             evidence: self.recorder.last_response_event(),
@@ -4527,10 +4646,24 @@ impl DiagnosticService {
             candidates = known.len(),
             "no deadline produced a consistent answer from any module known to be present"
         );
-        // Nothing answered consistently at any deadline. Sweep at the longest
-        // tried rather than at `derived`: we have just watched a module that is
-        // definitely present fail to meet the shorter ones.
-        (CANDIDATES[CANDIDATES.len() - 1], None)
+        // Nothing answered consistently at any deadline.
+        //
+        // This used to take the longest candidate, reasoning that a module
+        // known to be present had just failed the shorter ones. That reasoning
+        // is wrong when calibration fails for a reason that has nothing to do
+        // with speed — and it usually does. An engine controller does not
+        // answer TesterPresent outside an open session, so the probe comes back
+        // empty at every deadline and the scan concludes the vehicle is slow.
+        //
+        // The cost of being wrong is asymmetric and large. A sweep is 256
+        // addresses per bus and most of them are empty, so the budget is paid
+        // in full on almost every one: a second each is eight minutes on a
+        // two-bus truck, a quarter-second is two.
+        //
+        // 250 ms is not a guess. Measured on a 2019 F-250 on 2026-09-12: a
+        // hand sweep of that vehicle's secondary bus at a 128 ms adapter
+        // timeout found all twenty-nine modules, none of them missed.
+        (CANDIDATES[0], None)
     }
 
     /// Find out whether a module accepts writes, without writing anything.

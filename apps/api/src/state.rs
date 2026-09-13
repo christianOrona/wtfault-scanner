@@ -92,11 +92,50 @@ pub struct ConnectRequest {
     pub label: Option<String>,
 }
 
+/// What the vehicle is being asked, right now.
+///
+/// Kept deliberately outside the service mutex. That mutex is the only thing
+/// that can serialise vehicle I/O and a full scan holds it for minutes, so
+/// every status poll queued behind the scan and the one screen whose job is to
+/// say "this is still working" was the first thing to stop answering. That is
+/// exactly how a scan that was working came to be reported as a hung one.
+///
+/// Reading this costs a lock held for the length of a clone.
+#[derive(Debug, Clone)]
+pub struct Busy {
+    /// Plain-language name of the operation, for a person reading a screen.
+    pub what: &'static str,
+    /// When it took the service lock.
+    pub since: std::time::Instant,
+}
+
+/// Clears the busy marker however the operation ends, panic included.
+struct BusyGuard(Arc<Mutex<Option<Busy>>>);
+
+impl Drop for BusyGuard {
+    fn drop(&mut self) {
+        if let Ok(mut slot) = self.0.lock() {
+            *slot = None;
+        }
+    }
+}
+
 /// Everything the handlers share.
 #[derive(Clone)]
 pub struct AppState {
     /// The active diagnostic service, or `None` when nothing is connected.
     pub service: Arc<Mutex<Option<DiagnosticService>>>,
+    /// What that service is doing, readable without waiting for it.
+    pub busy: Arc<Mutex<Option<Busy>>>,
+    /// The last adapter snapshot that was read while the service was free.
+    ///
+    /// Nothing in an adapter snapshot — what it is, what it can do, whose
+    /// session it belongs to — changes while a scan is running, so answering a
+    /// status poll from the last one is accurate rather than merely convenient.
+    /// The alternative is what this replaced: the poll blocked on the scan, the
+    /// window lost its connection state, and a working scan looked like a
+    /// crashed application.
+    pub last_adapter: Arc<Mutex<Option<serde_json::Value>>>,
     /// Session history. Available whether or not an adapter is connected.
     pub store: SessionStore,
     /// Decoder set, shared by every session.
@@ -116,6 +155,8 @@ impl AppState {
     pub fn new(store: SessionStore, decoders: DecoderSet, config: ServerConfig) -> Self {
         AppState {
             service: Arc::new(Mutex::new(None)),
+            busy: Arc::new(Mutex::new(None)),
+            last_adapter: Arc::new(Mutex::new(None)),
             store,
             decoders: Arc::new(decoders),
             tools: Arc::new(ToolRegistry::phase1()),
@@ -133,14 +174,73 @@ impl AppState {
         F: FnOnce(&mut DiagnosticService) -> T + Send + 'static,
         T: Send + 'static,
     {
+        self.with_service_named("a request to the vehicle", f).await
+    }
+
+    /// As [`AppState::with_service`], naming the operation so anything polling
+    /// while it runs can say what is taking the time.
+    ///
+    /// Worth a separate entry point only for the operations that are slow
+    /// enough for somebody to wonder whether they have stopped — a full scan
+    /// sweeps 255 addresses and a factory comparison reads every module.
+    pub async fn with_service_named<F, T>(&self, what: &'static str, f: F) -> ApiResult<T>
+    where
+        F: FnOnce(&mut DiagnosticService) -> T + Send + 'static,
+        T: Send + 'static,
+    {
         let service = Arc::clone(&self.service);
+        let busy = Arc::clone(&self.busy);
         tokio::task::spawn_blocking(move || {
             let mut guard = service
                 .lock()
                 .map_err(|_| ApiError::internal("diagnostic service lock was poisoned"))?;
+            // Marked once the lock is held, not before. A request still queued
+            // behind somebody else's is not what the vehicle is answering, and
+            // reporting it as such would put the wrong name on the wait.
+            if let Ok(mut slot) = busy.lock() {
+                *slot = Some(Busy { what, since: std::time::Instant::now() });
+            }
+            let _clear = BusyGuard(Arc::clone(&busy));
             match guard.as_mut() {
                 Some(s) => Ok(f(s)),
                 None => Err(ApiError::no_session()),
+            }
+        })
+        .await
+        .map_err(|e| ApiError::internal(format!("diagnostic task failed: {e}")))?
+    }
+
+    /// What the vehicle is being asked and for how long, or `None` if nothing.
+    ///
+    /// Never waits on the service. This is the answer to "is it stuck?", and a
+    /// call that could itself block behind the thing being asked about would be
+    /// no answer at all.
+    pub fn busy_now(&self) -> Option<(&'static str, u64)> {
+        let slot = self.busy.lock().ok()?;
+        let b = slot.as_ref()?;
+        Some((b.what, b.since.elapsed().as_secs()))
+    }
+
+    /// Read something from the active service, but never wait for it.
+    ///
+    /// `Ok(None)` means nothing is connected. `Err` with
+    /// [`ErrorCode::AdapterBusy`] means something is connected and mid-request:
+    /// the caller gets that answer immediately instead of joining a queue that
+    /// may be minutes long.
+    pub async fn peek_service_now<F, T>(&self, f: F) -> ApiResult<Option<T>>
+    where
+        F: FnOnce(&DiagnosticService) -> T + Send + 'static,
+        T: Send + 'static,
+    {
+        let service = Arc::clone(&self.service);
+        tokio::task::spawn_blocking(move || match service.try_lock() {
+            Ok(guard) => Ok(guard.as_ref().map(f)),
+            Err(std::sync::TryLockError::WouldBlock) => Err(ApiError::new(AimError::new(
+                ErrorCode::AdapterBusy,
+                "the adapter is mid-request",
+            ))),
+            Err(std::sync::TryLockError::Poisoned(_)) => {
+                Err(ApiError::internal("diagnostic service lock was poisoned"))
             }
         })
         .await

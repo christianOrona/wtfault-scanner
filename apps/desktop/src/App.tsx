@@ -17,6 +17,7 @@ import { FullScanPane } from "./components/FullScanPane";
 import { Splash, type BootStep } from "./components/Splash";
 import { ProblemBanner } from "./components/ProblemReport";
 import { UpdateBanner } from "./components/UpdateBanner";
+import { BusyBar } from "./components/BusyBar";
 import { ErrorBanner, FailedResult, Pill, Spinner, Warnings } from "./components/primitives";
 import { useFlightRecorder } from "./hooks/useFlightRecorder";
 import { Explain, ExplainToggle, useExplain } from "./explain";
@@ -175,11 +176,19 @@ export default function App() {
 
   // Poll only while connected: this keeps the header state and the traffic
   // counters honest without hammering an idle server.
+  //
+  // Faster while the car is mid-request, because that is when somebody is
+  // watching the elapsed counter to decide whether anything is still alive, and
+  // a number that moves in three-second jumps reads as a stalled one. The
+  // server answers this poll without waiting for the request it is reporting
+  // on, so the extra frequency costs nothing on the vehicle side.
+  const working = !!adapter?.busy;
   useEffect(() => {
     if (!adapter?.connected) return;
-    const t = setInterval(() => { api.adapter().then(setAdapter).catch(() => {}); }, 3000);
+    const every = working ? 1000 : 3000;
+    const t = setInterval(() => { api.adapter().then(setAdapter).catch(() => {}); }, every);
     return () => clearInterval(t);
-  }, [adapter?.connected]);
+  }, [adapter?.connected, working]);
 
   /** After connecting: identify the vehicle, then scan for modules. */
   const runInitialScan = useCallback(async () => {
@@ -269,6 +278,7 @@ export default function App() {
     />
     <div className="app">
       <UpdateBanner coreUp={coreUp} />
+      <BusyBar busy={adapter?.busy} />
       <ProblemBanner coreUp={coreUp} />
       <div className="topbar">
         <span className="brand-mark" aria-hidden="true" />

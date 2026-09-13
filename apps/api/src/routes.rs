@@ -129,15 +129,37 @@ pub fn router(state: AppState) -> Router {
 // ------------------------------------------------------------------ server
 
 async fn health(State(state): State<AppState>) -> ApiResult<Json<Value>> {
-    let connected = state
-        .peek_service(|s| {
-            json!({
-                "session_id": s.session_id(),
-                "state": s.state(),
-                "adapter": s.adapter_descriptor(),
-            })
+    // Asked before the service is touched, and reported whether or not the
+    // service can be read. A full scan holds the service for minutes; a health
+    // check that waited for it would go quiet exactly when somebody is checking
+    // whether anything is still alive.
+    let busy = state.busy_now().map(|(what, seconds)| {
+        json!({
+            "doing": what,
+            "seconds": seconds,
+            "explanation": format!(
+                "The adapter is busy with {what}, {seconds}s so far. Only one conversation \
+                 with the vehicle can run at a time, so anything else is waiting for this."
+            ),
         })
-        .await?;
+    });
+
+    // The service itself is only read when it is free. When it is busy the
+    // health check answers from what it already knows rather than joining the
+    // queue behind a scan.
+    let connected = if busy.is_some() {
+        None
+    } else {
+        state
+            .peek_service(|s| {
+                json!({
+                    "session_id": s.session_id(),
+                    "state": s.state(),
+                    "adapter": s.adapter_descriptor(),
+                })
+            })
+            .await?
+    };
     Ok(Json(json!({
         "service": "ai-mechanic",
         "api_version": "v1",
@@ -152,6 +174,7 @@ async fn health(State(state): State<AppState>) -> ApiResult<Json<Value>> {
             .map(|s| json!({ "id": s.as_str(), "description": aim_simulator::Scenario::new(*s).description }))
             .collect::<Vec<_>>(),
         "active": connected,
+        "busy": busy,
     })))
 }
 
@@ -387,8 +410,11 @@ fn list_ports_blocking(probe: bool) -> Value {
 }
 
 async fn adapter(State(state): State<AppState>) -> ApiResult<Json<Value>> {
-    let snapshot = state
-        .peek_service(|s| {
+    // This is the poll the whole window runs on, once a second. It must answer
+    // while a scan is running, and a scan holds the service for minutes — so it
+    // asks without waiting, and falls back to the last answer it got.
+    let peeked = state
+        .peek_service_now(|s| {
             json!({
                 "connected": s.state().is_usable(),
                 "state": s.state(),
@@ -401,11 +427,48 @@ async fn adapter(State(state): State<AppState>) -> ApiResult<Json<Value>> {
                 "vehicle": s.vehicle(),
             })
         })
-        .await?;
-    Ok(Json(
-        snapshot
-            .unwrap_or_else(|| json!({ "connected": false, "state": { "state": "disconnected" } })),
-    ))
+        .await;
+
+    let mut snapshot = match peeked {
+        Ok(Some(fresh)) => {
+            if let Ok(mut slot) = state.last_adapter.lock() {
+                *slot = Some(fresh.clone());
+            }
+            fresh
+        }
+        // Nothing connected. Not a stale answer — a current one.
+        Ok(None) => {
+            if let Ok(mut slot) = state.last_adapter.lock() {
+                *slot = None;
+            }
+            json!({ "connected": false, "state": { "state": "disconnected" } })
+        }
+        // Mid-request. Answer from the last reading rather than blocking, and
+        // say that is what this is, so nothing downstream mistakes a cached
+        // health counter for a fresh one.
+        Err(_) => match state.last_adapter.lock().ok().and_then(|s| s.clone()) {
+            Some(mut cached) => {
+                if let Some(obj) = cached.as_object_mut() {
+                    obj.insert(String::from("stale"), json!(true));
+                }
+                cached
+            }
+            None => json!({ "connected": false, "state": { "state": "disconnected" } }),
+        },
+    };
+
+    // Attached either way: a free adapter reports no work, which is itself the
+    // answer to "is it stuck?".
+    if let Some(obj) = snapshot.as_object_mut() {
+        obj.insert(
+            String::from("busy"),
+            match state.busy_now() {
+                Some((what, seconds)) => json!({ "doing": what, "seconds": seconds }),
+                None => Value::Null,
+            },
+        );
+    }
+    Ok(Json(snapshot))
 }
 
 async fn connect(
@@ -423,7 +486,7 @@ async fn disconnect(State(state): State<AppState>) -> ApiResult<Json<ToolResult>
 // ----------------------------------------------------------------- vehicle
 
 async fn identify_vehicle(State(state): State<AppState>) -> ApiResult<Json<ToolResult>> {
-    Ok(Json(state.with_service(|s| s.identify_vehicle("user:api")).await?))
+    Ok(Json(state.with_service_named("identifying the vehicle", |s| s.identify_vehicle("user:api")).await?))
 }
 
 /// Everything established about the vehicle, with the evidence behind it.
@@ -440,7 +503,7 @@ async fn vehicle_identity(State(state): State<AppState>) -> ApiResult<Json<Value
 
 /// Whether an as-built file is held for this vehicle, and how to get one.
 async fn as_built_status(State(state): State<AppState>) -> ApiResult<Json<ToolResult>> {
-    Ok(Json(state.with_service(|s| s.as_built_status("user:api")).await?))
+    Ok(Json(state.with_service_named("reading the as-built configuration", |s| s.as_built_status("user:api")).await?))
 }
 
 /// An as-built file's contents, sent whole.
@@ -479,7 +542,7 @@ async fn forget_as_built(State(state): State<AppState>) -> ApiResult<Json<ToolRe
 // ----------------------------------------------------------------- modules
 
 async fn scan_modules(State(state): State<AppState>) -> ApiResult<Json<ToolResult>> {
-    Ok(Json(state.with_service(|s| s.scan_modules("user:api")).await?))
+    Ok(Json(state.with_service_named("a scan for modules", |s| s.scan_modules("user:api")).await?))
 }
 
 /// Every module found, with which bus it answered on and what it can be asked.
@@ -536,7 +599,7 @@ async fn module_capabilities(
     State(state): State<AppState>,
     Path(key): Path<String>,
 ) -> ApiResult<Json<ToolResult>> {
-    Ok(Json(state.with_service(move |s| s.probe_module_capabilities(&key, "user:api")).await?))
+    Ok(Json(state.with_service_named("a capability probe of one module", move |s| s.probe_module_capabilities(&key, "user:api")).await?))
 }
 
 async fn module_monitor_tests(
@@ -561,7 +624,7 @@ struct ClearBody {
 
 /// Sweep the diagnostic address range and read every module's fault memory.
 async fn scan_all_modules(State(state): State<AppState>) -> ApiResult<Json<ToolResult>> {
-    Ok(Json(state.with_service(|s| s.scan_all_modules("user:api")).await?))
+    Ok(Json(state.with_service_named("a full scan of every module", |s| s.scan_all_modules("user:api")).await?))
 }
 
 /// Emissions readiness from every module that keeps it.
@@ -1009,7 +1072,7 @@ async fn record_vehicle_knowledge(
 /// A POST because it reads every module the as-built file describes, which is
 /// real traffic on a vehicle bus rather than a lookup.
 async fn compare_to_factory(State(state): State<AppState>) -> ApiResult<Json<ToolResult>> {
-    Ok(Json(state.with_service(|s| s.compare_to_factory("user:api")).await?))
+    Ok(Json(state.with_service_named("a comparison against the factory configuration", |s| s.compare_to_factory("user:api")).await?))
 }
 
 /// Everything a person would be asked for when reporting a problem, gathered in

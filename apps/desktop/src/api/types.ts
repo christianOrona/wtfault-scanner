@@ -119,6 +119,19 @@ export interface AdapterStatus {
   fitness?: AdapterFitness | null;
   capabilities?: AdapterCapabilities | null;
   vehicle?: Vehicle | null;
+  /** What the adapter is mid-way through, or null when it is free. */
+  busy?: AdapterBusy | null;
+  /** True when this snapshot was read before the current request started. */
+  stale?: boolean;
+}
+
+/** One conversation with the vehicle, in progress.
+ *
+ * Only one can run at a time — there is one adapter and one set of wires — so
+ * this doubles as the reason anything else is waiting. */
+export interface AdapterBusy {
+  doing: string;
+  seconds: number;
 }
 
 export interface Scenario {
