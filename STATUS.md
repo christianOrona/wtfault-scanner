@@ -3,7 +3,7 @@
 Where the project actually is, updated when something significant changes.
 Not a changelog — see `CHANGELOG.md` for releases — and not a diary.
 
-Last reviewed: **2026-09-11**
+Last reviewed: **2026-09-13**
 
 ---
 
@@ -25,6 +25,13 @@ A guided procedure reached its measured state on a real engine for the first
 time on 2026-09-11: `warm_idle` went `waiting` → `holding` → `measured` at 86 °C
 coolant and 600 rpm. It also proved the procedure was measuring nothing it
 existed for — see below.
+
+**A setting was changed on a real vehicle and the vehicle behaved differently,
+for the first time, on 2026-09-13.** "Turn off the double honk after I leave the
+cabin": `DE28` byte 6 on the body control module at `72E`, `01` → `00`, written,
+read back, ignition cycled, and the owner confirmed the horn no longer chirps.
+The confirmation is the claim, not the read-back — this project has already
+measured a case where four bytes read back correctly and nothing moved.
 
 ## Findings from real sessions
 
