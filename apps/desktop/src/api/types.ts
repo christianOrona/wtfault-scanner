@@ -673,6 +673,22 @@ export interface ChangePlan {
   blocked_reason: string | null;
   modules: string[];
   mapping_source: string | null;
+  /** The exact bytes this would move, read from the vehicle during the preview.
+   *
+   * Absent when there is no executable mapping or the record could not be read
+   * — both of which a failed check already explains. */
+  bytes?: ByteChange | null;
+}
+
+/** What a change does to a module's record, byte for byte. */
+export interface ByteChange {
+  identifier: string;
+  before: string;
+  after: string;
+  byte_index: number;
+  byte_before: string;
+  byte_after: string;
+  already_as_asked: boolean;
 }
 
 /** One user-supplied profile file, and what it contributed. */

@@ -754,8 +754,20 @@ fn service_with_profile(yaml: &str) -> (DiagnosticService, tempfile::TempDir) {
 /// not a stationary vehicle, and a module nobody has heard from is not present.
 fn prepare_for_write(service: &mut DiagnosticService) {
     service.scan_modules(USER);
-    assert!(service.read_pid("ECU_7E8", "vehicle_speed", USER).success);
     assert!(service.scan_all_modules(USER).success);
+}
+
+/// Put the simulated vehicle in the state a configuration write happens in:
+/// key on, engine off, stopped.
+///
+/// Every scenario idles, and the safety gate requires the engine off before it
+/// will change a setting. Without this the write tests ran against a running
+/// engine and passed — because nothing in the configuration flow read engine
+/// speed, so the precondition was checked against a field nobody had filled in.
+/// The flow reads it now, which is what turned these tests red and is the whole
+/// point of the change.
+fn key_on_engine_off(emulator: &aim_simulator::SharedEmulator) {
+    emulator.lock().unwrap().vehicle.engine_stopped = true;
 }
 
 fn service_with_profile_and_emulator(
@@ -875,7 +887,7 @@ fn an_unknown_feature_id_is_an_error_rather_than_an_invented_answer() {
 /// record directly, which is exactly what a known-good tool would have done.
 #[test]
 fn capturing_twice_around_a_change_identifies_the_bits_that_moved() {
-    let (mut service, _dir) = service_with_profile(MIRROR_PROFILE);
+    let (mut service, emulator, _dir) = service_with_profile_and_emulator(MIRROR_PROFILE);
     const BODY: &str = "7A0";
     const DID: u16 = 0xDE01;
 
@@ -886,13 +898,12 @@ fn capturing_twice_around_a_change_identifies_the_bits_that_moved() {
         serde_json::from_value(before.data.as_ref().unwrap()["capture"].clone()).unwrap();
     assert_eq!(before_capture.records[&DID], vec![0x00, 0x11, 0x22, 0xB3, 0x44, 0x55]);
 
-    // The write preconditions include "the vehicle is stationary", and an
-    // unread speed is not a stationary vehicle - the gate refuses on unknown
-    // rather than assuming zero, which is why this read is here rather than
-    // being something the test could skip.
+    // The state a configuration write happens in. The gate wants the engine
+    // off and the vehicle stopped, and it refuses on unknown rather than
+    // assuming - the flow reads both for itself now, so what this has to set
+    // up is the vehicle, not the bookkeeping.
+    key_on_engine_off(&emulator);
     service.scan_modules(USER);
-    let speed = service.read_pid("ECU_7E8", "vehicle_speed", USER);
-    assert!(speed.success, "reading speed failed: {:?}", speed.error);
 
     // The body module answers UDS but not the emissions services, so the
     // legislated scan does not see it. This is the whole reason the full scan
@@ -970,6 +981,7 @@ fn set_write_behaviour(
 fn a_write_the_module_accepts_and_ignores_is_reported_as_unverified() {
     let (mut service, emulator, _dir) = service_with_profile_and_emulator(MIRROR_PROFILE);
     prepare_for_write(&mut service);
+    key_on_engine_off(&emulator);
     set_write_behaviour(&emulator, aim_simulator::ConfigWriteBehaviour::AcceptButIgnore);
 
     let r = service.apply_configuration_change(
@@ -993,6 +1005,7 @@ fn a_write_the_module_accepts_and_ignores_is_reported_as_unverified() {
 fn a_write_the_module_refuses_is_an_error_naming_the_refusal() {
     let (mut service, emulator, _dir) = service_with_profile_and_emulator(MIRROR_PROFILE);
     prepare_for_write(&mut service);
+    key_on_engine_off(&emulator);
     set_write_behaviour(&emulator, aim_simulator::ConfigWriteBehaviour::Refuse);
 
     let r = service.apply_configuration_change(
@@ -1012,8 +1025,9 @@ fn a_write_the_module_refuses_is_an_error_naming_the_refusal() {
 /// Asking for the state it is already in writes nothing at all.
 #[test]
 fn a_change_to_the_value_already_set_writes_nothing() {
-    let (mut service, _emulator, _dir) = service_with_profile_and_emulator(MIRROR_PROFILE);
+    let (mut service, emulator, _dir) = service_with_profile_and_emulator(MIRROR_PROFILE);
     prepare_for_write(&mut service);
+    key_on_engine_off(&emulator);
 
     let r = service.apply_configuration_change(
         "test_body_setting",

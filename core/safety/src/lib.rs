@@ -360,6 +360,15 @@ impl CapabilityRegistry {
         self.capabilities.values().collect()
     }
 
+    /// What one capability requires of the vehicle.
+    ///
+    /// Exposed so a preview can check the same list the authorisation will,
+    /// from the same source. Two hand-maintained copies of a safety list is how
+    /// a preview comes to promise something the write then refuses.
+    pub fn preconditions(&self, id: &str) -> Vec<Precondition> {
+        self.get(id).map(|c| c.preconditions.clone()).unwrap_or_default()
+    }
+
     /// Capabilities this build will actually execute.
     pub fn enabled(&self) -> Vec<&Capability> {
         self.capabilities.values().filter(|c| c.level <= MAX_ENABLED_LEVEL).collect()

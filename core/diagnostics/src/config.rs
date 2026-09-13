@@ -180,6 +180,44 @@ pub struct ChangePlan {
     pub modules: Vec<String>,
     /// Where the mapping came from, so a wrong one is traceable.
     pub mapping_source: Option<String>,
+    /// The exact bytes this would change, read from the vehicle just now.
+    ///
+    /// `None` when the record could not be read — which is itself worth
+    /// showing, because a change whose starting point is unknown is not one
+    /// anybody should authorise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bytes: Option<ByteChange>,
+}
+
+/// What a change does to a module's record, byte for byte.
+///
+/// # Why a preview without this was not a preview
+///
+/// The screen showed eleven checks, every one green, and not one word about
+/// what was about to be written. "Yes, this is allowed" is not the same
+/// question as "here is what will happen", and only the second one lets
+/// somebody catch a mapping that is pointed at the wrong byte before it lands
+/// on their vehicle. This project's whole argument is that the evidence is
+/// visible; the one screen that authorises a change to somebody's truck was
+/// the screen that showed none.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ByteChange {
+    /// The identifier holding the record.
+    pub identifier: String,
+    /// The whole record as it is now, hex.
+    pub before: String,
+    /// The whole record as it would be, hex.
+    pub after: String,
+    /// Index of the byte that moves, within the record.
+    pub byte_index: usize,
+    /// That byte now and after, hex, so the difference is legible without
+    /// counting along two long strings.
+    pub byte_before: String,
+    /// See [`ByteChange::byte_before`].
+    pub byte_after: String,
+    /// Whether the record is already as asked, in which case applying it would
+    /// write the bytes that are already there.
+    pub already_as_asked: bool,
 }
 
 /// Everything the checks need to know about the current situation.
@@ -584,6 +622,10 @@ fn finish(request: &ChangeRequest, f: Option<&FeatureDef>, checks: Vec<Check>) -
         modules: f.map(|f| f.modules.clone()).unwrap_or_default(),
         mapping_source: f.and_then(|f| f.source.clone()),
         checks,
+        // Filled in by the caller, which is the only layer that can read the
+        // vehicle. Planning is a pure function of the catalogue and the
+        // situation, and it stays that way.
+        bytes: None,
     }
 }
 

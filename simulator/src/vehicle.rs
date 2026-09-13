@@ -185,6 +185,28 @@ pub struct VirtualVehicle {
     /// Set by a service 04 request. The safety gate is supposed to make this
     /// unreachable; the flag exists so a test can prove it stayed false.
     pub dtcs_cleared: bool,
+    /// Key on, engine not running.
+    ///
+    /// # Why this state had to exist
+    ///
+    /// It is the state every configuration change on a real vehicle is made
+    /// in — the safety gate requires the engine off before it will write a
+    /// setting — and the simulator could not be put into it. Every scenario
+    /// idles. So the write tests ran against a vehicle whose engine was
+    /// running and passed anyway, because nothing in the configuration flow
+    /// read engine speed and the precondition was evaluated against a field
+    /// nobody had ever filled in.
+    ///
+    /// That is not a simulator gap on its own; it is the simulator being
+    /// unable to model the situation that would have exposed the real bug.
+    /// Measured on a 2019 F-250 on 2026-09-13: the write was refused with
+    /// "vehicle speed has not been read" while the preview had already
+    /// reported every check green.
+    ///
+    /// Engine speed reads zero and run time reads zero. Everything else the
+    /// scenario says is left alone: a module still answers, faults are still
+    /// stored, voltage is still whatever the scenario models.
+    pub engine_stopped: bool,
 }
 
 impl VirtualVehicle {
@@ -321,6 +343,9 @@ impl VirtualVehicle {
             ecus: vec![engine, second, third, brakes, body],
             time: TimeSource::deterministic(),
             dtcs_cleared: false,
+            // Running, like every scenario. A test that needs the key-on,
+            // engine-off state asks for it.
+            engine_stopped: false,
         }
     }
 
@@ -337,7 +362,16 @@ impl VirtualVehicle {
 
     /// The vehicle's current physical state.
     pub fn state(&self) -> VehicleState {
-        self.scenario.state_at(self.elapsed_s())
+        let mut s = self.scenario.state_at(self.elapsed_s());
+        if self.engine_stopped {
+            s.rpm = 0.0;
+            s.run_time_s = 0.0;
+            // A stopped engine is a stopped vehicle. Leaving the scenario's
+            // speed in place would model a truck coasting with the engine off,
+            // which is not the state anybody is trying to reach here.
+            s.speed_kph = 0.0;
+        }
+        s
     }
 
     /// Serve one request PDU addressed to `target_id`.

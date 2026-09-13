@@ -38,6 +38,25 @@ impl Precondition {
             Precondition::BatteryVoltageAtLeast(_) => "battery_voltage",
         }
     }
+
+    /// What this establishes, phrased for somebody reading a checklist before
+    /// letting an application change something on their vehicle.
+    ///
+    /// A question rather than a statement, to match the rest of the preview:
+    /// the list is read as a set of things that had to be true, and every line
+    /// carries its own answer.
+    pub fn question(&self) -> &'static str {
+        match self {
+            Precondition::IgnitionOn => "Is the ignition on?",
+            Precondition::EngineOff => "Is the engine off?",
+            Precondition::EngineRunning => "Is the engine running?",
+            Precondition::VehicleStationary => "Is the vehicle stopped?",
+            Precondition::StableConnection => "Is the link to the adapter steady?",
+            Precondition::BatteryVoltageAtLeast(_) => {
+                "Is there enough voltage to finish a write safely?"
+            }
+        }
+    }
 }
 
 /// What the core currently knows about the vehicle.

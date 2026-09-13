@@ -870,6 +870,49 @@ impl SessionStore {
             .ok_or_else(|| AimError::not_found(format!("no module {id}")))?
     }
 
+    /// Every module this *vehicle* has been seen to have, across every session.
+    ///
+    /// # Why this is not `modules(session_id)`
+    ///
+    /// A session is one visit. Modules are recorded against it, so a fresh
+    /// connect starts knowing nothing — and every optimisation that turns on
+    /// "we have seen this address answer before" was therefore dead on the one
+    /// occasion it mattered most, the first scan after plugging in.
+    ///
+    /// What does not change between visits is the vehicle. A module found at
+    /// 72E last Tuesday is still at 72E, and the address a request goes to is a
+    /// property of the truck rather than of the conversation about it.
+    ///
+    /// Most recent first, so a module that has moved — a replaced part, a
+    /// retrofit — is described by its latest sighting rather than its oldest.
+    /// Nothing is concluded from a module being listed here: it is a reason to
+    /// *ask* an address, never evidence that something is present.
+    pub fn modules_for_vehicle(&self, vehicle_id: &VehicleId) -> AimResult<Vec<Module>> {
+        let conn = self.lock()?;
+        let mut stmt = conn
+            .prepare(
+                // MAX() is doing real work here, not decoration. SQLite
+                // documents that in a grouped query containing a single min()
+                // or max(), the bare columns come from the row that produced
+                // it - so this selects the whole most-recent sighting of each
+                // module rather than mixing columns from different visits.
+                "SELECT m.id, m.session_id, m.module_key, m.name, m.address, m.protocol,
+                        m.identity, m.software_version, MAX(m.discovered_at), m.request_address
+                 FROM modules m
+                 JOIN sessions s ON s.id = m.session_id
+                 WHERE s.vehicle_id = ?1
+                 GROUP BY m.module_key
+                 ORDER BY m.module_key",
+            )
+            .map_err(storage)?;
+        let rows = stmt
+            .query_map([vehicle_id.as_str()], row_to_module)
+            .map_err(storage)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(storage)?;
+        rows.into_iter().collect()
+    }
+
     // ---------------------------------------------------------------- dtcs
 
     /// Record a DTC. Reading the same code twice in a session increments its

@@ -1300,10 +1300,18 @@ impl DiagnosticService {
     ///
     /// Nothing is concluded from a module being absent here: a vehicle that has
     /// never been scanned has none, and that says nothing about the vehicle.
+    ///
+    /// Scoped to the vehicle, not the session. Scoping it to the session made
+    /// this empty on every fresh connect — which is the one moment it has to
+    /// work, because that is when somebody presses the button and waits.
     fn known_addresses_on(&self, bus: VehicleBus) -> Vec<(String, String)> {
-        self.store
-            .modules(&self.session.id)
-            .unwrap_or_default()
+        let recorded = match self.vehicle.as_ref() {
+            Some(v) => self.store.modules_for_vehicle(&v.id).unwrap_or_default(),
+            // No VIN read yet. The session's own list is all there is, and on a
+            // fresh connect that is correctly empty.
+            None => self.store.modules(&self.session.id).unwrap_or_default(),
+        };
+        recorded
             .into_iter()
             .filter(|m| VehicleBus::of_module_key(&m.module_key) == bus)
             .filter_map(|m| match Self::request_target(&m) {
@@ -2513,10 +2521,55 @@ impl DiagnosticService {
             max_level: aim_safety::MAX_ENABLED_LEVEL,
             write_gate_open_modules: &gates,
         };
-        let plan =
+        let mut plan =
             crate::config::plan_change(&request, self.decoders.features.get(feature_id), &ctx);
 
         let mut warnings = Vec::new();
+
+        // The same preconditions the write is authorised against, measured the
+        // same way and reported as checks alongside the rest.
+        //
+        // A preview that omitted them was not a preview of the write; it was a
+        // preview of the parts of the write that happened to be implemented in
+        // this function. The gap showed up as "can apply: yes" followed by a
+        // refusal, which is the single worst thing this screen can do.
+        let note = self.establish_write_conditions();
+        if let Some(n) = note {
+            warnings.push(Warning::info("write_conditions_measured", n));
+        }
+
+        // What this would actually do to the module, read from the vehicle now.
+        //
+        // Not a rehearsal of the catalogue: the record comes off the truck in
+        // front of us, so a mapping aimed at the wrong byte is visible here
+        // rather than after it has landed.
+        plan.bytes = self.describe_byte_change(feature_id, desired);
+        if plan.bytes.as_ref().is_some_and(|b| b.already_as_asked) {
+            warnings.push(Warning::info(
+                "already_as_asked",
+                "This setting is already what you are asking for. Applying it would write the \
+                 bytes that are already there, which changes nothing.",
+            ));
+        }
+        for precondition in self.gate.registry().preconditions(capabilities::WRITE_FEATURE) {
+            let outcome = self.conditions.check(&precondition);
+            let passed = outcome.is_ok();
+            if !passed {
+                plan.can_apply = false;
+            }
+            plan.checks.push(crate::config::Check {
+                // Not prefixed. These codes already read as conditions of the
+                // vehicle — "vehicle_stationary", "engine_off" — and a prefix
+                // produced "vehicle_vehicle_stationary" on screen.
+                id: precondition.code().to_string(),
+                question: precondition.question().to_string(),
+                passed,
+                detail: outcome.err(),
+                // Every one of these is a situation, not a limit of the build.
+                // Turning the key or stopping the truck changes the answer.
+                blocking_by_design: false,
+            });
+        }
         if !plan.can_apply {
             let permanent = plan.checks.iter().any(|c| !c.passed && c.blocking_by_design);
             warnings.push(if permanent {
@@ -3287,10 +3340,130 @@ impl DiagnosticService {
             initiator,
             serde_json::json!({ "feature_id": feature_id, "desired": desired }),
         );
+        // Measure what the preconditions are about, before they are checked.
+        //
+        // They ask whether the vehicle is stationary, whether the engine is
+        // off, what the voltage is. Nothing in the configuration flow reads any
+        // of that, so the answer was whatever some earlier unrelated request
+        // happened to leave behind — and on a truck where nobody had opened the
+        // live data screen, that was nothing at all. The write then failed with
+        // "vehicle speed has not been read", which is true, and reads as a
+        // bookkeeping complaint rather than the safety check it is.
+        //
+        // The worse half: the preview had already said every check passed. A
+        // person saw eleven green ticks, pressed the button, and got a refusal
+        // the preview had never mentioned. That is the sequence this is here to
+        // end — the preview runs the same measurement, so the two agree.
+        //
+        // A failure to measure is left to the precondition to report. "We could
+        // not read the speed" must still block a write; it is not a reason to
+        // assume the truck is parked.
+        let note = self.establish_write_conditions();
         let outcome = self
             .authorize(capabilities::WRITE_FEATURE, initiator, Some(confirmation))
-            .and_then(|_| self.apply_change_inner(feature_id, desired));
+            .and_then(|_| self.apply_change_inner(feature_id, desired))
+            .map(|mut p| {
+                if let Some(n) = note {
+                    p.warnings.push(Warning::info("write_conditions_measured", n));
+                }
+                p
+            });
         self.finish("apply_configuration_change", capabilities::WRITE_FEATURE, t0, outcome)
+    }
+
+    /// The bytes a change would move, read from the vehicle.
+    ///
+    /// Returns `None` when there is no executable mapping or the record could
+    /// not be read. Both are reported by checks that already exist; this exists
+    /// to show the change itself, and showing nothing is better than showing a
+    /// guess at what the module probably holds.
+    fn describe_byte_change(
+        &mut self,
+        feature_id: &str,
+        desired: crate::config::DesiredValue,
+    ) -> Option<crate::config::ByteChange> {
+        let target = self
+            .decoders
+            .features
+            .get(feature_id)
+            .and_then(|f| f.mapping.as_ref().and_then(|m| m.as_data_identifier()))?;
+
+        let home = self.reach_module(&target.module);
+        let addr = RequestTarget::Physical(target.module.clone());
+        let read = aim_protocols::UdsRequest::read_data_by_identifier(target.did).to_bytes();
+        let before = self.read_did(&read, &addr, Duration::from_millis(2000), target.did);
+        self.restore_bus(home);
+
+        let before = before.ok()?;
+        let want_on = matches!(desired, crate::config::DesiredValue::On);
+        // The same call the write makes. Two implementations of "what the new
+        // record should be" is how a preview comes to show one thing and the
+        // write to do another.
+        let after = target.apply(&before, want_on).ok()?;
+        let index = target.byte as usize;
+
+        Some(crate::config::ByteChange {
+            identifier: format!("{:04X}", target.did),
+            before: aim_types::hex(&before),
+            after: aim_types::hex(&after),
+            byte_index: index,
+            byte_before: before.get(index).map(|b| format!("{b:02X}")).unwrap_or_default(),
+            byte_after: after.get(index).map(|b| format!("{b:02X}")).unwrap_or_default(),
+            already_as_asked: before == after,
+        })
+    }
+
+    /// Read the vehicle state a configuration write is checked against.
+    ///
+    /// Speed, engine speed and control module voltage, from the engine
+    /// controller on the primary bus — the only module obliged to answer for
+    /// any of them. Returns a note when it could not, which the caller reports;
+    /// it never invents a value, because every one of these readings exists to
+    /// stop a write happening at the wrong moment and a default would defeat
+    /// all three at once.
+    ///
+    /// Deliberately cheap and deliberately repeated. Three PIDs is a fraction
+    /// of a second, the answers go stale in seconds while a truck is moving,
+    /// and a stale "stationary" is the one this must never produce.
+    fn establish_write_conditions(&mut self) -> Option<String> {
+        let signals: Vec<String> = ["vehicle_speed", "engine_rpm", "control_module_voltage"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+
+        // Whichever primary-bus module answers. On this vehicle that is the
+        // engine controller, but which address it sits at is not something to
+        // hardcode — the scan already knows, and asking the list is how this
+        // keeps working on a vehicle that numbers its modules differently.
+        let candidates: Vec<String> = self
+            .store
+            .modules(&self.session.id)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|m| VehicleBus::of_module_key(&m.module_key).answers_obd2())
+            .map(|m| m.module_key)
+            .collect();
+
+        if candidates.is_empty() {
+            return Some(String::from(
+                "No module on the emissions bus has been found yet, so vehicle speed, engine \
+                 speed and voltage could not be read. Scan for modules first.",
+            ));
+        }
+
+        for key in &candidates {
+            let result = self.read_live_data(key, &signals, "system:preconditions");
+            if result.success && !result.values.is_empty() {
+                return None;
+            }
+        }
+
+        Some(format!(
+            "Asked {} module(s) on the emissions bus for vehicle speed, engine speed and voltage, \
+             and none answered. With the key off most modules do not. Nothing is assumed from \
+             that silence - the safety checks below are evaluated on what was actually read.",
+            candidates.len()
+        ))
     }
 
     /// Write a setting, from wherever its module answers.

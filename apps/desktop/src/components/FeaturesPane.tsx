@@ -341,6 +341,11 @@ function FeatureCard({
 function PlanChecks({ plan }: { plan: ChangePlan }) {
   return (
     <div className="section" style={{ marginTop: 12, marginBottom: 0 }}>
+      {/* The change itself, before the permission to make it. This screen used
+          to show eleven green ticks and never once say which bytes were about
+          to move — which meant nobody could catch a mapping pointed at the
+          wrong byte until after it had landed on their vehicle. */}
+      {plan.bytes && <BytesToChange bytes={plan.bytes} />}
       <h2>
         What has to be true{plan.can_apply ? "" : " — and is not"}
       </h2>
@@ -362,6 +367,78 @@ function PlanChecks({ plan }: { plan: ChangePlan }) {
         </tbody>
       </table>
     </div>
+  );
+}
+
+/** The record as it is and as it would be, with the one byte that moves marked.
+ *
+ * Read off the vehicle during the preview, not reconstructed from the
+ * catalogue: the whole value of showing it is that it would look wrong if the
+ * mapping were aimed at the wrong byte, and a rendering of what the catalogue
+ * *says* would look right either way.
+ *
+ * The pair of full records is here deliberately, next to the single byte. The
+ * byte is what somebody checks; the records are what they compare against a
+ * backup afterwards, and that comparison is the only way to prove a write did
+ * nothing it was not asked to do. */
+function BytesToChange({ bytes }: { bytes: NonNullable<ChangePlan["bytes"]> }) {
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <h2>What would change</h2>
+      {bytes.already_as_asked ? (
+        <p className="explain" style={{ marginTop: 4 }}>
+          Nothing. This setting is already what you are asking for — applying it
+          would write back the bytes that are already there.
+        </p>
+      ) : (
+        <p className="explain" style={{ marginTop: 4 }}>
+          One byte, in record <span className="mono">{bytes.identifier}</span>:
+          byte {bytes.byte_index} goes from{" "}
+          <span className="mono">{bytes.byte_before}</span> to{" "}
+          <span className="mono">{bytes.byte_after}</span>. Everything else in
+          the record is written back exactly as it was read.
+        </p>
+      )}
+      <div style={{ overflowX: "auto" }}>
+        <table>
+          <tbody>
+            <tr>
+              <td className="faint" style={{ width: 60 }}>now</td>
+              <td><RecordBytes hex={bytes.before} mark={bytes.byte_index} /></td>
+            </tr>
+            <tr>
+              <td className="faint">after</td>
+              <td><RecordBytes hex={bytes.after} mark={bytes.byte_index} /></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/** One record, split into bytes, with the one that moves picked out.
+ *
+ * Split because nobody can count to byte six along a twenty-character string,
+ * and being able to is the entire point of showing it. */
+function RecordBytes({ hex, mark }: { hex: string; mark: number }) {
+  const bytes = hex.replace(/\s+/g, "").match(/.{1,2}/g) ?? [];
+  return (
+    <span className="mono" style={{ letterSpacing: "0.04em" }}>
+      {bytes.map((b, i) => (
+        <span
+          key={i}
+          style={
+            i === mark
+              ? { color: "var(--accent)", fontWeight: 600, textDecoration: "underline" }
+              : undefined
+          }
+        >
+          {b}
+          {i < bytes.length - 1 ? " " : ""}
+        </span>
+      ))}
+    </span>
   );
 }
 
