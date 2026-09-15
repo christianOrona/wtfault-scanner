@@ -51,17 +51,38 @@ export function UpdateBanner({ coreUp }: { coreUp: boolean }) {
     };
   }, [coreUp]);
 
-  // Fetch it as soon as we know there is one, without being asked.
+  // Nothing is fetched until somebody asks for it.
   //
-  // The wait is the part of an update that interrupts somebody, and it does not
-  // have to happen after the button. By the time anyone decides they want this,
-  // it is already on disk and the decision costs a restart instead of a
-  // download. One file, from a known address, whose size the release stated.
+  // This used to start downloading the installer the moment the check found
+  // one, so that pressing Install cost a restart rather than a wait. It also
+  // meant the application moved a five-megabyte executable onto the machine
+  // that nobody had asked for, which is a different thing from telling
+  // somebody a version exists — and the code signing policy this project
+  // publishes says the application sends and fetches nothing unasked beyond
+  // that one check. So the check still runs, and the download is a button.
+  //
+  // What is read here is local: whether a download started earlier in this
+  // run is already under way or finished. It touches no network.
   useEffect(() => {
     if (!status?.update_available) return;
     let cancelled = false;
-    let timer = 0;
+    api
+      .updateDownloadStatus()
+      .then((d) => {
+        if (!cancelled) setDownload(d);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [status?.update_available]);
 
+  // While a download is running, follow it.
+  const downloading = download?.stage === "downloading";
+  useEffect(() => {
+    if (!downloading) return;
+    let cancelled = false;
+    let timer = 0;
     const poll = async () => {
       try {
         const d = await api.updateDownloadStatus();
@@ -72,21 +93,22 @@ export function UpdateBanner({ coreUp }: { coreUp: boolean }) {
         /* A download that cannot be asked about is reported by its own state. */
       }
     };
-
-    api
-      .updateDownload()
-      .then((d) => {
-        if (cancelled) return;
-        setDownload(d);
-        if (d.stage !== "ready") void poll();
-      })
-      .catch(() => {});
-
+    timer = window.setTimeout(poll, 400);
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [status?.update_available]);
+  }, [downloading]);
+
+  const startDownload = useCallback(() => {
+    setFailed(null);
+    api
+      .updateDownload()
+      .then(setDownload)
+      .catch((e: unknown) => {
+        setFailed(e instanceof Error ? e.message : "the download could not start");
+      });
+  }, []);
 
   const install = useCallback(() => {
     setInstalling(true);
@@ -128,26 +150,37 @@ export function UpdateBanner({ coreUp }: { coreUp: boolean }) {
           </button>
         )}
         {ready && <span className="faint">downloaded — installs when you say so</span>}
+        {status.size != null && !ready && !downloading && (
+          <span className="faint">{Math.max(1, Math.round(status.size / 1_000_000))} MB</span>
+        )}
         {(failed || downloadError) && (
           <span className="cls-bus_error">{failed ?? downloadError}</span>
         )}
       </div>
       <div className="row" style={{ gap: 8 }}>
-        {/* Three states, and the button says which one it is in. It is only
-            offered as an install once the bytes are actually on disk; before
-            that, pressing it would mean waiting, which is the thing the
-            background download exists to avoid. */}
-        <button className="primary" onClick={install} disabled={installing || !ready}>
-          {quitting ? (
-            <Spinner label="Restarting" />
-          ) : installing ? (
-            <Spinner label="Installing" />
-          ) : ready ? (
-            "Install and restart"
-          ) : (
-            <Spinner label={percent === null ? "Getting it ready" : `Downloading ${percent}%`} />
-          )}
-        </button>
+        {/* Two presses, each one a decision. Download fetches the installer
+            and leaves the app usable while it does; Install and restart is
+            offered only once the bytes are on disk, because the restart is the
+            part that interrupts somebody and they choose when. */}
+        {ready || installing || quitting ? (
+          <button className="primary" onClick={install} disabled={installing}>
+            {quitting ? (
+              <Spinner label="Restarting" />
+            ) : installing ? (
+              <Spinner label="Installing" />
+            ) : (
+              "Install and restart"
+            )}
+          </button>
+        ) : downloading ? (
+          <button className="primary" disabled>
+            <Spinner label={percent === null ? "Starting the download" : `Downloading ${percent}%`} />
+          </button>
+        ) : (
+          <button className="primary" onClick={startDownload}>
+            {downloadError ? "Try the download again" : "Download"}
+          </button>
+        )}
         <button onClick={() => setDismissed(true)} disabled={installing}>
           Not now
         </button>

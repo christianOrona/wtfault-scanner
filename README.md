@@ -254,8 +254,8 @@ bus-silent   the adapter works and the vehicle does not answer
 
 Windows installers are on the [releases page](https://github.com/christianOrona/wtfault-scanner/releases):
 the `-setup.exe` for most people, the `.msi` for managed installs. Once
-installed, the app tells you when there is a newer version and installs it when
-you press the button.
+installed, the app tells you when there is a newer version, and downloads and
+installs it when you press the buttons to.
 
 From the next release on, installers are built by
 [the release workflow](.github/workflows/release.yml) from a tagged commit rather

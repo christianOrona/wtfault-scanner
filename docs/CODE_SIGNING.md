@@ -59,7 +59,10 @@ The artifact configurations SignPath applies are kept for review in
 ## Team roles
 
 This is a one-person project, so one person holds every role. Changes from
-anyone else are merged only after the maintainer has reviewed them.
+anyone else are merged only after the maintainer has reviewed them. The default
+branch is protected by a repository ruleset: it cannot be deleted or
+force-pushed, and changes reach it through pull requests. Only the maintainer
+can bypass it.
 
 | Role | Who | Responsibility |
 |---|---|---|
@@ -84,15 +87,16 @@ them has to be inferred.
   (`api.github.com/repos/christianOrona/wtfault-scanner/releases/latest`). No
   vehicle data, identifier or setting is sent; GitHub sees an ordinary web
   request from the computer's address.
-- **Downloads the newer installer** when that check finds one, from this
-  repository's GitHub release, so that installing it later does not mean
-  waiting. It is only *installed* when the person presses the button to do so.
 - **During installation only, if the Microsoft Edge WebView2 runtime is missing**
   — it ships with Windows 10 and 11, so this is rare — the installer downloads
   and runs Microsoft's WebView2 bootstrapper, which the application needs to
   draw its window. That download is Microsoft's, from Microsoft.
 
 ### What it sends when a person asks it to
+
+- **Downloads a newer installer**, when the check above has found one and the
+  person presses **Download**, from this repository's GitHub release. It is
+  installed only when they then press **Install and restart**.
 
 - **To the AI model provider the person configured** — and only once they have
   configured one and asked a question or started an inspection: the question,
@@ -150,11 +154,10 @@ workshops use. Through a standard OBD-II adapter plugged in by the person, it:
 
 It cannot program or flash modules — that capability is compiled out — and it
 changes nothing in the braking, steering, throttle or airbag systems,
-immobilisers or keys, though it can read their fault codes. It does not
-bypass or defeat vehicle security: to learn whether a module requires security
-access, it may ask for a challenge ("seed") and records the answer, but it
-contains no key algorithm and never sends a key. The AI assistant can read and
-explain, but cannot reach any path that writes to a vehicle.
+immobilisers or keys, though it can read their fault codes. It does not bypass
+or defeat vehicle security, and has no means to: it contains no security key
+algorithm and no code that sends a key. The AI assistant can read and explain,
+but cannot reach any path that writes to a vehicle.
 
 The full rules are in [`docs/SAFETY.md`](SAFETY.md).
 

@@ -659,14 +659,6 @@ impl UdsRequest {
         }
     }
 
-    /// SecurityAccess, sending the computed key back.
-    pub fn security_access_send_key(level: u8, key: &[u8]) -> Self {
-        UdsRequest {
-            service: UdsService::SecurityAccess,
-            sub_function: Some(level),
-            data: key.to_vec(),
-        }
-    }
 
     /// TesterPresent, optionally suppressing the positive response.
     pub fn tester_present(suppress_response: bool) -> Self {
