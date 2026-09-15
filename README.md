@@ -250,6 +250,25 @@ bus-silent   the adapter works and the vehicle does not answer
 
 ## Getting started
 
+### Download
+
+Windows installers are on the [releases page](https://github.com/christianOrona/wtfault-scanner/releases):
+the `-setup.exe` for most people, the `.msi` for managed installs. Once
+installed, the app tells you when there is a newer version and installs it when
+you press the button.
+
+From the next release on, installers are built by
+[the release workflow](.github/workflows/release.yml) from a tagged commit rather
+than on a developer's machine, and each release lists SHA-256 checksums.
+
+Code signing has been applied for through SignPath Foundation and is **not in
+place yet**, so Windows SmartScreen warns before the installer runs; each release
+says whether it is signed. The [code signing policy](docs/CODE_SIGNING.md) covers
+what gets signed, who approves it, and exactly what the app sends over the
+network.
+
+### From source
+
 ```bash
 git clone <this repo>
 cd wtfault-scanner/apps/desktop
@@ -441,6 +460,7 @@ faults in the cars:
 | `docs/ARCHITECTURE.md` | crate map and design decisions |
 | `docs/SAFETY.md` | the two ceilings, and what has to be true before a write |
 | `docs/SECURITY.md` | threat model, credentials, and where your data goes |
+| `docs/CODE_SIGNING.md` | how releases are built and signed, and the privacy policy |
 | `docs/API.md` | the `/api/v1` contract |
 | `docs/HANDOFF.md` | the specification this is built against |
 

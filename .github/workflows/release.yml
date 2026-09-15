@@ -1,0 +1,398 @@
+# Build the Windows release from a tagged commit, sign it through SignPath, and
+# leave it as a draft release for a person to publish.
+#
+# WHY THIS EXISTS
+#
+# Releases used to be built on a laptop and uploaded by hand. That is fine for a
+# personal project and disqualifying for code signing: SignPath Foundation only
+# signs binaries it can verify were built from this repository's source, by this
+# repository's CI. So the build that ships is the build this workflow makes, and
+# nothing built anywhere else is ever signed. See docs/CODE_SIGNING.md.
+#
+# WHAT IT DOES
+#
+#   1. Checks the tag agrees with every version number in the repository.
+#   2. Compiles the desktop app without packaging it.
+#   3. Signs the app executable — before it goes inside an installer, because an
+#      installer cannot be re-opened to sign what it already contains.
+#   4. Packages the signed executable into the NSIS and MSI installers.
+#   5. Signs both installers.
+#   6. Verifies every signature, including the executable *inside* each
+#      installer, and fails if anything is not exactly as expected.
+#   7. On a tag, creates a DRAFT release. Publishing is always a person pressing
+#      a button: the in-app updater reads the latest published release, so a
+#      release that published itself would install itself on people's machines.
+#
+# BEFORE SIGNPATH APPROVES THE PROJECT
+#
+# Everything above runs, unsigned. Signing switches on by itself once the
+# SIGNPATH_ORGANIZATION_ID variable exists, and the verification step asserts
+# the unsigned files really are unsigned, so an unsigned build can never be
+# mistaken for a signed one.
+#
+# SETUP (once, after approval) — in the repository settings:
+#
+#   Environments → `release-signing`
+#     secret    SIGNPATH_API_TOKEN          a SignPath CI user's API token
+#     variable  SIGNPATH_ORGANIZATION_ID    from the SignPath organization page
+#     deployment rule: tags matching v* (and main, for test-signing dry runs)
+#
+#   SignPath project `wtfault-scanner`, linked to the GitHub.com trusted build
+#   system, with the SignPath GitHub App installed on this repository:
+#     artifact configurations  windows-app, windows-installers
+#                              (copies in .signpath/artifact-configurations/)
+#     signing policies         test-signing, release-signing
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      signing:
+        description: >-
+          Signing for this dry run. Nothing is published either way. `none`
+          builds unsigned; `test-signing` exercises the whole SignPath path with
+          a test certificate.
+        type: choice
+        options: [none, test-signing, release-signing]
+        default: none
+
+# Least privilege by default; the one job that writes asks for it.
+permissions:
+  contents: read
+
+# Never cancel a release half way through. A signing request left waiting in
+# SignPath for a run that no longer exists is worse than a queue.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # Where Tauri puts things, relative to the repository root. The shell is its
+  # own cargo workspace, so its target directory is its own too.
+  SHELL_TARGET: apps/desktop/src-tauri/target/release
+  APP_EXE: WTFault Scanner.exe
+  SIGNPATH_PROJECT: wtfault-scanner
+
+jobs:
+  build:
+    name: build and sign (windows)
+    runs-on: windows-latest
+    timeout-minutes: 120
+    # The SignPath token lives in this environment and nowhere else.
+    environment: release-signing
+    permissions:
+      contents: read
+      # SignPath reads this run's details to verify the artifact came from it.
+      actions: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      signing: ${{ steps.mode.outputs.signing }}
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # A release whose tag says one version and whose binary reports another is
+      # how an updater comes to offer somebody the version they already have —
+      # or refuse the one they need. Cheaper to stop here than to explain later.
+      - name: Check the version numbers agree
+        id: version
+        env:
+          EVENT: ${{ github.event_name }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          $tauri = (Get-Content apps/desktop/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          $npm   = (Get-Content apps/desktop/package.json -Raw | ConvertFrom-Json).version
+          $read  = { param($path) (Select-String -Path $path -Pattern '^version = "(.+)"' | Select-Object -First 1).Matches[0].Groups[1].Value }
+          $core  = & $read Cargo.toml
+          $shell = & $read apps/desktop/src-tauri/Cargo.toml
+
+          $found = [ordered]@{ 'tauri.conf.json' = $tauri; 'package.json' = $npm; 'Cargo.toml' = $core; 'src-tauri/Cargo.toml' = $shell }
+          $found.GetEnumerator() | ForEach-Object { "{0,-22} {1}" -f $_.Key, $_.Value }
+          if (($found.Values | Select-Object -Unique).Count -ne 1) {
+            throw "The version numbers disagree. Bump all four together."
+          }
+          if ($env:EVENT -eq 'push' -and $env:TAG -ne "v$tauri") {
+            throw "Tag $env:TAG does not match version $tauri. Tag the commit v$tauri."
+          }
+          "version=$tauri" >> $env:GITHUB_OUTPUT
+
+      # Decided once, here, so every later step agrees about what this build is.
+      - name: Decide how this build is signed
+        id: mode
+        env:
+          EVENT: ${{ github.event_name }}
+          REQUESTED: ${{ inputs.signing }}
+          ORGANIZATION: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+        run: |
+          if (-not $env:ORGANIZATION) {
+            $signing = 'none'
+            if ($env:REQUESTED -and $env:REQUESTED -ne 'none') {
+              "::warning::Signing was requested but SIGNPATH_ORGANIZATION_ID is not set, so this build is unsigned."
+            }
+          } elseif ($env:EVENT -eq 'push') {
+            $signing = 'release-signing'
+          } else {
+            $signing = $env:REQUESTED
+          }
+          "This build is signed with: $signing"
+          "signing=$signing" >> $env:GITHUB_OUTPUT
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      # `ci` not `install`: a lockfile mismatch fails the release rather than
+      # quietly resolving something different from what was reviewed.
+      - name: Install UI dependencies
+        working-directory: apps/desktop
+        run: npm ci
+
+      # No Rust build cache, deliberately. A signed binary should come from
+      # nothing but the tagged source and the pinned toolchain; ten extra
+      # minutes is a fair price for not having to reason about what a cache
+      # restored from another run might contain.
+      #
+      # `--no-bundle` stops before packaging, so the executable can be signed
+      # before an installer wraps it. `--locked` refuses a Cargo.lock that does
+      # not match what was committed.
+      - name: Compile the desktop app
+        working-directory: apps/desktop
+        run: npx tauri build --no-bundle --ci -- --locked
+
+      - name: Upload the app for signing
+        id: upload-app
+        if: steps.mode.outputs.signing != 'none'
+        uses: actions/upload-artifact@v7
+        with:
+          name: unsigned-app
+          path: ${{ env.SHELL_TARGET }}/${{ env.APP_EXE }}
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Sign the app
+        if: steps.mode.outputs.signing != 'none'
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ env.SIGNPATH_PROJECT }}
+          signing-policy-slug: ${{ steps.mode.outputs.signing }}
+          artifact-configuration-slug: windows-app
+          github-artifact-id: ${{ steps.upload-app.outputs.artifact-id }}
+          wait-for-completion: true
+          # A release-signing request waits for a person to approve it in
+          # SignPath. An hour is time to notice and do that; the default ten
+          # minutes is not.
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: signed/app
+
+      - name: Put the signed app back where the bundler looks for it
+        if: steps.mode.outputs.signing != 'none'
+        run: |
+          $signed = Join-Path signed/app $env:APP_EXE
+          if (-not (Test-Path $signed)) { throw "SignPath returned no $env:APP_EXE" }
+          Copy-Item $signed (Join-Path $env:SHELL_TARGET $env:APP_EXE) -Force
+
+      # Packages what is already built. It does not recompile, which is the
+      # whole reason the signed executable survives into the installers.
+      - name: Build the installers
+        working-directory: apps/desktop
+        run: npx tauri bundle --bundles nsis,msi --ci
+
+      # Renamed the way GitHub renames release assets (spaces become dots), so
+      # the checksums file matches what people actually download and the
+      # updater keeps finding the installer by the suffix it looks for.
+      - name: Collect the installers
+        run: |
+          $bundle = Join-Path $env:SHELL_TARGET bundle
+          $setup = @(Get-ChildItem (Join-Path $bundle nsis) -Filter '*-setup.exe')
+          $msi   = @(Get-ChildItem (Join-Path $bundle msi) -Filter '*.msi')
+          if ($setup.Count -ne 1 -or $msi.Count -ne 1) {
+            throw "Expected one NSIS installer and one MSI, found $($setup.Count) and $($msi.Count)"
+          }
+          New-Item -ItemType Directory -Force out/installers | Out-Null
+          foreach ($f in $setup + $msi) {
+            Copy-Item $f.FullName (Join-Path out/installers ($f.Name -replace ' ', '.'))
+          }
+          Get-ChildItem out/installers | Format-Table Name, Length
+
+      - name: Upload the installers for signing
+        id: upload-installers
+        if: steps.mode.outputs.signing != 'none'
+        uses: actions/upload-artifact@v7
+        with:
+          name: unsigned-installers
+          path: out/installers/
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Sign the installers
+        if: steps.mode.outputs.signing != 'none'
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ env.SIGNPATH_PROJECT }}
+          signing-policy-slug: ${{ steps.mode.outputs.signing }}
+          artifact-configuration-slug: windows-installers
+          github-artifact-id: ${{ steps.upload-installers.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: signed/installers
+
+      - name: Put the signed installers in place
+        if: steps.mode.outputs.signing != 'none'
+        run: |
+          $signed = @(Get-ChildItem signed/installers -File)
+          if ($signed.Count -ne 2) { throw "SignPath returned $($signed.Count) installer files, expected 2" }
+          foreach ($f in $signed) { Copy-Item $f.FullName (Join-Path out/installers $f.Name) -Force }
+
+      # The step that makes everything above trustworthy. It checks every file
+      # that ships and the executable inside each installer, and it checks the
+      # unsigned case as strictly as the signed one: a build that should be
+      # signed and is not, or claims to be unsigned and is, fails here.
+      #
+      # The executable inside the installers is the one people actually run. An
+      # installer with a valid signature wrapped around an unsigned app would
+      # pass a check of the installer alone, which is why that is not enough.
+      - name: Verify every signature
+        env:
+          SIGNING: ${{ steps.mode.outputs.signing }}
+        run: |
+          $work = Join-Path $env:RUNNER_TEMP verify
+          New-Item -ItemType Directory -Force $work | Out-Null
+
+          function Test-Signed([string]$file, [string]$what) {
+            $sig = Get-AuthenticodeSignature -FilePath $file
+            $subject = if ($sig.SignerCertificate) { $sig.SignerCertificate.Subject } else { '-' }
+            "{0,-10} {1,-12} {2}  [{3}]" -f $sig.Status, $env:SIGNING, $what, $subject
+            switch ($env:SIGNING) {
+              'none' {
+                if ($sig.Status -ne 'NotSigned') { throw "$what should be unsigned and is $($sig.Status)" }
+              }
+              'test-signing' {
+                # A test certificate does not chain to a trusted root, so the
+                # status is not Valid. What matters is that a signature exists.
+                if (-not $sig.SignerCertificate) { throw "$what carries no signature" }
+              }
+              'release-signing' {
+                if ($sig.Status -ne 'Valid') { throw "$what signature is $($sig.Status)" }
+                if ($subject -notmatch 'SignPath Foundation') { throw "$what is signed by $subject, not SignPath Foundation" }
+              }
+              default { throw "unknown signing mode $env:SIGNING" }
+            }
+          }
+
+          function Find-One([string]$root, [string]$name, [string]$where) {
+            $hits = @(Get-ChildItem $root -Recurse -File -Filter $name)
+            if ($hits.Count -ne 1) { throw "Expected one $name inside $where, found $($hits.Count)" }
+            $hits[0].FullName
+          }
+
+          Test-Signed (Join-Path $env:SHELL_TARGET $env:APP_EXE) 'app (as built)'
+
+          $setup = (Get-ChildItem out/installers -Filter '*-setup.exe').FullName
+          $msi   = (Get-ChildItem out/installers -Filter '*.msi').FullName
+          Test-Signed $setup 'NSIS installer'
+          Test-Signed $msi 'MSI installer'
+
+          # Unpack the NSIS installer. 7-Zip reads NSIS archives and ships on
+          # the Windows runners.
+          $nsisDir = Join-Path $work nsis
+          & 7z x $setup "-o$nsisDir" -y | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "7-Zip could not unpack the NSIS installer" }
+          Test-Signed (Find-One $nsisDir $env:APP_EXE 'the NSIS installer') 'app inside NSIS'
+
+          # An administrative install unpacks an MSI without installing it.
+          $msiDir = Join-Path $work msi
+          $p = Start-Process msiexec.exe -ArgumentList @('/a', "`"$msi`"", '/qn', "TARGETDIR=`"$msiDir`"") -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "msiexec /a exited $($p.ExitCode)" }
+          Test-Signed (Find-One $msiDir $env:APP_EXE 'the MSI') 'app inside MSI'
+
+      - name: Write checksums
+        run: |
+          Push-Location out/installers
+          Get-ChildItem -File | Where-Object Name -ne 'SHA256SUMS.txt' | Sort-Object Name | ForEach-Object {
+            "{0}  {1}" -f (Get-FileHash $_.Name -Algorithm SHA256).Hash.ToLowerInvariant(), $_.Name
+          } | Set-Content -Encoding ascii SHA256SUMS.txt
+          Get-Content SHA256SUMS.txt
+          Pop-Location
+
+      - name: Keep the installers
+        uses: actions/upload-artifact@v7
+        with:
+          name: wtfault-scanner-${{ steps.version.outputs.version }}-windows
+          path: out/installers/
+          if-no-files-found: error
+          retention-days: 30
+
+  draft-release:
+    name: draft release
+    needs: build
+    # A tag only. A manual run is a dry run and never touches Releases.
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    # The only job allowed to write, and it runs no third-party build code.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: wtfault-scanner-${{ needs.build.outputs.version }}-windows
+          path: out
+
+      # The release notes are what the in-app updater shows before somebody
+      # installs, so they come from the changelog entry for this version rather
+      # than from commit titles. Said plainly when the build is unsigned.
+      - name: Write the release notes
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+          SIGNING: ${{ needs.build.outputs.signing }}
+        run: |
+          awk -v v="$VERSION" '
+            $0 ~ "^## \\[" v "\\]" { on = 1; next }
+            on && /^## \[/ { exit }
+            on { print }
+          ' CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then
+            echo "::warning::CHANGELOG.md has no section for $VERSION; the draft has placeholder notes."
+            echo "Release notes for $VERSION go here." > notes.md
+          fi
+          {
+            echo
+            echo "---"
+            case "$SIGNING" in
+              release-signing) echo "Signed. Free code signing provided by [SignPath.io](https://signpath.io), certificate by [SignPath Foundation](https://signpath.org). See [the code signing policy](https://github.com/${GITHUB_REPOSITORY}/blob/main/docs/CODE_SIGNING.md)." ;;
+              *) echo "**This build is not code signed.** Windows SmartScreen will warn before it runs." ;;
+            esac
+            echo
+            echo "SHA-256 checksums are in \`SHA256SUMS.txt\`."
+          } >> notes.md
+          cat notes.md
+
+      # `--draft`: a person publishes it. `--verify-tag`: the tag must already
+      # exist on GitHub. No `--clobber` and no edit of an existing release: a
+      # second run for the same tag fails rather than replacing what is there.
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          gh release create "$TAG" out/* \
+            --draft \
+            --verify-tag \
+            --title "$VERSION" \
+            --notes-file notes.md

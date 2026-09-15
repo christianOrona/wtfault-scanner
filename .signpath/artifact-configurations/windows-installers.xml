@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SignPath artifact configuration: windows-installers
+
+  What .github/workflows/release.yml uploads after packaging: the NSIS
+  installer and the MSI, renamed the way GitHub renames release assets, e.g.
+  WTFault.Scanner_0.4.3_x64-setup.exe and WTFault.Scanner_0.4.3_x64_en-US.msi.
+
+  The executable inside both is already signed by the windows-app
+  configuration; the workflow unpacks each installer and checks that it is.
+
+  This file is a copy kept for review. SignPath reads the configuration held in
+  the SignPath project, so a change here has to be made there as well.
+-->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <zip-file>
+    <pe-file path="*-setup.exe">
+      <authenticode-sign />
+    </pe-file>
+    <msi-file path="*.msi">
+      <authenticode-sign />
+    </msi-file>
+  </zip-file>
+</artifact-configuration>
