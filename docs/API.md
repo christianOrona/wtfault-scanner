@@ -250,7 +250,10 @@ message**; branch on a code only where you need to. The ones worth knowing:
 | `adapter_degraded` | serious | Connected, but the vehicle is not answering. |
 | `dtc_not_in_catalog` | caution | A code decoded structurally but has no description. |
 | `dtc_count_mismatch` | caution | The ECU's claimed code count disagrees with what it sent. |
-| `dtc_service_unanswered` | info | A module did not answer one of the fault services. |
+| `dtc_service_unanswered` | info | A module did not answer, or refused, one of the fault services. |
+| `dtc_read_over_uds` | info | A primary-bus module answered no OBD-II fault service, so its codes were read with UDS. |
+| `module_did_not_report_codes` | caution | A module's codes could not be read at all. Not the same as having none. |
+| `uds_codes_not_faults` | info | Codes a module returned whose status bits describe no fault (self-test not completed); left out of the list. |
 | `unknown_signal` / `signal_unavailable` | caution | A requested signal could not be read. |
 | `pids_without_decoders` | info | The module supports PIDs this build cannot decode. |
 | `identity_field_unavailable` | info | A module did not report part of its identity. |
@@ -1051,15 +1054,17 @@ places it: `engine_bay`, `exhaust`, `fuel_system`, `transmission`, `cabin`,
 codes. A zone, never a part location: a catalyst fault is in the exhaust on every
 vehicle ever built, and this project has part locations for none.
 
-A service the module did not answer produces `dtc_service_unanswered` rather
-than being read as "no codes".
+A service the module did not answer, or refused, produces
+`dtc_service_unanswered` rather than being read as "no codes".
 
-> **Known gap in this build.** A module found on the *primary* bus by the full
-> scan that implements UDS only is still asked services 03/07/0A here, answers
-> none of them, and comes back with no codes and three `dtc_service_unanswered`
-> warnings. The full scan (`POST /modules/scan-all`) reads its faults correctly.
-> Until this is fixed, treat `dtc_service_unanswered` on all three services as
-> "not read", never as "clean".
+The language is chosen per module. Secondary-bus modules are read with UDS
+`0x19`. Primary-bus modules are asked services 03/07/0A first; one that answers
+none of them — a body module a gateway forwards onto the main bus, found by
+the full scan — is then read with UDS `0x19`, and the result carries
+`dtc_read_over_uds` instead of the three `dtc_service_unanswered` notes. UDS
+reports `confirmed` and `pending` only. A module that answers neither carries
+`module_did_not_report_codes` (caution): its codes were **not read**, which is
+not the same as having none.
 
 #### `GET /modules/{key}/freeze-frame?frame=0` → `ToolResult`
 
@@ -1270,12 +1275,10 @@ every module implements it; the reasons are summarised as `module_refused_*`
 warnings.
 
 Every responder is added to the session's module list, so it is reachable by
-every other module endpoint afterwards.
-
-> **Known gap in this build.** Adding them currently replaces the name a module
-> reported about itself (service 09 PID 0A) with the address-based placeholder:
-> `SIM ENGINE CONTROL` becomes `Module at 7E8` in `GET /modules` after a full
-> scan. Nothing else about the module is lost.
+every other module endpoint afterwards. A module already on that list keeps
+the name and identity it reported about itself (service 09); the scan adds only
+where it answered. `name` is `Module at <address>` only for a module that has
+never said what it is.
 
 #### `GET /readiness` → `ToolResult` — emissions readiness
 
@@ -1947,6 +1950,12 @@ distinguishable from one a person clicked.
 
 Stored modules / DTCs for any session. `{ "modules": [...] }`, `{ "dtcs": [...] }`.
 
+Every code read is stored, whichever way it was read: services 03/07/0A, a
+module read over UDS, and the full scan. A UDS code keeps its failure type
+(`C0035-00`) and is `confirmed` or `pending` from its status bits, so an
+emissions module read both ways has both forms on record. `occurrence` counts
+how many times the same code and status were seen in the session.
+
 #### `GET /sessions/{id}/measurements?signal=engine_rpm&limit=500`
 
 Recorded readings, newest first. `signal` is optional; `limit` is capped at
@@ -1992,7 +2001,9 @@ like one that was always there until there is a second reading.
 
 `change` is `appeared`, `gone` or `unchanged`. **`gone` is not "fixed"**: a code
 also disappears when somebody clears it, and this cannot tell the difference —
-the readiness counters can. Signals are means over each session's readings, most
+the readiness counters can. A UDS code matches its service 03 form (`P2463-00`
+and `P2463` are the same fault); two codes that both carry a failure type must
+match exactly. Signals are means over each session's readings, most
 changed first, with sample counts so a single reading is never mistaken for an
 average. Conditions are not controlled; a cold engine and a warm one differ for
 honest reasons, so a difference is context, not a verdict.

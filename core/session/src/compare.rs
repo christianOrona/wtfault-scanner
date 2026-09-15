@@ -174,10 +174,28 @@ pub fn compare_sessions(
     })
 }
 
+/// Whether two stored codes are the same fault.
+///
+/// Service 03 reports a two-byte code (`P2463`) and UDS `0x19` the same fault
+/// with its failure type (`P2463-00`). A visit that read a module one way and a
+/// visit that read it the other have not seen a fault go and another arrive.
+/// When both codes carry a failure type they must match exactly: `C0035-00`
+/// and `C0035-13` are different failures of one circuit, and a change between
+/// them is worth showing.
+fn same_fault(a: &str, b: &str) -> bool {
+    fn base(c: &str) -> &str {
+        c.split_once('-').map_or(c, |(base, _)| base)
+    }
+    a == b || ((!a.contains('-') || !b.contains('-')) && base(a) == base(b))
+}
+
 fn compare_faults(before: &[DtcRecord], after: &[DtcRecord]) -> Vec<FaultDelta> {
     let key = |d: &DtcRecord| d.code.clone();
     let old: BTreeMap<String, &DtcRecord> = before.iter().map(|d| (key(d), d)).collect();
     let new: BTreeMap<String, &DtcRecord> = after.iter().map(|d| (key(d), d)).collect();
+    let seen_in = |records: &BTreeMap<String, &DtcRecord>, code: &str| {
+        records.keys().any(|other| same_fault(other, code))
+    };
 
     let mut out = Vec::new();
     for (code, d) in &new {
@@ -185,7 +203,7 @@ fn compare_faults(before: &[DtcRecord], after: &[DtcRecord]) -> Vec<FaultDelta> 
             code: code.clone(),
             module: d.module_id.as_str().to_string(),
             description: d.description.clone(),
-            change: if old.contains_key(code) {
+            change: if seen_in(&old, code) {
                 FaultChange::Unchanged
             } else {
                 FaultChange::Appeared
@@ -193,7 +211,7 @@ fn compare_faults(before: &[DtcRecord], after: &[DtcRecord]) -> Vec<FaultDelta> 
         });
     }
     for (code, d) in &old {
-        if !new.contains_key(code) {
+        if !seen_in(&new, code) {
             out.push(FaultDelta {
                 code: code.clone(),
                 module: d.module_id.as_str().to_string(),
@@ -274,6 +292,30 @@ mod tests {
         assert_eq!(new.change, FaultChange::Appeared);
         let old = d.iter().find(|f| f.code == "P0420").unwrap();
         assert_eq!(old.change, FaultChange::Unchanged);
+    }
+
+    #[test]
+    fn a_code_read_over_uds_is_the_same_fault_as_its_service_03_form() {
+        // Service 03 reports P2463; UDS 0x19 reports the same fault with its
+        // failure type, P2463-00. A visit that read the engine one way and a
+        // visit that read it the other must not say it went and came back.
+        let d = compare_faults(&[dtc("P2463", "m1")], &[dtc("P2463-00", "m1")]);
+        assert_eq!(d.len(), 1, "{d:?}");
+        assert_eq!(d[0].change, FaultChange::Unchanged);
+
+        let d = compare_faults(&[dtc("P2463-00", "m1")], &[dtc("P2463", "m1")]);
+        assert_eq!(d.len(), 1, "{d:?}");
+        assert_eq!(d[0].change, FaultChange::Unchanged);
+    }
+
+    #[test]
+    fn a_different_failure_type_is_a_different_fault() {
+        // C0035-00 and C0035-13 are two distinct failures of one circuit. When
+        // both visits read the failure type, a change in it is a change.
+        let d = compare_faults(&[dtc("C0035-00", "m1")], &[dtc("C0035-13", "m1")]);
+        let change = |code: &str| d.iter().find(|f| f.code == code).unwrap().change;
+        assert_eq!(change("C0035-13"), FaultChange::Appeared);
+        assert_eq!(change("C0035-00"), FaultChange::Gone);
     }
 
     #[test]

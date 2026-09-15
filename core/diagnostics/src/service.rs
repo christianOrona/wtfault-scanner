@@ -257,6 +257,10 @@ impl UdsOutcome {
 #[derive(Debug, Default)]
 struct DtcReadOutcome {
     dtcs: Vec<serde_json::Value>,
+    /// The same faults in the shape the session record takes.
+    reports: Vec<DtcReport>,
+    /// Records whose status bits describe no fault, left out of both lists.
+    not_faults: usize,
     /// Human-readable note, when something other than a clean read happened.
     note: Option<String>,
     /// The refusal, classified, when the module gave a reason.
@@ -265,7 +269,13 @@ struct DtcReadOutcome {
 
 impl DtcReadOutcome {
     fn refused(note: String, refusal: Option<aim_protocols::RefusalKind>) -> DtcReadOutcome {
-        DtcReadOutcome { dtcs: Vec::new(), note: Some(note), refusal }
+        DtcReadOutcome {
+            dtcs: Vec::new(),
+            reports: Vec::new(),
+            not_faults: 0,
+            note: Some(note),
+            refusal,
+        }
     }
 }
 
@@ -750,6 +760,31 @@ impl DiagnosticService {
                 ))
             },
         )
+    }
+
+    /// A module a discovery pass just heard from, with what this session
+    /// already knows about it carried over.
+    ///
+    /// Discovery learns where a module is — the address it answered on, the
+    /// one that reached it, the protocol — and nothing about what it is. It
+    /// starts from a placeholder name and an empty identity, and an upsert of
+    /// that replaced the name the module had reported about itself: a full scan
+    /// turned "SIM ENGINE CONTROL" into "Module at 7E8". Only a read of the
+    /// module's own identity gets to change those fields.
+    fn keep_what_is_known(&self, found: Module) -> Module {
+        let Ok(recorded) = self.module_by_key(&found.module_key) else {
+            return found;
+        };
+        Module {
+            name: recorded.name,
+            identity: recorded.identity,
+            software_version: recorded.software_version,
+            // A broadcast outside the legislated block cannot derive a request
+            // address, and not knowing one now does not unlearn the one a
+            // sweep established earlier.
+            request_address: found.request_address.or(recorded.request_address),
+            ..found
+        }
     }
 
     /// Where to send this module something.
@@ -1422,7 +1457,7 @@ impl DiagnosticService {
                 VehicleBus::Primary => format!("ECU_{}", responder.address),
                 other => format!("{}_{}", other.key_prefix(), responder.address),
             };
-            let module = Module {
+            let module = self.keep_what_is_known(Module {
                 id: aim_types::ModuleId::new(),
                 session_id: self.session.id.clone(),
                 module_key: key.clone(),
@@ -1436,7 +1471,7 @@ impl DiagnosticService {
                 identity: ModuleIdentity::default(),
                 software_version: None,
                 discovered_at: now(),
-            };
+            });
             let stored = self.store.upsert_module(&module)?;
             let _ = self.store.append_event(
                 &self.session.id,
@@ -3831,10 +3866,12 @@ impl DiagnosticService {
             // the question was.
             if !VehicleBus::of_module_key(&module.module_key).answers_obd2() {
                 match self.uds_dtcs_for(module) {
-                    Ok((mut found, ev)) => {
+                    Ok((mut found, not_faults, ev)) => {
+                        warnings.extend(Self::not_faults_warning(&module.module_key, not_faults));
                         if evidence.is_none() {
                             evidence = ev;
                         }
+                        found.iter().try_for_each(|r| self.record_dtc_read(module, r))?;
                         reports.append(&mut found);
                     }
                     Err(e) => warnings.push(Warning::caution(
@@ -3849,6 +3886,21 @@ impl DiagnosticService {
                 continue;
             }
 
+            // The primary bus is not only emissions modules, so the bus cannot
+            // make this decision on its own; the module's answers make it.
+            //
+            // A gateway forwards body modules onto the legislated wires. The
+            // full scan finds them there by address sweep and reads their faults
+            // with UDS; this path asked them services 03, 07 and 0A, got silence
+            // three times, and reported an empty list. In the simulator that is
+            // the module at 768 with a wheel speed fault failing right now; on a
+            // 2019 F-250 it is the body controller at 72E.
+            //
+            // So the OBD-II services are asked first — an emissions module
+            // answers them, and they are the only way to see permanent codes —
+            // and a module that answers none of them is asked over UDS instead.
+            let mut unanswered = Vec::new();
+            let mut answered_any = false;
             for status in [DtcStatus::Confirmed, DtcStatus::Pending, DtcStatus::Permanent] {
                 let service = match status {
                     DtcStatus::Confirmed => Service::StoredDtcs,
@@ -3856,15 +3908,25 @@ impl DiagnosticService {
                     DtcStatus::Permanent => Service::PermanentDtcs,
                 };
                 let request = ObdRequest::bare(service);
-                let (message, ev) = match self.request_module(module, &request) {
+                let reply = self.request_module(module, &request).and_then(|(message, ev)| {
+                    Self::payload_of(&message, &request).map(|p| (p, ev))
+                });
+                let (payload, ev) = match reply {
                     Ok(v) => v,
-                    Err(e) if e.code == ErrorCode::NoData => {
-                        // A module that ignores one DTC service is common and
-                        // is reported, not treated as "no codes".
-                        warnings.push(Warning::info(
+                    // A module that ignores one DTC service is common and is
+                    // reported, not treated as "no codes". So is one that
+                    // refuses it: a module that is not an emissions module owes
+                    // these services nothing, and a refusal from it must not
+                    // abort the read of every other module.
+                    Err(e) if matches!(e.code, ErrorCode::NoData | ErrorCode::NegativeResponse) => {
+                        let what = match e.code {
+                            ErrorCode::NegativeResponse => format!("refused ({})", e.message),
+                            _ => String::from("did not answer"),
+                        };
+                        unanswered.push(Warning::info(
                             "dtc_service_unanswered",
                             format!(
-                                "{} did not answer service {:02X} ({})",
+                                "{} {what} service {:02X} ({})",
                                 module.module_key,
                                 service.id(),
                                 status.as_str()
@@ -3874,9 +3936,9 @@ impl DiagnosticService {
                     }
                     Err(e) => return Err(e),
                 };
+                answered_any = true;
                 evidence = ev.or(evidence);
 
-                let payload = Self::payload_of(&message, &request)?;
                 let (code_bytes, claimed) = strip_dtc_count(&payload);
                 let codes = decode_dtc_list(code_bytes)?;
                 if let Some(claimed) = claimed {
@@ -3901,26 +3963,8 @@ impl DiagnosticService {
                             Self::unknown_dtc_next_steps(&code, &module.module_key, &info),
                         ));
                     }
-                    self.store.record_dtc(&DtcRecord {
-                        session_id: self.session.id.clone(),
-                        module_id: module.id.clone(),
-                        code: code.clone(),
-                        status,
-                        description: info.description.clone(),
-                        occurrence: 1,
-                        freeze_frame_ref: None,
-                        read_at: now(),
-                    })?;
-                    let _ = self.store.append_event(
-                        &self.session.id,
-                        EventKind::DtcRead {
-                            module_key: module.module_key.clone(),
-                            code: code.clone(),
-                            status,
-                        },
-                    );
                     let region = aim_decoders::region_for_dtc(&code, info.system, info.is_generic);
-                    reports.push(DtcReport {
+                    let report = DtcReport {
                         code,
                         status,
                         module: module.module_key.clone(),
@@ -3929,7 +3973,51 @@ impl DiagnosticService {
                         verification: info.verification,
                         is_generic: info.is_generic,
                         region,
-                    });
+                    };
+                    self.record_dtc_read(module, &report)?;
+                    reports.push(report);
+                }
+            }
+
+            if answered_any {
+                warnings.append(&mut unanswered);
+                continue;
+            }
+
+            // Not one OBD-II fault service answered. That is a module in the
+            // wrong language, not a module with nothing to say.
+            match self.uds_dtcs_for(module) {
+                Ok((mut found, not_faults, ev)) => {
+                    warnings.extend(Self::not_faults_warning(&module.module_key, not_faults));
+                    if evidence.is_none() {
+                        evidence = ev;
+                    }
+                    found.iter().try_for_each(|r| self.record_dtc_read(module, r))?;
+                    reports.append(&mut found);
+                    // The three "did not answer" notes are dropped here: they
+                    // were true, and next to codes from the same module they
+                    // read as a partial read, which this was not.
+                    warnings.push(Warning::info(
+                        "dtc_read_over_uds",
+                        format!(
+                            "{} answered none of the OBD-II fault services (03, 07, 0A), so its \
+                             codes were read with UDS 0x19 instead. UDS reports confirmed and \
+                             pending codes; it has no separate permanent list.",
+                            module.module_key
+                        ),
+                    ));
+                }
+                Err(e) => {
+                    warnings.append(&mut unanswered);
+                    warnings.push(Warning::caution(
+                        "module_did_not_report_codes",
+                        format!(
+                            "{} answered none of the OBD-II fault services, and asking over UDS \
+                             failed too ({}). Its codes were not read. That is not the same as \
+                             having none.",
+                            module.module_key, e.message
+                        ),
+                    ));
                 }
             }
         }
@@ -4391,6 +4479,7 @@ impl DiagnosticService {
         let mut modules = Vec::new();
         let mut total_faults = 0usize;
         let mut refused = 0usize;
+        let mut not_faults_total = 0usize;
         // Counted by reason, so the scan can say what kind of wall it hit
         // rather than how many times it hit something.
         let mut refusals: std::collections::BTreeMap<aim_protocols::RefusalKind, usize> =
@@ -4410,7 +4499,8 @@ impl DiagnosticService {
                 },
                 Err(e) => DtcReadOutcome::refused(e.message.clone(), None),
             };
-            let DtcReadOutcome { dtcs, note, refusal } = outcome;
+            let DtcReadOutcome { dtcs, reports, not_faults, note, refusal } = outcome;
+            not_faults_total += not_faults;
             if note.is_some() {
                 refused += 1;
             }
@@ -4427,7 +4517,7 @@ impl DiagnosticService {
             // the check that guards a configuration write, which is exactly the
             // case the full scan exists to reach.
             let key = format!("ECU_{response_addr}");
-            let record = Module {
+            let record = self.keep_what_is_known(Module {
                 id: aim_types::ModuleId::new(),
                 session_id: self.session.id.clone(),
                 module_key: key.clone(),
@@ -4443,22 +4533,29 @@ impl DiagnosticService {
                 identity: ModuleIdentity::default(),
                 software_version: None,
                 discovered_at: now(),
-            };
-            if self.store.upsert_module(&record).is_ok() {
+            });
+            let name = record.name.clone();
+            if let Ok(stored) = self.store.upsert_module(&record) {
                 let _ = self.store.append_event(
                     &self.session.id,
                     EventKind::ModuleDiscovered { module_key: key, address: response_addr.clone() },
                 );
+                // This is the one read that reaches every module, which makes
+                // it the one a comparison between two visits most needs.
+                for report in &reports {
+                    self.record_dtc_read(&stored, report)?;
+                }
             }
 
             // Described, never named. A module at 0x760 is "the module at 760"
             // until something it says identifies it — guessing that it is the
             // ABS controller because it usually is on some vehicles is exactly
-            // the invention this project refuses.
+            // the invention this project refuses. One that has said, through
+            // service 09, keeps what it said.
             modules.push(serde_json::json!({
                 "request_address": request_addr,
                 "address": response_addr,
-                "name": format!("Module at {response_addr}"),
+                "name": name,
                 "in_legislated_range": in_legislated_range(request_addr),
                 "faults": dtcs,
                 "fault_count": fault_count,
@@ -4466,6 +4563,7 @@ impl DiagnosticService {
             }));
         }
 
+        warnings.extend(Self::not_faults_warning("the modules scanned", not_faults_total));
         if refused > 0 {
             warnings.push(Warning::info(
                 "modules_without_fault_memory",
@@ -5513,7 +5611,7 @@ impl DiagnosticService {
     fn uds_dtcs_for(
         &mut self,
         module: &Module,
-    ) -> AimResult<(Vec<DtcReport>, Option<i64>)> {
+    ) -> AimResult<(Vec<DtcReport>, usize, Option<i64>)> {
         let addr = Self::request_target(module)?;
         let home = match &addr {
             RequestTarget::Physical(a) => self.reach_module(a),
@@ -5541,38 +5639,93 @@ impl DiagnosticService {
         };
         let evidence = self.recorder.last_response_event();
 
-        let reports = aim_protocols::decode_dtc_by_status_mask(body)
+        let all = aim_protocols::decode_dtc_by_status_mask(body);
+        let not_faults = all.iter().filter(|d| !d.is_fault()).count();
+        let reports = all
             .iter()
-            .map(|d| {
-                let info = self.decoders.dtcs.describe(&d.base_code).ok();
-                DtcReport {
-                    code: d.code.clone(),
-                    // UDS reports status as bits rather than as a service, so
-                    // the distinction comes from the bits themselves.
-                    status: match d.confirmed() {
-                        true => DtcStatus::Confirmed,
-                        false => DtcStatus::Pending,
-                    },
-                    module: module.module_key.clone(),
-                    description: info.as_ref().and_then(|i| i.description.clone()),
-                    structural_summary: info
-                        .as_ref()
-                        .map(|i| i.structural_summary.clone())
-                        .unwrap_or_default(),
-                    verification: info
-                        .as_ref()
-                        .map(|i| i.verification)
-                        .unwrap_or(aim_types::VerificationStatus::Unverified),
-                    is_generic: info.as_ref().map(|i| i.is_generic).unwrap_or(false),
-                    region: info
-                        .as_ref()
-                        .map(|i| aim_decoders::region_for_dtc(&d.code, i.system, i.is_generic))
-                        .unwrap_or(aim_decoders::Region::Unknown),
-                }
-            })
+            .filter(|d| d.is_fault())
+            .map(|d| self.uds_dtc_report(d, &module.module_key))
             .collect();
 
-        Ok((reports, evidence))
+        Ok((reports, not_faults, evidence))
+    }
+
+    /// One UDS fault as the same report type service 03 produces.
+    fn uds_dtc_report(&self, d: &aim_protocols::UdsDtc, module_key: &str) -> DtcReport {
+        let info = self.decoders.dtcs.describe(&d.base_code).ok();
+        DtcReport {
+            code: d.code.clone(),
+            // UDS reports status as bits rather than as a service, so the
+            // distinction comes from the bits themselves.
+            status: match d.confirmed() {
+                true => DtcStatus::Confirmed,
+                false => DtcStatus::Pending,
+            },
+            module: module_key.to_string(),
+            description: info.as_ref().and_then(|i| i.description.clone()),
+            structural_summary: info
+                .as_ref()
+                .map(|i| i.structural_summary.clone())
+                .unwrap_or_default(),
+            verification: info
+                .as_ref()
+                .map(|i| i.verification)
+                .unwrap_or(aim_types::VerificationStatus::Unverified),
+            is_generic: info.as_ref().map(|i| i.is_generic).unwrap_or(false),
+            region: info
+                .as_ref()
+                .map(|i| aim_decoders::region_for_dtc(&d.code, i.system, i.is_generic))
+                .unwrap_or(aim_decoders::Region::Unknown),
+        }
+    }
+
+    /// Say how many records were left out because their bits describe no fault.
+    ///
+    /// Said rather than silently dropped: the raw reply is in the flight
+    /// recorder, and a count that does not match it should be explained.
+    fn not_faults_warning(from: &str, count: usize) -> Option<Warning> {
+        (count > 0).then(|| {
+            Warning::info(
+                "uds_codes_not_faults",
+                format!(
+                    "{count} code(s) from {from} reported no fault status - their self-tests \
+                     have not completed - so they are not listed or recorded as faults."
+                ),
+            )
+        })
+    }
+
+    /// Put one fault that was read into the session's record.
+    ///
+    /// Every path that reads fault codes comes through here, whatever it asked.
+    /// The UDS paths used to show their codes and store nothing, so the session
+    /// history, its export and the comparison between two visits were built
+    /// from the emissions modules alone — and a brake fault that appeared since
+    /// last time was reported as "no faults changed".
+    ///
+    /// The code is stored as it was read. A UDS code keeps its failure type
+    /// (`C0035-00`); the comparison knows that is the same fault as a service
+    /// 03 `C0035`.
+    fn record_dtc_read(&self, module: &Module, report: &DtcReport) -> AimResult<()> {
+        self.store.record_dtc(&DtcRecord {
+            session_id: self.session.id.clone(),
+            module_id: module.id.clone(),
+            code: report.code.clone(),
+            status: report.status,
+            description: report.description.clone(),
+            occurrence: 1,
+            freeze_frame_ref: None,
+            read_at: now(),
+        })?;
+        let _ = self.store.append_event(
+            &self.session.id,
+            EventKind::DtcRead {
+                module_key: module.module_key.clone(),
+                code: report.code.clone(),
+                status: report.status,
+            },
+        );
+        Ok(())
     }
 
     fn decode_uds_dtcs(&self, payload: &[u8], module_key: &str) -> DtcReadOutcome {
@@ -5596,8 +5749,10 @@ impl DiagnosticService {
         };
         // Skip the echoed sub-function byte before the availability mask.
         let body = data.split_first().map(|(_, rest)| rest).unwrap_or(&[]);
-        let dtcs = aim_protocols::decode_dtc_by_status_mask(body);
+        let (dtcs, not_faults): (Vec<_>, Vec<_>) =
+            aim_protocols::decode_dtc_by_status_mask(body).into_iter().partition(|d| d.is_fault());
         DtcReadOutcome {
+            not_faults: not_faults.len(),
             dtcs: dtcs
                 .iter()
                 .map(|d| {
@@ -5632,6 +5787,7 @@ impl DiagnosticService {
                     })
                 })
                 .collect(),
+            reports: dtcs.iter().map(|d| self.uds_dtc_report(d, module_key)).collect(),
             note: None,
             refusal: None,
         }

@@ -725,6 +725,199 @@ fn a_module_with_no_fault_service_is_distinguished_from_one_with_no_faults() {
     );
 }
 
+/// A module's own fault read must reach the codes the full scan reached.
+///
+/// 768 sits on the primary bus and speaks UDS only. The full scan reads its
+/// two faults with `0x19`; reading the same module on its own used to ask it
+/// services 03, 07 and 0A — because the choice of language was made per bus,
+/// and the primary bus is the OBD-II one — and report an empty list. The Codes
+/// screen drew that as a module with no faults while one was failing.
+///
+/// On a real 2019 F-250 the same shape is the body controller the gateway
+/// exposes at 72E.
+#[test]
+fn a_uds_only_module_on_the_primary_bus_reports_its_codes_when_read_on_its_own() {
+    let (mut service, _) = connected(ScenarioId::Healthy);
+    assert!(service.scan_modules(USER).success);
+    assert!(service.scan_all_modules(USER).success);
+
+    let result = service.read_dtcs(Some("ECU_768"), USER);
+    assert!(result.success, "{:?}", result.error);
+    let dtcs: Vec<aim_diagnostics::DtcReport> =
+        serde_json::from_value(result.data.as_ref().unwrap()["dtcs"].clone()).unwrap();
+    let codes: Vec<&str> = dtcs.iter().map(|d| d.code.as_str()).collect();
+    assert!(codes.contains(&"C0035-00"), "the failing wheel speed fault: {codes:?}");
+    assert!(codes.contains(&"U0121-87"), "the stored lost-communication fault: {codes:?}");
+
+    // A record whose status bits only say "test not completed" is not a fault.
+    assert!(!codes.contains(&"B1C09-00"), "a test that has not run is not pending: {codes:?}");
+    assert_eq!(dtcs.len(), 2, "{codes:?}");
+
+    // It was read, so nothing may suggest it was not.
+    let warned: Vec<&str> = result.warnings.iter().map(|w| w.code.as_str()).collect();
+    assert!(warned.contains(&"uds_codes_not_faults"), "{warned:?}");
+    assert!(!warned.contains(&"module_did_not_report_codes"), "{warned:?}");
+    assert!(!warned.contains(&"dtc_service_unanswered"), "{warned:?}");
+}
+
+/// And a module that answers neither language is unread, not clean.
+///
+/// 7EB answers the service 01 broadcast, stays silent to the OBD-II fault
+/// services and refuses `0x19`. An empty list with a few informational notes
+/// reads as "no codes"; this has to read as "we could not ask".
+#[test]
+fn a_module_that_answers_no_fault_service_is_reported_as_unread() {
+    let (mut service, _) = connected(ScenarioId::Healthy);
+    assert!(service.scan_modules(USER).success);
+
+    let result = service.read_dtcs(Some("ECU_7EB"), USER);
+    assert!(result.success, "one quiet module is a finding, not a failure: {:?}", result.error);
+    assert_eq!(result.data.as_ref().unwrap()["dtcs"].as_array().unwrap().len(), 0);
+    let unread = result
+        .warnings
+        .iter()
+        .find(|w| w.code == "module_did_not_report_codes")
+        .unwrap_or_else(|| panic!("no unread warning in {:?}", result.warnings));
+    assert_eq!(unread.severity, aim_types::WarningSeverity::Caution);
+    assert!(unread.message.contains("ECU_7EB"), "{}", unread.message);
+}
+
+/// The full scan adds what it learned and takes away nothing it did not.
+///
+/// It used to record every responder as "Module at <address>" with an empty
+/// identity, replacing the name a module had reported about itself through
+/// service 09 — so the engine controller became "Module at 7E8" in the module
+/// list the moment somebody ran the scan that was supposed to tell them more.
+#[test]
+fn a_full_scan_keeps_the_names_modules_gave_themselves() {
+    let (mut service, _) = connected(ScenarioId::Healthy);
+    assert!(service.scan_modules(USER).success);
+    assert!(service.get_module_identity("ECU_7E8", USER).success);
+
+    let full = service.scan_all_modules(USER);
+    assert!(full.success, "{:?}", full.error);
+
+    let modules = service.store().modules(service.session_id()).unwrap();
+    let by_key = |key: &str| modules.iter().find(|m| m.module_key == key).unwrap().clone();
+    let engine = by_key("ECU_7E8");
+    assert_eq!(engine.name, "SIM ENGINE CONTROL");
+    assert_eq!(engine.identity.calibration_ids, vec![String::from("SIMULATED-CAL-01")]);
+    assert_eq!(engine.request_address.as_deref(), Some("7E0"));
+    assert_eq!(by_key("ECU_7EA").name, "SIM MODULE 7EA");
+
+    // A module that has never said what it is stays described by address.
+    assert_eq!(by_key("ECU_768").name, "Module at 768");
+
+    // The scan's own answer agrees with the record: it is what the screen draws.
+    let reported = full.data.as_ref().unwrap()["modules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["address"] == "7E8")
+        .cloned()
+        .expect("the engine controller answered the sweep");
+    assert_eq!(reported["name"], "SIM ENGINE CONTROL");
+
+    // A rescan re-reads the name but not the rest of the identity, and must not
+    // clear what it did not re-read.
+    assert!(service.scan_modules(USER).success);
+    let engine = service
+        .store()
+        .modules(service.session_id())
+        .unwrap()
+        .into_iter()
+        .find(|m| m.module_key == "ECU_7E8")
+        .unwrap();
+    assert_eq!(engine.name, "SIM ENGINE CONTROL");
+    assert_eq!(engine.identity.calibration_ids, vec![String::from("SIMULATED-CAL-01")]);
+}
+
+/// A fault read over UDS is part of the session's record, like one read with
+/// service 03.
+///
+/// Both UDS paths used to hand their codes to the caller and store nothing. The
+/// screen showed them; the session history, its export and the comparison
+/// between two visits did not — so a brake fault that appeared since last time
+/// was reported as "no faults changed".
+#[test]
+fn codes_read_over_uds_are_recorded_in_the_session() {
+    let (mut service, _) = connected(ScenarioId::Healthy);
+    let before = service.store().create_session(Some("an earlier visit".into())).unwrap();
+    assert!(service.scan_modules(USER).success);
+
+    let stored_for_brakes = |service: &DiagnosticService| {
+        let brakes = service
+            .store()
+            .modules(service.session_id())
+            .unwrap()
+            .into_iter()
+            .find(|m| m.module_key == "ECU_768")
+            .expect("the full scan recorded the module");
+        let mut rows: Vec<(String, DtcStatus, u32)> = service
+            .store()
+            .dtcs(service.session_id(), Some(&brakes.id))
+            .unwrap()
+            .into_iter()
+            .map(|d| (d.code, d.status, d.occurrence))
+            .collect();
+        rows.sort_by(|a, b| a.0.cmp(&b.0));
+        rows
+    };
+
+    // The full scan is the one path that reads every module, so it is the one
+    // a visit-to-visit comparison most needs. Its count leaves out the record
+    // whose tests have not completed, and so does the stored list below.
+    let full = service.scan_all_modules(USER);
+    assert!(full.success);
+    let brakes = full.data.as_ref().unwrap()["modules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["address"] == "768")
+        .cloned()
+        .unwrap();
+    assert_eq!(brakes["fault_count"], 2, "{brakes:#}");
+    assert!(full.warnings.iter().any(|w| w.code == "uds_codes_not_faults"));
+    assert_eq!(
+        stored_for_brakes(&service),
+        vec![
+            (String::from("C0035-00"), DtcStatus::Confirmed, 1),
+            (String::from("U0121-87"), DtcStatus::Confirmed, 1),
+        ]
+    );
+
+    // Reading the module on its own records the same observations again, as a
+    // second sighting rather than a second fault.
+    assert!(service.read_dtcs(Some("ECU_768"), USER).success);
+    assert_eq!(
+        stored_for_brakes(&service),
+        vec![
+            (String::from("C0035-00"), DtcStatus::Confirmed, 2),
+            (String::from("U0121-87"), DtcStatus::Confirmed, 2),
+        ]
+    );
+
+    // In the flight recorder too.
+    let events = service.store().events_since(service.session_id(), 0, 100_000).unwrap();
+    let read: Vec<String> = events
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EventKind::DtcRead { module_key, code, .. } if module_key == "ECU_768" => {
+                Some(code.clone())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(read.iter().filter(|c| *c == "C0035-00").count(), 2, "{read:?}");
+
+    // And the comparison that said nothing changed now sees them arrive.
+    let cmp =
+        aim_session::compare_sessions(service.store(), &before.id, service.session_id()).unwrap();
+    let appeared: Vec<&str> = cmp.appeared().map(|f| f.code.as_str()).collect();
+    assert!(appeared.contains(&"C0035-00"), "{appeared:?}");
+    assert!(appeared.contains(&"U0121-87"), "{appeared:?}");
+}
+
 #[test]
 fn a_silent_bus_reports_no_modules_rather_than_an_empty_success() {
     let (mut service, _) = connected(ScenarioId::BusSilent);

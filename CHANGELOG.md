@@ -41,6 +41,25 @@ with the caveat that everything below 1.0 is allowed to move.
   "can be read … never changed", and a setting from another source promised it
   would stay unwritable although comfort settings can be tried. Both now say
   what is true, and an experimental change says so in the confirmation.
+- Reading one module's codes showed none for a module the full scan had found
+  faults in. A body module forwarded onto the main bus — the body controller at
+  72E on the F-250 — was asked the emissions services it never answers. A
+  module that answers none of them is now read with UDS, and one that answers
+  neither says its codes were not read instead of looking clean.
+- A refusal from one module to an emissions fault service no longer fails the
+  code read for every module.
+- A full scan renamed every module "Module at …", replacing the name the module
+  reported about itself. Scans now keep a module's name and identity, and a
+  rescan no longer clears its calibration details.
+- Codes read over UDS — body and chassis modules, and every module in a full
+  scan — were shown but never saved. Session history and export left them out,
+  and comparing two visits said no faults changed when a brake fault had
+  appeared. They are now recorded like any other code, and the comparison
+  treats `P2463-00` and `P2463` as the same fault.
+- A UDS code whose status only says its self-test has not run was counted as a
+  fault and shown as pending. On the F-250 that was every one of ~480 codes in a
+  full scan. Only codes with a failing, pending or confirmed bit are now listed
+  or saved; the rest are counted in a note.
 
 ## [0.4.2] — 2026-09-12
 

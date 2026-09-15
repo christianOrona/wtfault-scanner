@@ -846,6 +846,17 @@ impl UdsDtc {
         self.status & 0x08 != 0
     }
 
+    /// Whether the status bits describe a fault at all.
+    ///
+    /// A status-mask request of 0xFF returns every code with any bit set,
+    /// including ones whose only bits say a test has not completed (0x40,
+    /// 0x50). Those are not faults. Measured on a 2019 F-250: every one of
+    /// ~480 records a full scan returned was 0x40 or 0x50. A fault has one of
+    /// failing now, failed this cycle, pending or confirmed set.
+    pub fn is_fault(&self) -> bool {
+        self.status & 0x0F != 0
+    }
+
     /// The module is asking for the warning lamp.
     pub fn warning_indicator_requested(&self) -> bool {
         self.status & 0x80 != 0

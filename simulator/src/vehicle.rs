@@ -304,6 +304,11 @@ impl VirtualVehicle {
                 // U0121-87, lost communication with the ABS module. Stored,
                 // not currently failing — the common and confusing case.
                 [0xC1, 0x21, 0x87, 0x08],
+                // B1C09-00 with status 0x50: test not completed this cycle or
+                // since the last clear. Not a fault. Measured on a 2019 F-250:
+                // every one of ~480 records a full scan returned looked like
+                // this, and the app was calling each of them pending.
+                [0x9C, 0x09, 0x00, 0x50],
             ]),
             config_records: BTreeMap::new(),
             config_write: ConfigWriteBehaviour::Accept,

@@ -81,6 +81,26 @@ log belonging to a different database produces exactly that error; the
 mechanism was reproduced deliberately. The failure message now names the file
 and says the history is probably not lost.
 
+### UDS fault reads returned hundreds of records that were not faults
+
+Every `59 02` reply recorded from a 2019 F-250 across four sessions — about
+4,000 records, ~480 per full scan — had status `0x40` or `0x50`: self-test not
+completed. None had a failing, pending or confirmed bit. The full scan counted
+them as faults and the per-module read called them pending. A 2012 F-250
+returned 543 records, of which 5 had fault bits set.
+
+**Fixed.** Only records with one of the low four status bits set are listed,
+counted or stored; the rest are counted in a `uds_codes_not_faults` note. Not yet
+re-run on the vehicle.
+
+### A long UDS fault reply was cut off by a timeout
+
+One `59 02` reply on the 2012 F-250 announced 407 bytes and ended in `timeout`
+partway through. The decoder drops the partial tail without saying so, so codes
+past the cut are silently missing.
+
+**Open.**
+
 ---
 
 ## What is built
