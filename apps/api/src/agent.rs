@@ -301,9 +301,7 @@ pub async fn describe_context(state: &AppState) -> String {
 
     let (descriptor, conn_state, vin, modules, link, caps, knowledge) = match snapshot {
         Some(s) => (s.0, s.1, s.2, s.3, Some(s.4), Some(s.5), s.6),
-        None => {
-            ("none".into(), "disconnected".into(), None, Vec::new(), None, None, Vec::new())
-        }
+        None => ("none".into(), "disconnected".into(), None, Vec::new(), None, None, Vec::new()),
     };
 
     // The one place the VIN enters a prompt, and therefore the only place the
@@ -316,8 +314,14 @@ pub async fn describe_context(state: &AppState) -> String {
         false => v,
     });
 
-    let mut block =
-        prompts::context_block(&descriptor, &conn_state, vin.as_deref(), None, &modules, link.as_ref());
+    let mut block = prompts::context_block(
+        &descriptor,
+        &conn_state,
+        vin.as_deref(),
+        None,
+        &modules,
+        link.as_ref(),
+    );
     // What it can do at all, not just how well it is doing it. Without this the
     // model falls back on the stereotype of a cheap clone and tells people
     // their adapter cannot do things it has already done.
@@ -544,7 +548,8 @@ mod tests {
     /// an option the core has just refused to describe.
     #[test]
     fn a_preview_that_failed_offers_nothing() {
-        let sink = previewed(&[(serde_json::json!({ "feature_id": "made_up", "desired": "on" }), false)]);
+        let sink =
+            previewed(&[(serde_json::json!({ "feature_id": "made_up", "desired": "on" }), false)]);
         assert!(proposed_change(&sink).is_none());
     }
 
@@ -567,9 +572,15 @@ mod tests {
     #[test]
     fn a_turn_without_a_preview_offers_no_change() {
         let mut sink = RecordingSink::default();
-        sink.emit(AgentEvent::ToolStarted { name: "list_vehicle_features".into(), arguments: serde_json::json!({}) });
-        sink.emit(AgentEvent::ToolFinished { name: "list_vehicle_features".into(), success: true, evidence_ref: None });
+        sink.emit(AgentEvent::ToolStarted {
+            name: "list_vehicle_features".into(),
+            arguments: serde_json::json!({}),
+        });
+        sink.emit(AgentEvent::ToolFinished {
+            name: "list_vehicle_features".into(),
+            success: true,
+            evidence_ref: None,
+        });
         assert!(proposed_change(&sink).is_none());
     }
-
 }

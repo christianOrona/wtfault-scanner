@@ -80,6 +80,11 @@ if ($Fix) {
     Invoke-Step 'clippy --fix' '.' @('cargo', 'clippy', '--workspace', '--all-targets', '--fix', '--allow-dirty', '--allow-staged')
 }
 
+# Formatting first, because CI checks it first. This script used to skip it, so
+# every push from 2026-09-11 to 2026-09-15 passed here and failed on GitHub for
+# nothing but whitespace. `-Fix` writes the formatting instead.
+Invoke-Step 'core: formatting' '.' @('cargo', 'fmt', '--all', '--check')
+
 # Core first: it is the fastest and catches the most, so a broken build is
 # reported in seconds rather than after the slow steps have run.
 Invoke-Step 'core: tests' '.' @('cargo', 'test', '--workspace', '--locked')

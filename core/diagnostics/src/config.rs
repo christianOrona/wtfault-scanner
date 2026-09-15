@@ -643,7 +643,10 @@ pub fn plan_change(
         && !gate_measured_open(f, ctx)
         && f.mapping.as_ref().and_then(|m| m.as_data_identifier()).is_some()
         && (f.verification == aim_types::VerificationStatus::Verified
-            || matches!(f.risk, aim_types::RiskClass::Cosmetic | aim_types::RiskClass::Convenience));
+            || matches!(
+                f.risk,
+                aim_types::RiskClass::Cosmetic | aim_types::RiskClass::Convenience
+            ));
     let only_the_gate = checks.iter().filter(|c| !c.passed).all(|c| c.id == "mapping_known");
 
     let mut plan = finish(request, Some(f), checks);
@@ -1144,10 +1147,7 @@ mod first_write {
             detail.contains("NOT been measured"),
             "an experiment must not be described as a verified mapping: {detail}"
         );
-        assert!(
-            detail.contains("experiment"),
-            "the plan must call this what it is: {detail}"
-        );
+        assert!(detail.contains("experiment"), "the plan must call this what it is: {detail}");
         assert!(
             detail.contains("put back"),
             "the plan must say the original bytes are recoverable: {detail}"

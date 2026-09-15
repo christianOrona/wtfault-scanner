@@ -257,11 +257,7 @@ static DOWNLOAD: std::sync::Mutex<Option<DownloadState>> = std::sync::Mutex::new
 
 /// Where the download has got to.
 pub fn download_state() -> DownloadState {
-    DOWNLOAD
-        .lock()
-        .ok()
-        .and_then(|s| s.clone())
-        .unwrap_or_default()
+    DOWNLOAD.lock().ok().and_then(|s| s.clone()).unwrap_or_default()
 }
 
 fn set_state(state: DownloadState) {
@@ -287,19 +283,13 @@ pub async fn download() -> DownloadState {
         }
     }
 
-    set_state(DownloadState {
-        stage: Stage::Downloading,
-        ..Default::default()
-    });
+    set_state(DownloadState { stage: Stage::Downloading, ..Default::default() });
 
     match fetch_installer().await {
         Ok(state) => state,
         Err(e) => {
-            let failed = DownloadState {
-                stage: Stage::Failed,
-                error: Some(e),
-                ..Default::default()
-            };
+            let failed =
+                DownloadState { stage: Stage::Failed, error: Some(e), ..Default::default() };
             set_state(failed.clone());
             failed
         }
@@ -358,10 +348,8 @@ async fn fetch_installer() -> Result<DownloadState, String> {
     // Read it in pieces rather than in one call, so the interface can say how
     // far along it is. A progress bar that only knows "started" and "finished"
     // is a spinner wearing a costume.
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|e| format!("the download did not complete: {e}"))?
+    while let Some(chunk) =
+        response.chunk().await.map_err(|e| format!("the download did not complete: {e}"))?
     {
         bytes.extend_from_slice(&chunk);
         set_state(DownloadState {

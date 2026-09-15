@@ -85,10 +85,7 @@ pub fn init(data_dir: &Path) -> Option<&'static SupportPaths> {
         tracing::warn!(error = %e, path = %log_dir.display(), "cannot create the log directory; this run will not be logged to disk");
         return None;
     }
-    let _ = PATHS.set(SupportPaths {
-        log_dir,
-        marker: data_dir.join("running.marker"),
-    });
+    let _ = PATHS.set(SupportPaths { log_dir, marker: data_dir.join("running.marker") });
     PATHS.get()
 }
 
@@ -234,10 +231,7 @@ pub fn report() -> SupportReport {
 
     let log_dir = paths().map(|p| p.log_dir.display().to_string());
     let log_file = paths().and_then(|p| newest_log(&p.log_dir));
-    let tail = log_file
-        .as_deref()
-        .map(|p| tail_of(p, REPORT_LOG_LINES))
-        .unwrap_or_default();
+    let tail = log_file.as_deref().map(|p| tail_of(p, REPORT_LOG_LINES)).unwrap_or_default();
 
     let mut text = String::new();
     text.push_str("WTFault Scanner problem report\n");
@@ -261,9 +255,7 @@ pub fn report() -> SupportReport {
     if tail.is_empty() {
         text.push_str("\nNothing has been written to a log yet.\n");
     } else {
-        text.push_str(&format!(
-            "\n--- last {REPORT_LOG_LINES} log lines ---\n{tail}\n"
-        ));
+        text.push_str(&format!("\n--- last {REPORT_LOG_LINES} log lines ---\n{tail}\n"));
     }
 
     SupportReport {

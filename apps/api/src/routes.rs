@@ -42,10 +42,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/features/{id}", get(read_feature))
         .route("/api/v1/config/capture", post(capture_configuration))
         .route("/api/v1/config/compare-to-factory", post(compare_to_factory))
-        .route(
-            "/api/v1/vehicles/knowledge",
-            get(vehicle_knowledge).post(record_vehicle_knowledge),
-        )
+        .route("/api/v1/vehicles/knowledge", get(vehicle_knowledge).post(record_vehicle_knowledge))
         .route("/api/v1/config/diff", post(diff_captures))
         .route("/api/v1/config/captures", get(list_captures))
         .route("/api/v1/catalog/signals", get(catalog_signals))
@@ -514,7 +511,11 @@ async fn disconnect(State(state): State<AppState>) -> ApiResult<Json<ToolResult>
 // ----------------------------------------------------------------- vehicle
 
 async fn identify_vehicle(State(state): State<AppState>) -> ApiResult<Json<ToolResult>> {
-    Ok(Json(state.with_service_named("identifying the vehicle", |s| s.identify_vehicle("user:api")).await?))
+    Ok(Json(
+        state
+            .with_service_named("identifying the vehicle", |s| s.identify_vehicle("user:api"))
+            .await?,
+    ))
 }
 
 /// Everything established about the vehicle, with the evidence behind it.
@@ -531,7 +532,13 @@ async fn vehicle_identity(State(state): State<AppState>) -> ApiResult<Json<Value
 
 /// Whether an as-built file is held for this vehicle, and how to get one.
 async fn as_built_status(State(state): State<AppState>) -> ApiResult<Json<ToolResult>> {
-    Ok(Json(state.with_service_named("reading the as-built configuration", |s| s.as_built_status("user:api")).await?))
+    Ok(Json(
+        state
+            .with_service_named("reading the as-built configuration", |s| {
+                s.as_built_status("user:api")
+            })
+            .await?,
+    ))
 }
 
 /// An as-built file's contents, sent whole.
@@ -627,7 +634,13 @@ async fn module_capabilities(
     State(state): State<AppState>,
     Path(key): Path<String>,
 ) -> ApiResult<Json<ToolResult>> {
-    Ok(Json(state.with_service_named("a capability probe of one module", move |s| s.probe_module_capabilities(&key, "user:api")).await?))
+    Ok(Json(
+        state
+            .with_service_named("a capability probe of one module", move |s| {
+                s.probe_module_capabilities(&key, "user:api")
+            })
+            .await?,
+    ))
 }
 
 async fn module_monitor_tests(
@@ -652,7 +665,11 @@ struct ClearBody {
 
 /// Sweep the diagnostic address range and read every module's fault memory.
 async fn scan_all_modules(State(state): State<AppState>) -> ApiResult<Json<ToolResult>> {
-    Ok(Json(state.with_service_named("a full scan of every module", |s| s.scan_all_modules("user:api")).await?))
+    Ok(Json(
+        state
+            .with_service_named("a full scan of every module", |s| s.scan_all_modules("user:api"))
+            .await?,
+    ))
 }
 
 /// Emissions readiness from every module that keeps it.
@@ -1087,7 +1104,13 @@ async fn record_vehicle_knowledge(
         None => {
             state
                 .with_service(move |s| {
-                    s.record_finding(&body.subject, outcome, &body.claim, &body.evidence, &authority)
+                    s.record_finding(
+                        &body.subject,
+                        outcome,
+                        &body.claim,
+                        &body.evidence,
+                        &authority,
+                    )
                 })
                 .await??;
         }
@@ -1100,7 +1123,13 @@ async fn record_vehicle_knowledge(
 /// A POST because it reads every module the as-built file describes, which is
 /// real traffic on a vehicle bus rather than a lookup.
 async fn compare_to_factory(State(state): State<AppState>) -> ApiResult<Json<ToolResult>> {
-    Ok(Json(state.with_service_named("a comparison against the factory configuration", |s| s.compare_to_factory("user:api")).await?))
+    Ok(Json(
+        state
+            .with_service_named("a comparison against the factory configuration", |s| {
+                s.compare_to_factory("user:api")
+            })
+            .await?,
+    ))
 }
 
 /// Everything a person would be asked for when reporting a problem, gathered in

@@ -1896,7 +1896,8 @@ fn a_write_gate_measured_before_a_restart_is_still_known_after_it() {
         assert!(first.identify_vehicle(USER).success);
         key_on_engine_off(&emulator);
         prepare_for_write(&mut first);
-        let probe = first.probe_write_gate_for_feature("test_body_setting", USER, Some("the-owner"));
+        let probe =
+            first.probe_write_gate_for_feature("test_body_setting", USER, Some("the-owner"));
         assert!(probe.success, "probe failed: {:?}", probe.error);
     }
 

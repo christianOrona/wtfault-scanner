@@ -659,7 +659,6 @@ impl UdsRequest {
         }
     }
 
-
     /// TesterPresent, optionally suppressing the positive response.
     pub fn tester_present(suppress_response: bool) -> Self {
         UdsRequest {

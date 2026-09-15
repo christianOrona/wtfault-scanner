@@ -534,13 +534,9 @@ impl DiagnosticService {
         evidence: impl Into<String>,
     ) {
         let claim = claim.into();
-        if let Err(e) = self.record_finding(
-            subject,
-            outcome,
-            &claim,
-            &evidence.into(),
-            "measured_this_session",
-        ) {
+        if let Err(e) =
+            self.record_finding(subject, outcome, &claim, &evidence.into(), "measured_this_session")
+        {
             tracing::debug!(error = %e, subject, "nothing recorded about this vehicle");
         }
     }
@@ -2842,7 +2838,10 @@ impl DiagnosticService {
 
         if records.is_empty() {
             return Err(last_error.unwrap_or_else(|| {
-                AimError::new(ErrorCode::NoData, format!("the module at {address} returned nothing"))
+                AimError::new(
+                    ErrorCode::NoData,
+                    format!("the module at {address} returned nothing"),
+                )
             }));
         }
 
@@ -5213,7 +5212,9 @@ impl DiagnosticService {
                 ),
                 _ => (
                     aim_session::FindingOutcome::Observed,
-                    format!("The module at {a} gave no clear answer about whether it takes writes."),
+                    format!(
+                        "The module at {a} gave no clear answer about whether it takes writes."
+                    ),
                 ),
             };
             self.learned(
@@ -5608,10 +5609,7 @@ impl DiagnosticService {
     /// service 0x19 with a status mask of 0xFF asks for every code whatever its
     /// status bits, and is a public standard that works identically across
     /// manufacturers.
-    fn uds_dtcs_for(
-        &mut self,
-        module: &Module,
-    ) -> AimResult<(Vec<DtcReport>, usize, Option<i64>)> {
+    fn uds_dtcs_for(&mut self, module: &Module) -> AimResult<(Vec<DtcReport>, usize, Option<i64>)> {
         let addr = Self::request_target(module)?;
         let home = match &addr {
             RequestTarget::Physical(a) => self.reach_module(a),

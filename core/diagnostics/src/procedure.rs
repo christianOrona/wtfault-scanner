@@ -526,6 +526,9 @@ mod catalogue_tests {
             }
         }
 
-        assert!(unknown.is_empty(), "preconditions watching signals that do not exist: {unknown:?}");
+        assert!(
+            unknown.is_empty(),
+            "preconditions watching signals that do not exist: {unknown:?}"
+        );
     }
 }

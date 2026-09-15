@@ -38,7 +38,9 @@ mod tests {
     /// progress panel.
     fn recorded_tool_names(source: &str) -> BTreeSet<String> {
         let mut names = BTreeSet::new();
-        for (_, rest) in source.match_indices("record_invocation(").map(|(i, m)| (i, &source[i + m.len()..])) {
+        for (_, rest) in
+            source.match_indices("record_invocation(").map(|(i, m)| (i, &source[i + m.len()..]))
+        {
             // The name is the first string literal after the call opens. It is
             // written inline at every call site in this codebase; a variable
             // there would be missed, and the test below would then be checking
@@ -78,9 +80,7 @@ mod tests {
                     return None;
                 }
                 let key = key.trim();
-                key.chars()
-                    .all(|c| c.is_ascii_lowercase() || c == '_')
-                    .then(|| key.to_string())
+                key.chars().all(|c| c.is_ascii_lowercase() || c == '_').then(|| key.to_string())
             })
             .collect()
     }
@@ -94,8 +94,9 @@ mod tests {
         let root = repo_root();
         let service = std::fs::read_to_string(root.join("core/diagnostics/src/service.rs"))
             .expect("the diagnostic service source");
-        let dictionary = std::fs::read_to_string(root.join("apps/desktop/src/hooks/useAgentProgress.ts"))
-            .expect("the progress dictionary source");
+        let dictionary =
+            std::fs::read_to_string(root.join("apps/desktop/src/hooks/useAgentProgress.ts"))
+                .expect("the progress dictionary source");
 
         let recorded = recorded_tool_names(&service);
         let described = dictionary_keys(&dictionary);
