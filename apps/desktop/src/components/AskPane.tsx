@@ -7,7 +7,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { api, describeError } from "../api/client";
-import type { AgentQuestion, AgentStatus, TraceEntry } from "../api/types";
+import type { AgentQuestion, AgentStatus, ProposedChange, TraceEntry } from "../api/types";
+import { ChangeFlow } from "./ChangeFlow";
 import { ErrorBanner, Spinner } from "./primitives";
 import { PaneIntro } from "../explain";
 import { TraceList } from "./InspectPane";
@@ -21,6 +22,8 @@ interface Turn {
   /** Which option they picked, once they have. Keeps the buttons on screen as
    *  a record of what was asked rather than vanishing the question. */
   answered?: string;
+  /** A change the assistant previewed, offered to the person to make. */
+  proposal?: ProposedChange | null;
 }
 
 /**
@@ -106,6 +109,7 @@ export function AskPane({
           content: res.text || "(the model returned nothing)",
           trace: res.trace,
           question: res.question,
+          proposal: res.proposed_change ?? null,
         },
       ]);
       onFinished?.();
@@ -163,6 +167,21 @@ export function AskPane({
               {t.role === "user" ? "you" : "ai mechanic"}
             </div>
             <div style={{ whiteSpace: "pre-wrap" }}>{renderInline(t.content)}</div>
+            {/* The change itself, where the request for it was answered. The
+                assistant chose which setting and which way; everything on the
+                card — bytes, checks, the button — comes from the core, read
+                from the vehicle as it is drawn, and nothing happens until the
+                person types the confirmation. */}
+            {t.proposal && (
+              <div className="proposed-change">
+                <ChangeFlow
+                  featureId={t.proposal.feature_id}
+                  desired={t.proposal.desired}
+                  autoPreview
+                  onChanged={onFinished}
+                />
+              </div>
+            )}
             {t.question && (
               <AskedBack
                 question={t.question}

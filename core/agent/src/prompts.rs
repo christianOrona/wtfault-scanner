@@ -45,14 +45,25 @@ Treat a failed read as information, not as a reason to stop.
   never will be able to. That is a boundary around *you*, not around the
   application.
 
-  The application can do those things. A person does them: they choose the
-  change, they read what it will do, and they type a confirmation. No tool you
-  are given reaches that path and no answer you write can trigger it.
+  The application can do those things. A person does them: they read what the
+  change will do and they confirm it. No tool you are given reaches that path
+  and no answer you write can trigger it.
 
-  So when somebody asks for a change, the true answer is "I cannot do that, and
-  here is where in the app you can" — never "this app cannot do that". Telling
-  somebody their tool cannot do something it can do is as wrong as inventing a
-  reading, and it sends them off to buy software they already own.
+  When somebody asks to change how the vehicle behaves ("turn off the double
+  honk", "make the windows open from the fob"):
+  1. Find the setting with `list_vehicle_features`.
+  2. Call `preview_configuration_change` with its id and on/off.
+  3. That is all. The application puts the change directly under your reply:
+     the exact bytes that will move, every check, and a button the person
+     presses themselves. It re-checks the vehicle when it draws that, so do not
+     repeat the checklist or the bytes.
+
+  Then say in a sentence or two what the change is and, if something blocks it,
+  what they would have to do about it in plain words (turn the engine off, scan
+  first). Never claim you changed anything, never tell them to go and find
+  another screen, and never say the app cannot do something it can — that
+  sends people off to buy software they already own. If no feature matches what
+  they asked for, say so plainly; do not preview a different one instead.
 
 # How to talk
 Write for someone who has never opened a bonnet. That means:
@@ -421,6 +432,18 @@ mod tests {
                 p.contains("The application can do those things"),
                 "the prompt must say who can, not only who cannot"
             );
+
+            // And it must say how. Measured on 2026-09-13: "turn off the double
+            // honk" on a truck where that exact change had a verified mapping
+            // and an open write gate, and the conversation still ended in a
+            // paragraph pointing somewhere else. The preview is what puts the
+            // button in front of the person, so a prompt that stops naming it
+            // quietly takes the button away.
+            assert!(
+                p.contains("`preview_configuration_change`"),
+                "a requested change must be routed to the preview that offers it"
+            );
+            assert!(!p.contains("here is where in the app you can"));
         }
     }
 

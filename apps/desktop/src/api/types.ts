@@ -554,6 +554,41 @@ export interface ChatResponse {
   trace: TraceEntry[];
   /** Null on almost every turn. */
   question: AgentQuestion | null;
+  /** A change the assistant previewed: which setting, and which way. Only
+   *  those two things — the card asks the core for a fresh plan before it
+   *  draws a button, so nothing the model was shown reaches the person. */
+  proposed_change?: ProposedChange | null;
+}
+
+export interface ProposedChange {
+  feature_id: string;
+  desired: "on" | "off";
+}
+
+/** What a configuration write reports, read back from the module. */
+export interface ApplyResult {
+  feature_id: string;
+  changed: boolean;
+  /** Set when nothing was written, e.g. "already_set". */
+  reason?: string;
+  did?: string;
+  module?: string;
+  before?: string;
+  after?: string;
+  state_before?: boolean;
+  state_after?: boolean;
+  /** True when the module reported back exactly what was written. */
+  verified?: boolean;
+  /** Most modules only act on a new value at power-up. */
+  cycle_ignition_to_apply?: boolean;
+}
+
+/** What asking a module whether it takes writes found. */
+export interface WriteGateResult {
+  module: string;
+  writes_open_without_security?: boolean;
+  writes_accepted?: boolean;
+  verdict?: string;
 }
 
 /// One service 06 on-board monitor test result, as the core reports it.
@@ -678,6 +713,13 @@ export interface ChangePlan {
    * Absent when there is no executable mapping or the record could not be read
    * — both of which a failed check already explains. */
   bytes?: ByteChange | null;
+  /** True when the only thing in the way is that nobody has asked the owning
+   *  module whether it accepts writes — which the app can do itself, under the
+   *  same confirmation as the change. */
+  needs_write_gate_probe?: boolean;
+  /** True when where this setting lives is unverified, so the vehicle's
+   *  behaviour after the change is the measurement. */
+  experiment?: boolean;
 }
 
 /** What a change does to a module's record, byte for byte. */

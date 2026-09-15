@@ -1567,3 +1567,156 @@ fn module_keys(service: &DiagnosticService) -> std::collections::BTreeSet<String
         .map(|m| m.module_key)
         .collect()
 }
+
+/// A verified mapping on a module nobody has yet asked about writes.
+///
+/// The same setting as [`MIRROR_PROFILE`] without `write_verification`, which
+/// is the double horn chirp's situation on a real truck before this app wrote
+/// it: where the bits live was measured, whether the module takes writes was
+/// not.
+const GATE_PROFILE: &str = r#"
+version: 1
+profile: test
+features:
+  - id: test_body_setting
+    name: "A body module setting"
+    risk: convenience
+    easy: "A comfort setting held in the body module."
+    technical: "Bit 2 of byte 3 of data identifier DE01 on the module at 7A0."
+    modules: ["7A8"]
+    verification: verified
+    source: "measured on the simulated vehicle"
+    mapping:
+      kind: data_identifier_bits
+      module: 0x7A0
+      did: 0xDE01
+      byte: 3
+      mask: 0x04
+      on: 0x04
+      off: 0x00
+"#;
+
+/// A service over a database file, so a second one can open the same history.
+fn service_on_disk(
+    yaml: &str,
+    db: &std::path::Path,
+) -> (DiagnosticService, aim_simulator::SharedEmulator, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("test-profile.yaml"), yaml).unwrap();
+    let decoders = DecoderSet::with_profiles(dir.path()).unwrap();
+    let transport = SimulatedTransport::new(ScenarioId::Healthy);
+    let emulator = transport.emulator();
+    let adapter: Box<dyn DiagnosticAdapter> =
+        Box::new(Elm327Adapter::new(Box::new(transport), Elm327Config::fast()));
+    let mut service = DiagnosticService::start(
+        adapter,
+        SessionStore::open(db).unwrap(),
+        Arc::new(decoders),
+        SafetyGate::phase1(),
+        None,
+    )
+    .unwrap();
+    assert!(service.connect(USER).success);
+    (service, emulator, dir)
+}
+
+fn plan_of(r: &aim_types::ToolResult) -> aim_diagnostics::config::ChangePlan {
+    assert!(r.success, "preview failed: {:?}", r.error);
+    serde_json::from_value(r.data.clone().unwrap()).unwrap()
+}
+
+/// "Turn off the double honk", from the interface's side.
+///
+/// When the one thing between a person and the change is that nobody has asked
+/// the module whether it takes writes, the plan says exactly that, so the
+/// interface can offer to ask and then make the change under one confirmation
+/// instead of handing somebody a paragraph about write gates. Asking is
+/// addressed by feature — the screen never learns that the setting lives at
+/// 7A8 and is requested at 7A0 — and once it has been asked the same plan can
+/// go ahead.
+#[test]
+fn a_change_blocked_only_by_an_unasked_module_is_offered_and_asking_opens_it() {
+    let (mut service, emulator, _dir) = service_with_profile_and_emulator(GATE_PROFILE);
+    assert!(service.identify_vehicle(USER).success);
+    key_on_engine_off(&emulator);
+    prepare_for_write(&mut service);
+
+    let before = plan_of(&service.preview_configuration_change(
+        "test_body_setting",
+        aim_diagnostics::DesiredValue::On,
+        USER,
+    ));
+    assert!(!before.can_apply);
+    assert!(before.needs_write_gate_probe, "the unasked gate is the only blocker: {before:#?}");
+    let failed: Vec<&str> =
+        before.checks.iter().filter(|c| !c.passed).map(|c| c.id.as_str()).collect();
+    assert_eq!(failed, vec!["mapping_known"]);
+
+    let probe = service.probe_write_gate_for_feature("test_body_setting", USER, Some("the-owner"));
+    assert!(probe.success, "probe failed: {:?}", probe.error);
+    assert_eq!(probe.data.as_ref().unwrap()["writes_open_without_security"], true);
+
+    let after = plan_of(&service.preview_configuration_change(
+        "test_body_setting",
+        aim_diagnostics::DesiredValue::On,
+        USER,
+    ));
+    assert!(after.can_apply, "asking the module was the whole of it: {after:#?}");
+    assert!(!after.needs_write_gate_probe);
+}
+
+/// Asking the module is never offered as the way past something it cannot fix.
+///
+/// Measured on a 2019 F-250 on 2026-09-13: the engine was idling. Offering to
+/// probe the gate and then refusing the write anyway would be a request to the
+/// vehicle made for nothing, under a confirmation that promised a change.
+#[test]
+fn asking_the_module_is_not_offered_while_something_else_blocks_the_change() {
+    let (mut service, _emulator, _dir) = service_with_profile_and_emulator(GATE_PROFILE);
+    assert!(service.identify_vehicle(USER).success);
+    // Engine left running, as every scenario idles.
+    prepare_for_write(&mut service);
+
+    let plan = plan_of(&service.preview_configuration_change(
+        "test_body_setting",
+        aim_diagnostics::DesiredValue::On,
+        USER,
+    ));
+    assert!(!plan.can_apply);
+    assert!(plan.checks.iter().any(|c| c.id == "engine_off" && !c.passed));
+    assert!(!plan.needs_write_gate_probe);
+}
+
+/// A gate measured once is still open after the application restarts.
+///
+/// The probe has always written its result into vehicle knowledge, with a
+/// comment saying that was so it would survive a restart. Nothing read it back,
+/// so every reconnect blocked every write until somebody probed again — three
+/// times in one sitting on a real truck.
+#[test]
+fn a_write_gate_measured_before_a_restart_is_still_known_after_it() {
+    let db_dir = tempfile::tempdir().unwrap();
+    let db = db_dir.path().join("sessions.sqlite");
+
+    {
+        let (mut first, emulator, _dir) = service_on_disk(GATE_PROFILE, &db);
+        assert!(first.identify_vehicle(USER).success);
+        key_on_engine_off(&emulator);
+        prepare_for_write(&mut first);
+        let probe = first.probe_write_gate_for_feature("test_body_setting", USER, Some("the-owner"));
+        assert!(probe.success, "probe failed: {:?}", probe.error);
+    }
+
+    // A new process, a new session, the same vehicle.
+    let (mut second, emulator, _dir) = service_on_disk(GATE_PROFILE, &db);
+    assert!(second.identify_vehicle(USER).success);
+    key_on_engine_off(&emulator);
+    prepare_for_write(&mut second);
+
+    let plan = plan_of(&second.preview_configuration_change(
+        "test_body_setting",
+        aim_diagnostics::DesiredValue::On,
+        USER,
+    ));
+    assert!(plan.can_apply, "the remembered gate was not read back: {plan:#?}");
+}

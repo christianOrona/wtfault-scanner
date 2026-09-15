@@ -789,6 +789,97 @@ Recorded readings, newest first. `signal` is optional.
 `raw_value` is the hex the reading was decoded from — every stored measurement
 can be re-derived from its evidence.
 
+### Changing a setting
+
+Three calls, always in this order from the interface, and all addressed by
+**feature id**. None of them has anywhere to put a module address, a data
+identifier or a byte offset: where a setting lives comes from a vehicle profile,
+never from a caller.
+
+#### `POST /api/v1/features/{id}/preview` — what a change would do
+
+Body: `{ "desired": "on" | "off" }`. Sends nothing that changes the vehicle. It
+does read from it: the record the setting lives in, and vehicle speed, engine
+speed and control module voltage, because the preconditions a write is
+authorised against are evaluated here too — a preview that skipped them once
+said `can_apply: true` and the write that followed was refused.
+
+```json
+{
+  "feature_id": "double_honk_on_leaving",
+  "desired": "off",
+  "can_apply": false,
+  "needs_write_gate_probe": true,
+  "experiment": false,
+  "checks": [ { "id": "mapping_known", "passed": false, "question": "...", "detail": "...", "blocking_by_design": false } ],
+  "bytes": {
+    "identifier": "DE28",
+    "before": "04010001030001010101",
+    "after":  "04010001030000010101",
+    "byte_index": 6, "byte_before": "01", "byte_after": "00",
+    "already_as_asked": false
+  }
+}
+```
+
+- `bytes` is read off the vehicle during the preview, not reconstructed from the
+  catalogue. Absent when there is no executable mapping or the record could not
+  be read.
+- `needs_write_gate_probe` is true only when the one thing in the way is that
+  nobody has asked the owning module whether it accepts writes. The interface
+  may then ask and change under a single confirmation; for any other blocker it
+  must not.
+- `experiment` is true when the location of the setting is unverified, so the
+  vehicle's behaviour afterwards is the measurement. The confirmation has to say
+  so.
+- Precondition checks appear alongside the rest with their own ids:
+  `ignition_on`, `engine_off`, `vehicle_stationary`, `stable_connection`,
+  `battery_voltage`.
+
+#### `POST /api/v1/features/{id}/write-gate` — does the owning module accept writes
+
+Body: `{ "confirmation": "..." }` (required, recorded verbatim). Writes to an
+identifier the module has just confirmed it does not have, so nothing can land;
+the reason for the refusal is the measurement. The result is remembered against
+the vehicle, so a gate measured open stays open across restarts.
+
+```json
+{ "module": "ECU_72E", "writes_open_without_security": true, "verdict": "..." }
+```
+
+#### `POST /api/v1/features/{id}/apply` — make the change
+
+Body: `{ "desired": "on" | "off", "confirmation": "..." }`. Re-evaluates the
+plan from scratch rather than trusting the preview, writes, and reads the record
+back. Never reachable by the agent.
+
+```json
+{
+  "changed": true, "verified": true, "did": "DE28", "module": "726",
+  "before": "04010001030001010101", "after": "04010001030000010101",
+  "state_before": true, "state_after": false, "cycle_ignition_to_apply": true
+}
+```
+
+`verified` means the module read back what was written. It does not mean the
+vehicle behaves differently — most modules act on a new value only at power-up,
+and only somebody looking at the vehicle after a key cycle can say.
+
+#### From the assistant
+
+`POST /api/v1/agent/messages` returns `proposed_change` when the model ran
+`preview_configuration_change` successfully during the turn:
+
+```json
+{ "text": "...", "trace": [], "question": null,
+  "proposed_change": { "feature_id": "double_honk_on_leaving", "desired": "off" } }
+```
+
+Only the feature and the value. The interface calls `preview` itself before it
+draws a button, so nothing the model was shown — a check, a byte — reaches the
+person by way of the model, and the model has no route to `write-gate` or
+`apply`.
+
 ---
 
 ## WebSockets
@@ -884,10 +975,8 @@ the UI can render "not in this build" rather than inferring it from a 404.
 
 | Endpoint | Why |
 |---|---|
-| `POST /agent/messages` | The agent runtime is not built. The tool registry it will call through is live at `GET /api/v1/tools`. |
 | `POST /modules/{key}/tests/{testId}/run` | No active (L1) test is implemented. Active tests need confirmation and precondition UX, scheduled for the bidirectional-diagnostics phase. |
 
-Also absent by design: any write, configuration or programming operation.
-`obd2.clear_dtcs` is implemented end to end and permanently refused —
-`GET /capabilities` lists it as `enabled: false`, and calling it returns
-`permission_level_disabled` before a single byte reaches the vehicle.
+Clearing codes (`POST /dtcs/clear`) and changing a setting (see *Changing a
+setting*) are implemented, and both need a typed confirmation from a person.
+Programming (L3) is compiled out.

@@ -19,10 +19,18 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, describeError } from "../api/client";
 import { VehicleKnowledgePanel } from "./VehicleKnowledgePanel";
-import type { ChangePlan, FeatureView, FeaturesData, ToolResult } from "../api/types";
+import type { FeatureView, FeaturesData, ToolResult } from "../api/types";
+import { ChangeFlow } from "./ChangeFlow";
 import { ErrorBanner, FailedResult, Spinner, Warnings } from "./primitives";
 import { PaneIntro, useExplain } from "../explain";
 import { AsBuiltPanel } from "./AsBuiltPanel";
+
+const MEASURED_HERE = {
+  label: "measured here",
+  tone: "var(--ok)",
+  blurb:
+    "Where this setting lives was measured on this vehicle. Nobody has changed it with this app yet: the first time, the app asks the module whether it accepts changes, then reads the new value back.",
+};
 
 const SUPPORT: Record<FeatureView["support"], { label: string; tone: string; blurb: string }> = {
   described_only: {
@@ -34,8 +42,12 @@ const SUPPORT: Record<FeatureView["support"], { label: string; tone: string; blu
   read_only: {
     label: "can be read",
     tone: "var(--caution)",
+    // Not "never changed". This used to say so, and for a comfort setting the
+    // app will in fact offer to try — so the card contradicted the button
+    // beneath it. The preview is where "can it be changed here" is decided,
+    // and the blurb now points there instead of pre-empting it.
     blurb:
-      "Somebody supplied the location of this setting but it has not been checked against a real vehicle, so it can be looked at and never changed.",
+      "Somebody supplied the location of this setting but it has not been checked against this vehicle. It can be read. Whether it can be changed here depends on what kind of setting it is — the preview below says, and calls it an experiment if it would be one.",
   },
   writable: {
     label: "can be changed",
@@ -175,6 +187,7 @@ export function FeaturesPane({ connected }: { connected: boolean }) {
           feature={f}
           expanded={open === f.id}
           onToggle={() => setOpen(open === f.id ? null : f.id)}
+          onChanged={() => void load()}
         />
       ))}
 
@@ -189,26 +202,27 @@ function FeatureCard({
   feature,
   expanded,
   onToggle,
+  onChanged,
 }: {
   feature: FeatureView;
   expanded: boolean;
   onToggle: () => void;
+  /** After a change the module read back, so the list shows the new state. */
+  onChanged: () => void;
 }) {
   const { easy } = useExplain();
-  const [plan, setPlan] = useState<ToolResult<ChangePlan> | null>(null);
-  const [busy, setBusy] = useState(false);
-  const s = SUPPORT[feature.support];
-
-  async function preview(desired: "on" | "off") {
-    setBusy(true);
-    try {
-      setPlan(await api.previewFeature(feature.id, desired));
-    } catch {
-      /* The plan is advisory; a failure to fetch it is not worth a banner. */
-    } finally {
-      setBusy(false);
-    }
-  }
+  // Which way the person is looking at changing it. Null until they pick,
+  // because a preview reads the vehicle and should not happen on expanding a
+  // card to read about it.
+  const [desired, setDesired] = useState<"on" | "off" | null>(null);
+  // A location measured on this vehicle, on a module nobody has written yet, is
+  // "read only" to the catalogue and was labelled "can be read … never
+  // changed" — on the double horn chirp, directly above the button that turned
+  // it off. It is a measured setting awaiting its first change, and says so.
+  const s =
+    feature.support === "read_only" && feature.measured_on_this_vehicle && feature.verification === "verified"
+      ? MEASURED_HERE
+      : SUPPORT[feature.support];
 
   return (
     <div className="card">
@@ -252,8 +266,9 @@ function FeatureCard({
                   Read it and this app will tell you what it thinks the setting currently is.
                   Check that against what your vehicle actually shows. If they agree, that is
                   evidence measured on <em>your</em> vehicle; if they do not, this mapping is
-                  not for your truck and will not be used on it. Either way nothing is written,
-                  and it stays unwritable until something confirms it here.
+                  not for your truck. Reading writes nothing. Whether it can be changed here is
+                  decided by the checks in the preview — a comfort setting may be offered as an
+                  experiment, and is called one.
                 </div>
               </span>
             </div>
@@ -305,15 +320,32 @@ function FeatureCard({
           )}
 
           <div className="row" style={{ marginTop: 10, gap: 6 }}>
-            <button className="mini" onClick={() => void preview("on")} disabled={busy}>
-              {busy ? <Spinner /> : "What would turning it on involve?"}
+            <button
+              className={`mini${desired === "on" ? " primary" : ""}`}
+              onClick={() => setDesired("on")}
+            >
+              What would turning it on involve?
             </button>
-            <button className="mini" onClick={() => void preview("off")} disabled={busy}>
+            <button
+              className={`mini${desired === "off" ? " primary" : ""}`}
+              onClick={() => setDesired("off")}
+            >
               Turning it off?
             </button>
           </div>
 
-          {plan?.data && <PlanChecks plan={plan.data} />}
+          {/* Keyed on the direction so switching from on to off starts a
+              fresh preview instead of showing the other direction's bytes
+              under the new button. */}
+          {desired && (
+            <ChangeFlow
+              key={desired}
+              featureId={feature.id}
+              desired={desired}
+              autoPreview
+              onChanged={onChanged}
+            />
+          )}
 
           {!easy && (
             <div className="provenance" style={{ marginTop: 8 }}>
@@ -327,118 +359,6 @@ function FeatureCard({
         </>
       )}
     </div>
-  );
-}
-
-/**
- * Every check and its answer.
- *
- * Failures split into two kinds and they read very differently: something the
- * user could fix (a better adapter, the key on, a charger on the battery), and
- * something this build will never do. Presenting both as "unavailable" would
- * send someone shopping for a cable that will not help.
- */
-function PlanChecks({ plan }: { plan: ChangePlan }) {
-  return (
-    <div className="section" style={{ marginTop: 12, marginBottom: 0 }}>
-      {/* The change itself, before the permission to make it. This screen used
-          to show eleven green ticks and never once say which bytes were about
-          to move — which meant nobody could catch a mapping pointed at the
-          wrong byte until after it had landed on their vehicle. */}
-      {plan.bytes && <BytesToChange bytes={plan.bytes} />}
-      <h2>
-        What has to be true{plan.can_apply ? "" : " — and is not"}
-      </h2>
-      <table>
-        <tbody>
-          {plan.checks.map((c) => (
-            <tr key={c.id}>
-              <td style={{ width: 26 }}>
-                <span style={{ color: c.passed ? "var(--ok)" : c.blocking_by_design ? "var(--serious)" : "var(--caution)" }}>
-                  {c.passed ? "✓" : c.blocking_by_design ? "✕" : "!"}
-                </span>
-              </td>
-              <td>
-                <div>{c.question}</div>
-                {c.detail && <div className="explain" style={{ marginTop: 2 }}>{c.detail}</div>}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-/** The record as it is and as it would be, with the one byte that moves marked.
- *
- * Read off the vehicle during the preview, not reconstructed from the
- * catalogue: the whole value of showing it is that it would look wrong if the
- * mapping were aimed at the wrong byte, and a rendering of what the catalogue
- * *says* would look right either way.
- *
- * The pair of full records is here deliberately, next to the single byte. The
- * byte is what somebody checks; the records are what they compare against a
- * backup afterwards, and that comparison is the only way to prove a write did
- * nothing it was not asked to do. */
-function BytesToChange({ bytes }: { bytes: NonNullable<ChangePlan["bytes"]> }) {
-  return (
-    <div style={{ marginBottom: 14 }}>
-      <h2>What would change</h2>
-      {bytes.already_as_asked ? (
-        <p className="explain" style={{ marginTop: 4 }}>
-          Nothing. This setting is already what you are asking for — applying it
-          would write back the bytes that are already there.
-        </p>
-      ) : (
-        <p className="explain" style={{ marginTop: 4 }}>
-          One byte, in record <span className="mono">{bytes.identifier}</span>:
-          byte {bytes.byte_index} goes from{" "}
-          <span className="mono">{bytes.byte_before}</span> to{" "}
-          <span className="mono">{bytes.byte_after}</span>. Everything else in
-          the record is written back exactly as it was read.
-        </p>
-      )}
-      <div style={{ overflowX: "auto" }}>
-        <table>
-          <tbody>
-            <tr>
-              <td className="faint" style={{ width: 60 }}>now</td>
-              <td><RecordBytes hex={bytes.before} mark={bytes.byte_index} /></td>
-            </tr>
-            <tr>
-              <td className="faint">after</td>
-              <td><RecordBytes hex={bytes.after} mark={bytes.byte_index} /></td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-/** One record, split into bytes, with the one that moves picked out.
- *
- * Split because nobody can count to byte six along a twenty-character string,
- * and being able to is the entire point of showing it. */
-function RecordBytes({ hex, mark }: { hex: string; mark: number }) {
-  const bytes = hex.replace(/\s+/g, "").match(/.{1,2}/g) ?? [];
-  return (
-    <span className="mono" style={{ letterSpacing: "0.04em" }}>
-      {bytes.map((b, i) => (
-        <span
-          key={i}
-          style={
-            i === mark
-              ? { color: "var(--accent)", fontWeight: 600, textDecoration: "underline" }
-              : undefined
-          }
-        >
-          {b}
-          {i < bytes.length - 1 ? " " : ""}
-        </span>
-      ))}
-    </span>
   );
 }
 

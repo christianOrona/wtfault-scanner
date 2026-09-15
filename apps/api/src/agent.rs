@@ -143,6 +143,67 @@ pub fn pending_question(sink: &RecordingSink) -> Option<Value> {
     }))
 }
 
+/// The tool whose successful run puts a change in front of the person.
+pub const PREVIEW_CHANGE: &str = "preview_configuration_change";
+
+/// The change the model most recently previewed, if it previewed one that ran.
+///
+/// # Why this exists
+///
+/// Somebody typed "turn off the double honk after I leave the cabin" and the
+/// application could do it — the mapping was measured, the module accepted
+/// writes — and the conversation still ended in prose. The model is not allowed
+/// to apply a change, correctly, and nothing else was allowed to either: the
+/// only way through was a screen the person had to find, or a request typed by
+/// hand against the API.
+///
+/// So a preview that ran becomes the offer. The interface puts the change under
+/// the reply — the bytes that move, every check, and a button — and the person
+/// presses it or does not.
+///
+/// # What is carried and what is not
+///
+/// Only the two things the model chose: which feature, and on or off. Not the
+/// plan it was shown. The interface asks the core for a fresh preview when it
+/// draws the card, so what the person authorises is what the vehicle says now
+/// rather than what a model was told a minute ago — and a model has no way to
+/// put a check result, a byte or a module address in front of the button.
+///
+/// A preview that failed to run offers nothing. The model has the error and will
+/// say so; an Apply card for a feature id that does not exist would be the
+/// interface inventing an option.
+pub fn proposed_change(sink: &RecordingSink) -> Option<Value> {
+    let mut pending: Option<&Value> = None;
+    let mut offered: Option<&Value> = None;
+    for e in &sink.events {
+        match e {
+            AgentEvent::ToolStarted { name, arguments } if name == PREVIEW_CHANGE => {
+                pending = Some(arguments);
+            }
+            AgentEvent::ToolFinished { name, success, .. } if name == PREVIEW_CHANGE => {
+                if *success {
+                    offered = pending.or(offered);
+                }
+                pending = None;
+            }
+            _ => {}
+        }
+    }
+
+    let args = offered?;
+    let feature_id = args.get("feature_id").and_then(Value::as_str)?.trim();
+    if feature_id.is_empty() {
+        return None;
+    }
+    // The same reading `aim_tools` gives it, so the card and the preview the
+    // model saw cannot disagree about which way the switch was going.
+    let desired = match args.get("desired").and_then(Value::as_str) {
+        Some("off") => "off",
+        _ => "on",
+    };
+    Some(serde_json::json!({ "feature_id": feature_id, "desired": desired }))
+}
+
 #[async_trait::async_trait]
 impl ToolExecutor for CoreExecutor {
     fn specs(&self) -> Vec<ToolSpec> {
@@ -444,4 +505,71 @@ mod tests {
         // doing against the vehicle.
         assert!(spec.description.contains("could read from the vehicle"), "{}", spec.description);
     }
+
+    fn previewed(runs: &[(serde_json::Value, bool)]) -> RecordingSink {
+        let mut sink = RecordingSink::default();
+        for (arguments, success) in runs {
+            sink.emit(AgentEvent::ToolStarted {
+                name: PREVIEW_CHANGE.to_string(),
+                arguments: arguments.clone(),
+            });
+            sink.emit(AgentEvent::ToolFinished {
+                name: PREVIEW_CHANGE.to_string(),
+                success: *success,
+                evidence_ref: None,
+            });
+        }
+        sink
+    }
+
+    /// "Turn off the double honk" ends in something a person can press.
+    ///
+    /// Only the feature and the value travel. The interface asks the core for a
+    /// fresh plan before it draws a button, so nothing the model was shown — a
+    /// check result, a byte — reaches the person by way of the model.
+    #[test]
+    fn a_preview_that_ran_becomes_an_offer_of_feature_and_value_only() {
+        let sink = previewed(&[(
+            serde_json::json!({ "feature_id": "double_honk_on_leaving", "desired": "off" }),
+            true,
+        )]);
+        let offer = proposed_change(&sink).expect("a successful preview is offered");
+        assert_eq!(offer["feature_id"], "double_honk_on_leaving");
+        assert_eq!(offer["desired"], "off");
+        assert_eq!(offer.as_object().unwrap().len(), 2, "nothing but feature and value");
+    }
+
+    /// A preview that failed — an unknown feature id, nothing connected — is
+    /// the model's to explain. A button for it would be the interface inventing
+    /// an option the core has just refused to describe.
+    #[test]
+    fn a_preview_that_failed_offers_nothing() {
+        let sink = previewed(&[(serde_json::json!({ "feature_id": "made_up", "desired": "on" }), false)]);
+        assert!(proposed_change(&sink).is_none());
+    }
+
+    /// Several previews in one turn — comparing on with off, or trying a
+    /// second feature after the first was refused — offer the last that ran.
+    /// A failure after it does not erase it, and cannot put its own arguments
+    /// in its place.
+    #[test]
+    fn the_last_preview_that_ran_is_the_one_offered() {
+        let sink = previewed(&[
+            (serde_json::json!({ "feature_id": "global_open_close", "desired": "on" }), true),
+            (serde_json::json!({ "feature_id": "double_honk_on_leaving", "desired": "off" }), true),
+            (serde_json::json!({ "feature_id": "made_up", "desired": "on" }), false),
+        ]);
+        let offer = proposed_change(&sink).unwrap();
+        assert_eq!(offer["feature_id"], "double_honk_on_leaving");
+    }
+
+    /// No preview, no card — however much else the turn did.
+    #[test]
+    fn a_turn_without_a_preview_offers_no_change() {
+        let mut sink = RecordingSink::default();
+        sink.emit(AgentEvent::ToolStarted { name: "list_vehicle_features".into(), arguments: serde_json::json!({}) });
+        sink.emit(AgentEvent::ToolFinished { name: "list_vehicle_features".into(), success: true, evidence_ref: None });
+        assert!(proposed_change(&sink).is_none());
+    }
+
 }

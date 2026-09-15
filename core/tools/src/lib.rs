@@ -290,7 +290,10 @@ impl ToolRegistry {
                  user precisely what stands in the way — a wrong adapter, a flat battery, or a \
                  setting this build refuses to touch. You may only name a feature id from \
                  `list_vehicle_features`. You cannot name a module, an address, or a byte: \
-                 where a setting lives comes from verified data, never from you.",
+                 where a setting lives comes from verified data, never from you. Call this \
+                 whenever somebody asks to change a setting: the application shows the person \
+                 this change under your reply with a button they press to make it, so it is how \
+                 a request becomes something they can act on.",
                 "Every check with its answer, and whether the change could go ahead.",
                 json!({
                     "type": "object",

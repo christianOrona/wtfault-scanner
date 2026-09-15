@@ -187,6 +187,36 @@ pub struct ChangePlan {
     /// anybody should authorise.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bytes: Option<ByteChange>,
+    /// True when the one thing between this plan and a write is that nobody
+    /// has asked the owning module whether it accepts writes.
+    ///
+    /// # Why the interface needs this spelled out
+    ///
+    /// That blocker is unlike every other one. A flat battery or a running
+    /// engine is the person's to fix; a risk class this build refuses is
+    /// nobody's. An unmeasured gate is the application's own homework: one
+    /// request that writes to an identifier the module has just said it does
+    /// not have, so nothing can land. Presenting it as a failed check with a
+    /// paragraph saying "probe the write gate first" left somebody who had
+    /// asked to turn off a horn chirp to work out what a write gate was.
+    ///
+    /// So the interface offers to do both — ask the module, then make the
+    /// change — under the one confirmation, and says so in the confirmation.
+    /// It may only do that when this is true, which is why it is computed
+    /// here, next to the checks, rather than inferred from their wording.
+    #[serde(default)]
+    pub needs_write_gate_probe: bool,
+    /// True when making this change would be an experiment: where the setting
+    /// lives has not been verified on a vehicle, so the vehicle's behaviour
+    /// afterwards is the measurement.
+    ///
+    /// Carried separately because the confirmation has to say it in words. The
+    /// check that permits an experiment explains this in its detail, and that
+    /// detail sits in a list of passing checks nobody opens before pressing a
+    /// button — which is exactly where a person must not first learn that the
+    /// bytes they are about to write are somebody else's guess.
+    #[serde(default)]
+    pub experiment: bool,
 }
 
 /// What a change does to a module's record, byte for byte.
@@ -605,7 +635,25 @@ pub fn plan_change(
         ));
     }
 
-    finish(request, Some(f), checks)
+    // Would measuring the gate be enough? Only for the mappings the two
+    // gate-dependent branches above would then accept, and only when nothing
+    // else failed — a gate probe offered past a flat battery is an offer to do
+    // something that still ends in a refusal.
+    let gate_would_unblock = f.support() == FeatureSupport::ReadOnly
+        && !gate_measured_open(f, ctx)
+        && f.mapping.as_ref().and_then(|m| m.as_data_identifier()).is_some()
+        && (f.verification == aim_types::VerificationStatus::Verified
+            || matches!(f.risk, aim_types::RiskClass::Cosmetic | aim_types::RiskClass::Convenience));
+    let only_the_gate = checks.iter().filter(|c| !c.passed).all(|c| c.id == "mapping_known");
+
+    let mut plan = finish(request, Some(f), checks);
+    plan.needs_write_gate_probe = gate_would_unblock && only_the_gate && !plan.can_apply;
+    // A write-verified feature is a known operation, and a verified location
+    // with an unmeasured write is a first attempt at a measured thing. Only an
+    // unverified location is a guess the vehicle has to settle.
+    plan.experiment = f.support() != FeatureSupport::Writable
+        && f.verification != aim_types::VerificationStatus::Verified;
+    plan
 }
 
 fn finish(request: &ChangeRequest, f: Option<&FeatureDef>, checks: Vec<Check>) -> ChangePlan {
@@ -626,6 +674,8 @@ fn finish(request: &ChangeRequest, f: Option<&FeatureDef>, checks: Vec<Check>) -
         // vehicle. Planning is a pure function of the catalogue and the
         // situation, and it stays that way.
         bytes: None,
+        needs_write_gate_probe: false,
+        experiment: false,
     }
 }
 
@@ -1102,6 +1152,25 @@ mod first_write {
             detail.contains("put back"),
             "the plan must say the original bytes are recoverable: {detail}"
         );
+
+        // And outside the detail too. That wording sits in a folded list of
+        // passing checks; the confirmation a person types into is drawn from
+        // this flag, and it has to know.
+        assert!(plan.experiment, "the confirmation must be told this is an experiment");
+    }
+
+    /// A verified location is a first attempt, not an experiment — the flag that
+    /// puts "this is a guess" in front of the confirmation must not cry wolf on
+    /// the double horn chirp, whose location was measured across a single
+    /// named change.
+    #[test]
+    fn a_verified_location_is_not_called_an_experiment() {
+        let mut f = feature(RiskClass::Cosmetic, did_mapping(), VerificationStatus::Verified);
+        f.write_verification = None;
+        let modules: Vec<String> = Vec::new();
+        let ctx = perfect_context(&modules);
+        let plan = plan_change(&request(), Some(&f), &ctx);
+        assert!(!plan.experiment);
     }
 
     /// The loosening above is scoped to convenience, and nothing else.

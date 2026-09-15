@@ -53,6 +53,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/modules/{key}/write-gate", post(probe_write_gate))
         .route("/api/v1/features/{id}/preview", post(preview_feature_change))
         .route("/api/v1/features/{id}/apply", post(apply_feature_change))
+        .route("/api/v1/features/{id}/write-gate", post(probe_feature_write_gate))
         .route("/api/v1/tools", get(tools))
         .route("/api/v1/tools/{name}", post(run_tool))
         // ---- adapter ----
@@ -232,7 +233,9 @@ async fn preview_feature_change(
 ) -> ApiResult<Json<ToolResult>> {
     Ok(Json(
         state
-            .with_service(move |s| s.preview_configuration_change(&id, body.desired, "user:api"))
+            .with_service_named("checking what a change would do", move |s| {
+                s.preview_configuration_change(&id, body.desired, "user:api")
+            })
             .await?,
     ))
 }
@@ -268,8 +271,33 @@ async fn apply_feature_change(
     }
     Ok(Json(
         state
-            .with_service(move |s| {
+            .with_service_named("changing a setting on the vehicle", move |s| {
                 s.apply_configuration_change(&id, body.desired, "user:api", &body.confirmation)
+            })
+            .await?,
+    ))
+}
+
+/// Ask the module that owns a feature whether it accepts writes.
+///
+/// Addressed by feature, not by module, so a screen offering to change "the
+/// double horn chirp" never has to know that it lives at 72E and is requested
+/// at 726. Writes nothing that can land: see
+/// [`aim_diagnostics::DiagnosticService::probe_write_gate_for_feature`].
+async fn probe_feature_write_gate(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<ClearBody>,
+) -> ApiResult<Json<ToolResult>> {
+    if body.confirmation.trim().is_empty() {
+        return Err(ApiError::bad_request(
+            "asking a module whether it accepts writes needs an explicit confirmation",
+        ));
+    }
+    Ok(Json(
+        state
+            .with_service_named("asking a module whether it accepts changes", move |s| {
+                s.probe_write_gate_for_feature(&id, "user:api", Some(body.confirmation.as_str()))
             })
             .await?,
     ))

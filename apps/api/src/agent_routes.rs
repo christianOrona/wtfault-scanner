@@ -362,6 +362,10 @@ pub async fn messages(
         // choose between. Null on almost every turn. Answering is an ordinary
         // next message, so nothing here can act on their behalf.
         "question": agent::pending_question(&sink),
+        // A change the model previewed, as feature and value only. The
+        // interface re-previews it against the vehicle before drawing a button,
+        // and a person presses that button or nothing happens.
+        "proposed_change": agent::proposed_change(&sink),
     })))
 }
 

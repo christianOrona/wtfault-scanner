@@ -41,7 +41,7 @@ struct Args {
     #[arg(long, value_name = "PORT")]
     serial: Option<String>,
 
-    /// Simulator scenario: healthy, dpf-regen, bus-silent.
+    /// Simulator scenario: healthy, dpf-regen, bus-silent, parked.
     #[arg(long, default_value = "healthy")]
     scenario: String,
 

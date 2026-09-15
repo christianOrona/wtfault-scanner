@@ -86,6 +86,15 @@ pub enum ScenarioId {
     /// The adapter works but the vehicle never answers — key off, unplugged
     /// bus, or a truck that does not speak the negotiated protocol.
     BusSilent,
+    /// Key on, engine off, nothing stored: the state a configuration change is
+    /// made in.
+    ///
+    /// Every other scenario idles, and the safety gate will not change a
+    /// setting with the engine running — so until this existed there was no
+    /// way to take a change from preview to read-back against the virtual
+    /// truck, from the interface, without one. That is how the change flow
+    /// shipped with no screen that could apply anything.
+    Parked,
 }
 
 impl ScenarioId {
@@ -95,6 +104,7 @@ impl ScenarioId {
             "healthy" => Some(ScenarioId::Healthy),
             "dpf-regen" | "dpf" | "regen" => Some(ScenarioId::DpfRegen),
             "bus-silent" | "silent" | "no-vehicle" => Some(ScenarioId::BusSilent),
+            "parked" | "engine-off" | "key-on" => Some(ScenarioId::Parked),
             _ => None,
         }
     }
@@ -105,12 +115,13 @@ impl ScenarioId {
             ScenarioId::Healthy => "healthy",
             ScenarioId::DpfRegen => "dpf-regen",
             ScenarioId::BusSilent => "bus-silent",
+            ScenarioId::Parked => "parked",
         }
     }
 
     /// Every scenario, for `--list-scenarios` and the API.
-    pub fn all() -> [ScenarioId; 3] {
-        [ScenarioId::Healthy, ScenarioId::DpfRegen, ScenarioId::BusSilent]
+    pub fn all() -> [ScenarioId; 4] {
+        [ScenarioId::Healthy, ScenarioId::DpfRegen, ScenarioId::BusSilent, ScenarioId::Parked]
     }
 }
 
@@ -194,6 +205,16 @@ impl Scenario {
                     ],
                 }
             }
+            ScenarioId::Parked => Scenario {
+                id,
+                description: String::from(
+                    "Key on, engine off, parked: the state a configuration change is made in",
+                ),
+                dtcs: Vec::new(),
+                vehicle_answers: true,
+                freeze_frame: None,
+                monitor_tests: Vec::new(),
+            },
             ScenarioId::BusSilent => Scenario {
                 id,
                 description: String::from(
@@ -222,6 +243,20 @@ impl Scenario {
         s.run_time_s = t;
 
         match id {
+            ScenarioId::Parked => {
+                // Sitting in a driveway with the key turned. No engine speed,
+                // no run time, no fuel flowing, and the battery at the resting
+                // voltage of a charged one rather than the alternator's 14 V —
+                // above the write floor, as a healthy truck is.
+                s.run_time_s = 0.0;
+                s.rpm = 0.0;
+                s.coolant_c = 31.0;
+                s.oil_temp_c = 29.0;
+                s.intake_air_c = 21.0;
+                s.ambient_c = 18.0;
+                s.map_kpa = 101.0;
+                s.battery_v = 12.62 + 0.02 * wobble(t, 0.05, 0.011);
+            }
             ScenarioId::Healthy | ScenarioId::BusSilent => {
                 // A warm truck idling in a workshop bay.
                 s.rpm = 712.0 + 22.0 * wobble(t, 0.21, 0.043);

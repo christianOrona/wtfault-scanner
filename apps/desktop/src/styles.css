@@ -1005,3 +1005,27 @@ a.mini.button:hover { border-color: var(--accent-dim); background: #1c222c; }
 .busybar .faint { font-size: 11px; }
 .busybar-what { display: inline-block; }
 .busybar-what::first-letter { text-transform: uppercase; }
+
+/* A change that went through. Green like the passing checks, because the
+   module read the value back — which is the only thing this app calls done. */
+.banner.ok { border-left-color: var(--ok); }
+
+/* The confirmation step of a vehicle change. Set apart from the checks above
+   it because it is the one part of the card that sends something. */
+.change-confirm {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  background: var(--bg-inset);
+}
+
+/* A change the assistant offered, inside its reply card. Indented and ruled
+   off so the bytes and the button read as the application's, not as more of
+   the model's prose. */
+.proposed-change {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line);
+}

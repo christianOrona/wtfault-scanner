@@ -14,7 +14,7 @@ import type {
   Health, IdentifyData, Measurement, ModuleIdentity, ModuleRecord, PortsResponse,
   SessionEvent, SessionSummary, SignalsData, ToolResult, ApiError, Dtc, MonitorTestsData,
   AgentStatus, InspectResponse, ChatResponse as AgentChatResponse,
-  ProvidersResponse, ProviderView, ProviderKindId, ProbeResult, Speed, ExplanationsResponse, FeaturesData, ChangePlan, ProfilesResponse, ClearResult, ReadinessData, ScanPurpose, Tone, FullScanData, ComparisonResponse, UpdateStatus, DownloadState, VehicleKnowledge, SupportReport, AsBuiltStatus, AsBuiltImport,
+  ProvidersResponse, ProviderView, ProviderKindId, ProbeResult, Speed, ExplanationsResponse, FeaturesData, ChangePlan, ApplyResult, WriteGateResult, ProfilesResponse, ClearResult, ReadinessData, ScanPurpose, Tone, FullScanData, ComparisonResponse, UpdateStatus, DownloadState, VehicleKnowledge, SupportReport, AsBuiltStatus, AsBuiltImport,
 } from "./types";
 
 /**
@@ -148,6 +148,13 @@ export const api = {
   features: () => request<ToolResult<FeaturesData>>("/features"),
   previewFeature: (id: string, desired: "on" | "off") =>
     post<ToolResult<ChangePlan>>(`/features/${enc(id)}/preview`, { desired }),
+  /** Ask the module that owns a feature whether it takes writes. Writes to an
+   *  identifier the module has just said it does not have, so nothing lands. */
+  probeFeatureGate: (id: string, confirmation: string) =>
+    post<ToolResult<WriteGateResult>>(`/features/${enc(id)}/write-gate`, { confirmation }),
+  /** Change a setting. The confirmation is recorded verbatim in the audit trail. */
+  applyFeature: (id: string, desired: "on" | "off", confirmation: string) =>
+    post<ToolResult<ApplyResult>>(`/features/${enc(id)}/apply`, { desired, confirmation }),
 
   ports: (probe = false) => request<PortsResponse>(`/adapters/ports${probe ? "?probe=true" : ""}`),
   adapter: () => request<AdapterStatus>("/adapter"),

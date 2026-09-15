@@ -2509,7 +2509,7 @@ impl DiagnosticService {
     ) -> AimResult<Payload> {
         let modules: Vec<String> =
             self.store.modules(&self.session.id)?.into_iter().map(|m| m.module_key).collect();
-        let gates: Vec<String> = self.write_gate_open.iter().cloned().collect();
+        let gates = self.write_gates_known_open();
         let caps = self.adapter.capabilities();
         let request = crate::config::ChangeRequest { feature_id: feature_id.to_string(), desired };
         let ctx = crate::config::ChangeContext {
@@ -2556,6 +2556,11 @@ impl DiagnosticService {
             let passed = outcome.is_ok();
             if !passed {
                 plan.can_apply = false;
+                // Measuring the gate would no longer be enough on its own, so
+                // it must not be offered as the way through. The engine is the
+                // person's to switch off; asking the module first and then
+                // refusing anyway would be a step taken for nothing.
+                plan.needs_write_gate_probe = false;
             }
             plan.checks.push(crate::config::Check {
                 // Not prefixed. These codes already read as conditions of the
@@ -4875,6 +4880,112 @@ impl DiagnosticService {
             .authorize(capabilities::PROBE_WRITE_GATE, initiator, confirmation)
             .and_then(|_| self.probe_write_gate_inner(module_key));
         self.finish("probe_write_gate", capabilities::PROBE_WRITE_GATE, t0, outcome)
+    }
+
+    /// Request addresses whose write gate is known to be open — measured in
+    /// this process, or measured before and remembered against this vehicle.
+    ///
+    /// # Why remembered counts
+    ///
+    /// A probe records its result in vehicle knowledge precisely so it survives
+    /// a restart; the comment where it does so says as much. Nothing read it
+    /// back. So every reconnect quietly blocked every write until somebody
+    /// probed again, and on a 2019 F-250 on 2026-09-13 that cost a re-probe
+    /// after each of three core restarts in one sitting.
+    ///
+    /// What a gate measures is a property of the module — whether it takes
+    /// writes without a security handshake — not of the conversation, and the
+    /// write it permits still needs a person to confirm it and still reads
+    /// back. Only `Established` counts: a module that once gave no clear answer
+    /// is not remembered as open.
+    fn write_gates_known_open(&self) -> Vec<String> {
+        let mut gates: std::collections::BTreeSet<String> = self.write_gate_open.clone();
+        for finding in self.knowledge() {
+            if finding.outcome != aim_session::FindingOutcome::Established {
+                continue;
+            }
+            if let Some(address) = finding
+                .subject
+                .strip_prefix("module.")
+                .and_then(|rest| rest.strip_suffix(".write_gate"))
+            {
+                gates.insert(address.to_string());
+            }
+        }
+        gates.into_iter().collect()
+    }
+
+    /// Ask the module that owns a feature whether it accepts writes.
+    ///
+    /// The same probe as [`Self::probe_write_gate`], addressed by feature
+    /// rather than by module — so the interface never has to translate "the
+    /// double horn chirp" into "the module answering at 72E, requested at 726,
+    /// on whichever bus reaches it". That translation already lives here, in
+    /// the mapping, and a second copy of it in a screen is a second place for
+    /// it to be wrong.
+    pub fn probe_write_gate_for_feature(
+        &mut self,
+        feature_id: &str,
+        initiator: &str,
+        confirmation: Option<&str>,
+    ) -> ToolResult {
+        let key = self.module_key_for_feature(feature_id);
+        match key {
+            Ok(key) => self.probe_write_gate(&key, initiator, confirmation),
+            Err(e) => {
+                let t0 = Instant::now();
+                self.record_invocation(
+                    "probe_write_gate",
+                    initiator,
+                    serde_json::json!({ "feature_id": feature_id }),
+                );
+                self.finish("probe_write_gate", capabilities::PROBE_WRITE_GATE, t0, Err(e))
+            }
+        }
+    }
+
+    /// Which recorded module a feature's mapping is addressed to.
+    ///
+    /// Matched on the request address the scan actually sent to, and the
+    /// primary bus preferred when a gateway exposes the module on both — the
+    /// same preference [`Self::bus_for_request_address`] uses to reach it.
+    fn module_key_for_feature(&self, feature_id: &str) -> AimResult<String> {
+        let target = self
+            .decoders
+            .features
+            .get(feature_id)
+            .and_then(|f| f.mapping.as_ref().and_then(|m| m.as_data_identifier()))
+            .ok_or_else(|| {
+                AimError::new(
+                    ErrorCode::PreconditionFailed,
+                    format!(
+                        "{feature_id} has no mapping that names a module, so there is no module \
+                         to ask"
+                    ),
+                )
+            })?;
+        let mut candidates: Vec<Module> = self
+            .store
+            .modules(&self.session.id)?
+            .into_iter()
+            .filter(|m| {
+                m.request_address.as_deref().is_some_and(|a| a.eq_ignore_ascii_case(&target.module))
+            })
+            .collect();
+        candidates.sort_by_key(|m| match VehicleBus::of_module_key(&m.module_key) {
+            VehicleBus::Primary => 0,
+            VehicleBus::Secondary => 1,
+        });
+        candidates.into_iter().next().map(|m| m.module_key).ok_or_else(|| {
+            AimError::new(
+                ErrorCode::PreconditionFailed,
+                format!(
+                    "the module this setting lives in (requested at {}) has not answered a scan \
+                     in this session. Scan for modules first.",
+                    target.module
+                ),
+            )
+        })
     }
 
     fn probe_write_gate_inner(&mut self, module_key: &str) -> AimResult<Payload> {

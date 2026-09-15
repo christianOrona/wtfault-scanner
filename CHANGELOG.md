@@ -3,6 +3,45 @@
 Notable changes, newest first. Versions follow [semantic versioning](https://semver.org),
 with the caveat that everything below 1.0 is allowed to move.
 
+## [Unreleased]
+
+### Added
+
+- **Change a setting from inside the app.** Until now no screen could: the
+  Settings screen stopped at a preview, and the assistant is not allowed to
+  apply anything. Both writes this app has made to a real truck were typed at
+  the API by hand.
+
+  Ask the assistant — "turn off the double honk after I leave the cabin" — and
+  the change appears under its reply: the exact bytes that move, every check,
+  and a button. The same flow sits on each feature in Settings. Nothing is
+  written until you type a word to confirm, the module's value is read back
+  afterwards, and the result tells you to cycle the key before judging it.
+
+- **The preview shows the bytes.** Both versions of the record, read off the
+  vehicle, with the byte that moves picked out.
+
+- **A progress strip for anything the car is busy with,** on every screen,
+  counting up. A scan no longer makes the rest of the app stop answering.
+
+### Fixed
+
+- The preview said a change could go ahead, and the write was then refused on
+  a safety check the preview never ran. They now run the same checks, and the
+  flow measures speed, engine speed and voltage itself instead of relying on
+  whatever an earlier screen happened to read.
+- Every reconnect blocked writes until the module was asked about them again,
+  although the answer had been saved. It is now read back.
+- A rescan dropped the body modules a full scan had found — including the one
+  the double honk lives in — and the first scan after connecting knew nothing
+  from previous visits. Known modules are now kept per vehicle, not per session.
+- A failed discovery calibration chose the slowest deadline, turning a full
+  scan into several minutes.
+- Two screens contradicted the new button: a measured setting was labelled
+  "can be read … never changed", and a setting from another source promised it
+  would stay unwritable although comfort settings can be tried. Both now say
+  what is true, and an experimental change says so in the confirmation.
+
 ## [0.4.2] — 2026-09-12
 
 ### Added
