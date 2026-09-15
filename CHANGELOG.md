@@ -3,7 +3,7 @@
 Notable changes, newest first. Versions follow [semantic versioning](https://semver.org),
 with the caveat that everything below 1.0 is allowed to move.
 
-## [Unreleased]
+## [0.4.2] — 2026-09-15
 
 ### Added
 
@@ -25,6 +25,10 @@ with the caveat that everything below 1.0 is allowed to move.
   counting up. A scan no longer makes the rest of the app stop answering.
 
 ### Fixed
+
+- **Updates download only when you ask.** The app still checks for a newer
+  version when it starts, but the installer is fetched only when you press
+  Download, and installed only when you press Install and restart.
 
 - The preview said a change could go ahead, and the write was then refused on
   a safety check the preview never ran. They now run the same checks, and the
@@ -60,8 +64,6 @@ with the caveat that everything below 1.0 is allowed to move.
   fault and shown as pending. On the F-250 that was every one of ~480 codes in a
   full scan. Only codes with a failing, pending or confirmed bit are now listed
   or saved; the rest are counted in a note.
-
-## [0.4.2] — 2026-09-12
 
 ### Added
 
