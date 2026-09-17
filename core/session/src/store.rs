@@ -84,6 +84,19 @@ pub struct StoredAsBuilt {
     pub data: serde_json::Value,
 }
 
+/// NHTSA vPIC's reply for one VIN, kept so each VIN is looked up once.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredVpicReply {
+    /// The VIN it decodes, upper case.
+    pub vin: String,
+    /// When it was fetched, ISO 8601.
+    pub fetched_at: String,
+    /// The request that produced it, so the cache is traceable to its source.
+    pub source_url: String,
+    /// The reply body verbatim, parsed on use.
+    pub body: String,
+}
+
 /// A past session in which a vehicle actually answered.
 ///
 /// History, and nothing more. "This adapter read this vehicle at 02:09" is a
@@ -773,6 +786,52 @@ impl SessionStore {
         let conn = self.lock()?;
         let n = conn
             .execute("DELETE FROM as_built WHERE vin = ?1", params![vin.to_ascii_uppercase()])
+            .map_err(storage)?;
+        Ok(n > 0)
+    }
+
+    /// Store one NHTSA vPIC reply against the VIN it was issued for.
+    ///
+    /// Kept so each VIN is looked up once. A second reply for the same VIN
+    /// replaces the first: vPIC's decode of a VIN is a public record that does
+    /// not change. Stores what it is given; parsing is the caller's job.
+    pub fn store_vpic_reply(&self, vin: &str, source_url: &str, body: &str) -> AimResult<()> {
+        let conn = self.lock()?;
+        conn.execute(
+            "INSERT INTO vpic_replies (vin, fetched_at, source_url, body)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(vin) DO UPDATE SET
+                 fetched_at = excluded.fetched_at,
+                 source_url = excluded.source_url,
+                 body = excluded.body",
+            params![vin.to_ascii_uppercase(), aim_types::now().to_rfc3339(), source_url, body],
+        )
+        .map_err(storage)?;
+        Ok(())
+    }
+
+    /// The NHTSA vPIC reply held for one VIN, when there is one.
+    pub fn vpic_reply(&self, vin: &str) -> AimResult<Option<StoredVpicReply>> {
+        let conn = self.lock()?;
+        let row: Option<(String, String, String, String)> = conn
+            .query_row(
+                "SELECT vin, fetched_at, source_url, body FROM vpic_replies WHERE vin = ?1",
+                params![vin.to_ascii_uppercase()],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .optional()
+            .map_err(storage)?;
+
+        let Some((vin, fetched_at, source_url, body)) = row else { return Ok(None) };
+        Ok(Some(StoredVpicReply { vin, fetched_at, source_url, body }))
+    }
+
+    /// Forget the NHTSA vPIC reply held for one VIN, so the next lookup asks
+    /// again. Returns whether one was there.
+    pub fn forget_vpic_reply(&self, vin: &str) -> AimResult<bool> {
+        let conn = self.lock()?;
+        let n = conn
+            .execute("DELETE FROM vpic_replies WHERE vin = ?1", params![vin.to_ascii_uppercase()])
             .map_err(storage)?;
         Ok(n > 0)
     }

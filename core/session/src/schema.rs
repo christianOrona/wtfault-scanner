@@ -320,6 +320,30 @@ CREATE TABLE vehicle_knowledge (
 CREATE INDEX idx_knowledge_vin ON vehicle_knowledge(vin, observed_at DESC);
 "#,
     },
+    Migration {
+        version: 6,
+        name: "cache what NHTSA vPIC said about each VIN",
+        sql: r#"
+-- ------------------------------------------------------------- vpic_replies
+-- The reply to an on-request lookup of one VIN against the NHTSA vPIC database.
+--
+-- Keyed on the VIN, because that is what the lookup is keyed on: each VIN is
+-- asked about once, and the answer is reused on every later visit and offline.
+--
+-- One row per VIN. A newer reply replaces the older one: vPIC's decode of a VIN
+-- is a public record that does not change, so there is no history worth keeping.
+--
+-- The body is kept verbatim and parsed on use, so a parser fix applies to
+-- replies fetched before it. Never uploaded: asking vPIC is the only time the
+-- VIN leaves the machine, and only because somebody asked.
+CREATE TABLE vpic_replies (
+    vin         TEXT PRIMARY KEY,
+    fetched_at  TEXT NOT NULL,
+    source_url  TEXT NOT NULL,
+    body        TEXT NOT NULL
+);
+"#,
+    },
 ];
 
 /// Bring `conn` up to the latest schema version, returning that version.

@@ -27,5 +27,5 @@ pub use compare::{compare_sessions, FaultChange, FaultDelta, SessionComparison, 
 pub use schema::{latest_version, Migration, MIGRATIONS};
 pub use store::{
     measurement_from, Finding, FindingOutcome, PriorContact, SessionStore, SessionSummary,
-    StoredAsBuilt, StoredCapture,
+    StoredAsBuilt, StoredCapture, StoredVpicReply,
 };
