@@ -5,6 +5,12 @@
 //! fetches anything: it only works out the names, so the fetch can stay on
 //! request only and be tested without a network.
 
+use aim_types::{AimError, AimResult, ErrorCode};
+use std::path::{Path, PathBuf};
+
+/// The largest signal set kept. OBDb's F-150 set is 38 KB.
+pub const MAX_SIGNALSET_BYTES: usize = 2 * 1024 * 1024;
+
 /// The OBDb repository name for a make and model, e.g. `Ford-F-150`.
 pub fn repository_name(make: &str, model: &str) -> Option<String> {
     let make = make.trim();
@@ -63,4 +69,74 @@ pub fn signalset_url(repository: &str) -> String {
 /// The repository's web page, kept with a cached file for attribution.
 pub fn repository_url(repository: &str) -> String {
     format!("https://github.com/OBDb/{repository}")
+}
+
+/// A name that can only ever be a file in the catalogue folder: letters, digits
+/// and hyphens, in OBDb's `Make-Model` shape. The hyphen also rules out Windows
+/// device names such as `CON`, which no folder may hold a file called.
+fn valid_repository(repository: &str) -> bool {
+    repository.contains('-')
+        && !repository.starts_with('-')
+        && repository.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+}
+
+/// Keep a fetched signal set where community sets are loaded from.
+///
+/// Written to `<profiles_dir>/catalog/obdb/<repository>.json`, the folder
+/// [`crate::DecoderSet::with_profiles`] reads on start, with
+/// `<repository>.ATTRIBUTION.md` beside it: OBDb data is CC BY-SA 4.0, and the
+/// credit travels with the file. Nothing that is not a signal set is kept, and
+/// a repository name can never point outside that folder.
+pub fn cache_signalset(profiles_dir: &Path, repository: &str, body: &str) -> AimResult<PathBuf> {
+    if !valid_repository(repository) {
+        return Err(AimError::new(
+            ErrorCode::DecoderInputInvalid,
+            format!("{repository:?} is not an OBDb repository name"),
+        ));
+    }
+
+    if body.len() > MAX_SIGNALSET_BYTES {
+        return Err(AimError::new(
+            ErrorCode::DecoderInputInvalid,
+            "reply is too large to be a signal set".to_string(),
+        ));
+    }
+
+    let _ = crate::signalset::SignalSet::from_json(body)
+        .map_err(|e| AimError::new(ErrorCode::DecoderInputInvalid, e))?;
+
+    let dir = profiles_dir.join("catalog").join("obdb");
+    std::fs::create_dir_all(&dir).map_err(|e| {
+        AimError::new(ErrorCode::StorageError, format!("could not keep the signal set: {e}"))
+    })?;
+
+    let json_path = dir.join(format!("{repository}.json"));
+    let attribution_path = dir.join(format!("{repository}.ATTRIBUTION.md"));
+
+    std::fs::write(&json_path, body).map_err(|e| {
+        AimError::new(ErrorCode::StorageError, format!("could not keep the signal set: {e}"))
+    })?;
+
+    let url = repository_url(repository);
+    let attribution_content = format!(
+        "# {repository}\n\nCommunity signal definitions from OBDb (https://obdb.community), fetched from {url}.\n\nLicensed CC BY-SA 4.0 (https://creativecommons.org/licenses/by-sa/4.0/). Attribution to OBDb must be preserved, and changes to the file stay CC BY-SA 4.0.\n"
+    );
+    std::fs::write(&attribution_path, attribution_content).map_err(|e| {
+        AimError::new(ErrorCode::StorageError, format!("could not keep the signal set: {e}"))
+    })?;
+
+    Ok(json_path)
+}
+
+/// The kept signal set for a repository, when there is one.
+pub fn cached_signalset(profiles_dir: &Path, repository: &str) -> Option<PathBuf> {
+    if !valid_repository(repository) {
+        return None;
+    }
+    let path = profiles_dir.join("catalog").join("obdb").join(format!("{repository}.json"));
+    if path.is_file() {
+        Some(path)
+    } else {
+        None
+    }
 }
