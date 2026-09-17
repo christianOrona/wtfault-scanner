@@ -28,6 +28,7 @@ pub mod profiles;
 pub mod regions;
 pub mod signalset;
 pub mod vin;
+pub mod vpic;
 
 pub use asbuilt::{AsBuiltData, Block as AsBuiltBlock};
 pub use dtc::{DtcCatalog, DtcInfo, DtcSystem};
@@ -47,6 +48,7 @@ pub use pids::{PidDefinition, PidKind, PidRegistry};
 pub use profiles::{ProfileKind, ProfileLoad, ProfileReport};
 pub use regions::{region_for_dtc, Region};
 pub use vin::{decode as decode_vin_info, VinInfo};
+pub use vpic::{parse_decode_vin_values, VpicDecode};
 
 /// The decoder set the diagnostic core runs with: generic SAE PIDs plus the
 /// generic SAE DTC table. Both are embedded in the binary.
