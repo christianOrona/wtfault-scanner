@@ -147,11 +147,39 @@ pub struct ReplayTransport {
     stats: TransportStats,
     /// Commands that had no recorded answer, for the caller to report.
     pub misses: Vec<String>,
+    /// For each exchange, the header that was in effect when it was recorded.
+    /// None means "no header set" (default).
+    recorded_headers: Vec<Option<String>>,
+    /// The current header being used for lookups.
+    current_header: Option<String>,
 }
 
 impl ReplayTransport {
     /// Replay `transcript`.
     pub fn new(transcript: Transcript, mode: ReplayMode, descriptor: impl Into<String>) -> Self {
+        // Compute the headers for each exchange
+        let mut recorded_headers = Vec::with_capacity(transcript.exchanges.len());
+        let mut current_header = None;
+
+        for exchange in &transcript.exchanges {
+            let command = normalize(&exchange.command);
+
+            if command.starts_with("ATSH") {
+                // Set the header to the part after ATSH
+                if let Some(header) = command.strip_prefix("ATSH") {
+                    current_header = Some(header.to_string());
+                }
+                recorded_headers.push(current_header.clone());
+            } else if command == "ATZ" || command == "ATD" {
+                // Reset header
+                current_header = None;
+                recorded_headers.push(current_header.clone());
+            } else {
+                // Keep the current header for non-header commands
+                recorded_headers.push(current_header.clone());
+            }
+        }
+
         ReplayTransport {
             transcript,
             mode,
@@ -162,6 +190,8 @@ impl ReplayTransport {
             line: Vec::new(),
             stats: TransportStats::default(),
             misses: Vec::new(),
+            recorded_headers,
+            current_header: None,
         }
     }
 
@@ -209,8 +239,17 @@ impl ReplayTransport {
                 Ok(next.lines.clone())
             }
             ReplayMode::Lookup => {
-                match self.transcript.exchanges.iter().find(|e| normalize(&e.command) == wanted) {
-                    Some(e) => Ok(e.lines.clone()),
+                // Adapter settings (`AT...`) do not depend on the addressed module;
+                // everything else was answered by whichever module `ATSH` selected.
+                let is_setting = wanted.starts_with("AT");
+                let found = self.transcript.exchanges.iter().zip(&self.recorded_headers).find(
+                    |(e, header)| {
+                        normalize(&e.command) == wanted
+                            && (is_setting || header.as_ref() == self.current_header.as_ref())
+                    },
+                );
+                match found {
+                    Some((e, _)) => Ok(e.lines.clone()),
                     None => {
                         self.misses.push(command.to_string());
                         // A recording that does not cover a command is a gap in
@@ -272,6 +311,17 @@ impl Transport for ReplayTransport {
                 b'\r' | b'\n' => {
                     let command = String::from_utf8_lossy(&self.line).to_string();
                     self.line.clear();
+
+                    // Update current header if this is an ATSH command
+                    let normalized_command = normalize(&command);
+                    if normalized_command.starts_with("ATSH") {
+                        if let Some(header) = normalized_command.strip_prefix("ATSH") {
+                            self.current_header = Some(header.to_string());
+                        }
+                    } else if normalized_command == "ATZ" || normalized_command == "ATD" {
+                        self.current_header = None;
+                    }
+
                     let lines = self.answer(&command)?;
                     let mut reply = String::new();
                     for l in lines {
@@ -422,5 +472,24 @@ mod tests {
         );
         t.open().unwrap();
         assert!(drive(&mut t, "010c").unwrap().contains("7E8"));
+    }
+
+    #[test]
+    fn lookup_mode_respects_module_headers() {
+        // Test transcript with different headers
+        let transcript = Transcript::parse(
+            "> ATSH7E0\n< 7E8 01 7E\n> 3E00\n< 7E8 01 7E\n> ATSH7E2\n< NO DATA\n> 3E00\n< NO DATA\n"
+        ).unwrap();
+
+        let mut t = ReplayTransport::new(transcript, ReplayMode::Lookup, "replay:test");
+        t.open().unwrap();
+
+        // First send ATSH7E0 then 3E00 - should get the answer for 7E0
+        assert!(drive(&mut t, "ATSH7E0").unwrap().contains("7E8"));
+        assert!(drive(&mut t, "3E00").unwrap().contains("7E8"));
+
+        // Then send ATSH7E2 then 3E00 - should get NO DATA
+        assert!(drive(&mut t, "ATSH7E2").unwrap().contains("NO DATA"));
+        assert!(drive(&mut t, "3E00").unwrap().contains("NO DATA"));
     }
 }
