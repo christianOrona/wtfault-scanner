@@ -968,6 +968,26 @@ export interface VpicLookup extends VpicHeld {
   from_cache: boolean;
 }
 
+/** Which OBDb signal set belongs to the connected vehicle. Never sends anything. */
+export interface ObdbStatus {
+  /** Null until the VIN has been looked up with NHTSA; `why_not` says why. */
+  repository: string | null;
+  why_not?: string;
+  kept?: boolean;
+  source?: string;
+}
+
+/** The result of asking for the OBDb signal set. */
+export interface ObdbFetch {
+  from_cache: boolean;
+  /** How many commands the fetched set holds; absent when a kept copy was used. */
+  commands?: number;
+  repository: string;
+  path: string;
+  source: string;
+  loads_on_next_start: boolean;
+}
+
 export interface AsBuiltStatus {
   held: boolean;
   vin: string | null;

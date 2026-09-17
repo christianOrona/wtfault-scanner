@@ -8,7 +8,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { api, describeError } from "../api/client";
-import type { VpicHeld } from "../api/types";
+import type { VpicHeld, ObdbStatus, ObdbFetch } from "../api/types";
 import { ErrorBanner, Spinner } from "./primitives";
 
 export function VinLookupPanel({ connected, vin }: { connected: boolean; vin: string }) {
@@ -16,6 +16,11 @@ export function VinLookupPanel({ connected, vin }: { connected: boolean; vin: st
   const [fromCache, setFromCache] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<{code: string; message: string} | null>(null);
+
+  const [obdb, setObdb] = useState<ObdbStatus | null>(null);
+  const [obdbResult, setObdbResult] = useState<ObdbFetch | null>(null);
+  const [obdbBusy, setObdbBusy] = useState(false);
+  const [obdbError, setObdbError] = useState<{code: string; message: string} | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -41,11 +46,40 @@ export function VinLookupPanel({ connected, vin }: { connected: boolean; vin: st
     }
   }, []);
 
+  const loadObdb = useCallback(async () => {
+    try {
+      setObdb(await api.obdbStatus());
+      setObdbError(null);
+    } catch (e) {
+      setObdbError(describeError(e));
+    }
+  }, []);
+
+  const getObdb = useCallback(async () => {
+    setObdbBusy(true);
+    setObdbError(null);
+    try {
+      const r = await api.fetchObdb(false);
+      setObdbResult(r);
+      await loadObdb();
+    } catch (e) {
+      setObdbError(describeError(e));
+    } finally {
+      setObdbBusy(false);
+    }
+  }, [loadObdb]);
+
   useEffect(() => {
     if (connected) {
       void load();
     }
   }, [connected, vin, load]);
+
+  useEffect(() => {
+    if (connected && held?.decode) {
+      void loadObdb();
+    }
+  }, [connected, held, loadObdb]);
 
   if (!connected) return null;
 
@@ -62,6 +96,22 @@ export function VinLookupPanel({ connected, vin }: { connected: boolean; vin: st
           </div>
           {held.decode.warning && <div className="faint">NHTSA noted: {held.decode.warning}</div>}
           <button onClick={() => void lookup(true)} disabled={busy}>Refresh</button>
+          
+          {obdb?.repository && (
+            <div style={{ marginTop: 8 }}>
+              {obdbError && <ErrorBanner error={obdbError} />}
+              {obdb.kept ? (
+                <div className="faint">OBDb community signals for {obdb.repository} are kept on this computer. A newly fetched set loads the next time the app starts.</div>
+              ) : (
+                <>
+                  <div className="faint">OBDb, a community project, documents the signals many models answer to. Fetching sends only the model name to GitHub.</div>
+                  <button onClick={() => void getObdb()} disabled={obdbBusy}>{obdbBusy ? <Spinner /> : "Get signals from OBDb"}</button>
+                </>
+              )}
+              {obdbResult && obdbResult.commands !== undefined && <div className="faint">{obdbResult.commands} commands fetched.</div>}
+              <div className="faint" style={{ fontSize: 11 }}>Community data from OBDb, licensed CC BY-SA 4.0{obdb.source ? <> · <a href={obdb.source} target="_blank" rel="noreferrer">source</a></> : null}</div>
+            </div>
+          )}
         </div>
       ) : (
         <div>
