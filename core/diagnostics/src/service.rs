@@ -4481,7 +4481,8 @@ impl DiagnosticService {
         self.finish("scan_all_modules", capabilities::SCAN_ALL_MODULES, t0, outcome)
     }
 
-    fn scan_all_inner(&mut self) -> AimResult<Payload> {
+    /// Everything that answers on the bus currently selected.
+    fn scan_all_on_current_bus(&mut self) -> AimResult<Payload> {
         self.require_usable()?;
         let budget = self.adapter.capabilities().discovery_budget();
 
@@ -4634,7 +4635,10 @@ impl DiagnosticService {
 
             let outcome = match reply {
                 Ok(messages) => match messages.into_iter().find(|m| &m.address == response_addr) {
-                    Some(m) => self.decode_uds_dtcs(&m.payload, &format!("ECU_{response_addr}")),
+                    Some(m) => self.decode_uds_dtcs(
+                        &m.payload,
+                        &format!("{}_{}", self.adapter.current_bus().key_prefix(), response_addr),
+                    ),
                     None => DtcReadOutcome::refused(
                         String::from("did not answer the fault request"),
                         None,
@@ -4659,7 +4663,7 @@ impl DiagnosticService {
             // everything that asks "is this module on this vehicle" - including
             // the check that guards a configuration write, which is exactly the
             // case the full scan exists to reach.
-            let key = format!("ECU_{response_addr}");
+            let key = format!("{}_{}", self.adapter.current_bus().key_prefix(), response_addr);
             if let Some(kind) = refusal {
                 self.learned(
                     &format!("module.{key}.refuses.read_dtc"),
@@ -4760,6 +4764,126 @@ impl DiagnosticService {
                 "addresses_already_on_record": known_addresses.len(),
             })),
             warnings,
+            evidence: self.recorder.last_response_event(),
+            ..Default::default()
+        })
+    }
+
+    fn scan_all_inner(&mut self) -> AimResult<Payload> {
+        self.require_usable()?;
+        let home = self.adapter.current_bus();
+        let mut buses = vec![home];
+        if self.adapter.capabilities().multiple_can_buses {
+            for bus in [VehicleBus::Primary, VehicleBus::Secondary] {
+                if bus != home {
+                    buses.push(bus);
+                }
+            }
+        }
+
+        let mut all_modules = Vec::new();
+        let mut total_module_count = 0usize;
+        let mut total_fault_count = 0usize;
+        let mut total_addresses_probed = 0usize;
+        let mut total_addresses_swept_blind = 0usize;
+        let mut total_addresses_already_on_record = 0usize;
+        let mut all_warnings = Vec::new();
+        let mut buses_summary = Vec::new();
+
+        for (nth, bus) in buses.iter().copied().enumerate() {
+            if self.adapter.current_bus() != bus {
+                if let Err(e) = self.adapter.select_bus(bus) {
+                    all_warnings.push(Warning::info(
+                        "bus_unreachable",
+                        format!("The adapter would not switch to the {} bus: {e}", bus.label()),
+                    ));
+                    continue;
+                }
+            }
+
+            // Not `?`. An error here still has to leave the adapter on the bus
+            // it was found on, or a failed scan would silently redirect every
+            // request made afterwards.
+            let found = match self.scan_all_on_current_bus() {
+                Ok(found) => found,
+                Err(e) => {
+                    // Silence on a bus we went looking on is a finding, not a failure.
+                    if nth > 0 && e.code == ErrorCode::NoData {
+                        all_warnings.push(Warning::info(
+                            "second_bus_silent",
+                            format!(
+                                "Nothing answered on the {} bus. That can mean the vehicle has no \
+                                 modules there, or that this adapter's connector is not wired to \
+                                 the pins that bus uses — the two are indistinguishable from here.",
+                                bus.label()
+                            ),
+                        ));
+                        continue;
+                    }
+                    if self.adapter.current_bus() != home {
+                        let _ = self.adapter.select_bus(home);
+                    }
+                    return Err(e);
+                }
+            };
+
+            let data = found.data.clone().unwrap_or_else(|| serde_json::json!({}));
+            total_module_count += data["module_count"].as_u64().unwrap_or(0) as usize;
+            total_fault_count += data["fault_count"].as_u64().unwrap_or(0) as usize;
+            total_addresses_probed += data["addresses_probed"].as_u64().unwrap_or(0) as usize;
+            total_addresses_swept_blind +=
+                data["addresses_swept_blind"].as_u64().unwrap_or(0) as usize;
+            total_addresses_already_on_record +=
+                data["addresses_already_on_record"].as_u64().unwrap_or(0) as usize;
+
+            if let Some(modules) = data["modules"].as_array() {
+                all_modules.extend(modules.clone());
+            }
+
+            buses_summary.push(serde_json::json!({
+                "bus": bus.key_prefix(),
+                "label": bus.label(),
+                "modules": data["module_count"].as_u64().unwrap_or(0) as usize,
+                "reached": true,
+            }));
+
+            // One warning per reason: both buses raise the same scope note.
+            for warning in found.warnings {
+                if !all_warnings.iter().any(|w: &Warning| w.code == warning.code) {
+                    all_warnings.push(warning);
+                }
+            }
+        }
+
+        // Back where we started, whatever happened. Everything after a scan
+        // assumes the bus it was already talking to, and leaving the adapter
+        // pointed somewhere else would make the next unrelated request fail in
+        // a way nobody would connect to having run a scan.
+        if self.adapter.current_bus() != home {
+            if let Err(e) = self.adapter.select_bus(home) {
+                tracing::warn!(error = %e, "cannot return to the original bus after a scan");
+                all_warnings.push(Warning::serious(
+                    "cannot_return_to_original_bus",
+                    format!("Cannot return to the original bus: {e}"),
+                ));
+            }
+        }
+
+        if all_modules.is_empty() {
+            return Err(AimError::no_data("no module answered the discovery request on any bus"));
+        }
+
+        Ok(Payload {
+            data: Some(serde_json::json!({
+                "modules": all_modules,
+                "module_count": total_module_count,
+                "fault_count": total_fault_count,
+                "addresses_probed": total_addresses_probed,
+                "addresses_swept_blind": total_addresses_swept_blind,
+                "addresses_already_on_record": total_addresses_already_on_record,
+                "buses": buses_summary,
+            })),
+            warnings: all_warnings,
             evidence: self.recorder.last_response_event(),
             ..Default::default()
         })

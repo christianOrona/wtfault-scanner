@@ -57,3 +57,23 @@ fn a_clone_adapter_reports_only_the_primary_bus() {
     assert!(service.scan_modules(USER).success);
     assert!(!keys(&service).iter().any(|k| k.starts_with("BUS2_")));
 }
+
+/// The full scan is the one that is supposed to reach everything, and body and
+/// comfort modules are mostly not on the primary bus.
+#[test]
+fn a_full_scan_sweeps_both_buses() {
+    let transport =
+        SimulatedTransport::with_personality(ScenarioId::Healthy, AdapterPersonality::obdlink_mx());
+    let mut service = service_with(transport);
+
+    let scan = service.scan_all_modules(USER);
+    assert!(scan.success, "{:?}", scan.error);
+    let keys = keys(&service);
+    assert!(keys.iter().any(|k| k.starts_with("BUS2_")), "second-bus modules: {keys:?}");
+    assert!(keys.iter().any(|k| k.starts_with("ECU_")), "primary modules: {keys:?}");
+
+    // And it leaves the adapter where it found it, or the next read fails for
+    // a reason nobody would connect to having run a scan.
+    let after = service.read_dtcs(Some("ECU_7E8"), USER);
+    assert!(after.success, "a primary-bus read after the scan: {:?}", after.error);
+}
