@@ -4,6 +4,7 @@
 //!
 //! ```text
 //!   can    frames, arbitration ids, OBD addressing
+//!   identification  what a module reports about itself: UDS identity strings, naming
 //!   isotp  segmentation / reassembly with flow control
 //!   obd2   SAE J1979 services 01,02,03,04,07,09,0A
 //!   uds    ISO 14229 request/negative-response semantics (scaffold)
@@ -17,11 +18,13 @@
 #![warn(missing_docs)]
 
 pub mod can;
+pub mod identification;
 pub mod isotp;
 pub mod obd2;
 pub mod uds;
 
 pub use can::{CanFrame, CanId, OBD_FUNCTIONAL_REQUEST_ID};
+pub use identification::{identification_text, UdsIdentity};
 pub use isotp::{IsoTpFrame, IsoTpReceiver, IsoTpSender, ReceiveOutcome};
 pub use obd2::{
     decode_ascii_records, decode_dtc, decode_dtc_list, decode_monitor_response,
