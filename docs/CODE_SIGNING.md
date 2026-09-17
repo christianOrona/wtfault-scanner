@@ -116,6 +116,14 @@ them has to be inferred.
   The reply is kept on the computer against that VIN, so each VIN is looked up
   once and later visits use the kept reply without sending anything; asking to
   refresh sends the VIN again.
+- **To GitHub, for OBDb's community signal set**, when the person asks for it
+  after looking the vehicle up: a request over HTTPS to
+  `raw.githubusercontent.com` for the file OBDb publishes for that make and
+  model (for example `OBDb/Mazda-3`). The request names the make and model and
+  carries no VIN and nothing else about the vehicle or the person. GitHub
+  receives it under its own privacy policy. The file is kept on the computer
+  with its CC BY-SA 4.0 attribution, and a kept file is used without asking
+  again.
 - **To an address the person enters** when importing a vehicle profile from a
   URL: a request for that file, over HTTPS, with nothing attached.
 
@@ -136,7 +144,7 @@ In the user's application data folder (`%APPDATA%\ai-mechanic` on Windows):
 | `data\sessions.sqlite` | Every session: readings, fault codes, the adapter exchange behind them, VINs, recorded findings, imported as-built files, vPIC replies for VINs that were looked up. |
 | `data\providers.json` | Model provider settings. API keys are stored in the operating system's credential store where one exists; the settings screen states where each key is actually kept. |
 | `data\logs\` | Application logs, used when reporting a problem. |
-| `data\profiles\` | Vehicle profile files the person added. |
+| `data\profiles\` | Vehicle profile files the person added, and OBDb community signal sets fetched on request (in `catalog\obdb\`, each with its attribution file). |
 
 ## What it does to the computer and to a vehicle
 
