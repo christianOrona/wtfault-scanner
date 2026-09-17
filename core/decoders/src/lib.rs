@@ -23,6 +23,7 @@ pub mod features;
 pub mod import;
 pub mod knowledge;
 pub mod monitors;
+pub mod obdb;
 pub mod pids;
 pub mod profiles;
 pub mod regions;
