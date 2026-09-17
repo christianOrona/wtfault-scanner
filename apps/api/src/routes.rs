@@ -67,6 +67,7 @@ pub fn router(state: AppState) -> Router {
             "/api/v1/vehicles/as-built",
             get(as_built_status).post(import_as_built).delete(forget_as_built),
         )
+        .route("/api/v1/vehicles/vpic", get(vpic_status).post(lookup_vpic))
         // ---- modules, live ----
         .route("/api/v1/modules", get(list_modules).post(scan_modules))
         .route("/api/v1/modules/{key}", get(module_identity))
@@ -574,6 +575,94 @@ async fn import_as_built(
 /// Forget the as-built file held for this vehicle.
 async fn forget_as_built(State(state): State<AppState>) -> ApiResult<Json<ToolResult>> {
     Ok(Json(state.with_service(|s| s.forget_as_built("user:api")).await?))
+}
+
+/// The cached vPIC reply, if any.
+///
+/// Never touches the network. A 200 OK with a null `cached` field means no
+/// VIN has been read yet.
+async fn vpic_status(State(state): State<AppState>) -> ApiResult<Json<Value>> {
+    let cached = state.with_service(|s| s.cached_vpic()).await?;
+    Ok(Json(json!({ "cached": cached.as_ref().map(cached_json) })))
+}
+
+/// Request a vPIC lookup.
+///
+/// If `refresh` is false (the default), and a reply is already cached, it is
+/// returned without touching the network. Otherwise, the lookup proceeds.
+#[derive(Debug, Default, Deserialize)]
+struct VpicBody {
+    /// If true, force a fresh lookup even if a reply is cached.
+    #[serde(default)]
+    refresh: bool,
+}
+
+/// Perform a vPIC lookup for the VIN of the connected vehicle.
+///
+/// The lookup is performed only if no cached reply exists or `refresh` is true.
+/// Returns the decoded vehicle information.
+async fn lookup_vpic(
+    State(state): State<AppState>,
+    Json(body): Json<VpicBody>,
+) -> ApiResult<Json<Value>> {
+    let (cached, request) = state.with_service(|s| (s.cached_vpic(), s.vpic_request())).await?;
+    let url = request?;
+
+    // Each VIN is looked up once. Asking again goes to the network only when
+    // somebody explicitly asks for a refresh.
+    if let (false, Some(reply)) = (body.refresh, &cached) {
+        let mut held = cached_json(reply);
+        held["from_cache"] = json!(true);
+        return Ok(Json(held));
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|e| ApiError::bad_request(format!("could not build an http client: {e}")))?;
+    let response = client.get(&url).send().await.map_err(|e| {
+        ApiError::bad_request(format!("could not reach NHTSA vPIC: {e}. Nothing was changed."))
+    })?;
+    if !response.status().is_success() {
+        return Err(ApiError::bad_request(format!(
+            "NHTSA vPIC answered {} rather than the vehicle information",
+            response.status()
+        )));
+    }
+    // Checked against the declared length first where there is one, and again
+    // after reading, because a declared length is a claim by the server.
+    if response.content_length().is_some_and(|n| n as usize > 512 * 1024) {
+        return Err(ApiError::bad_request("NHTSA vPIC reply is too large"));
+    }
+    let text = response
+        .text()
+        .await
+        .map_err(|e| ApiError::bad_request(format!("could not read NHTSA vPIC reply: {e}")))?;
+    if text.len() > 512 * 1024 {
+        return Err(ApiError::bad_request("NHTSA vPIC reply is too large"));
+    }
+
+    let url_for_service = url.clone();
+    let decode =
+        state.with_service(move |s| s.record_vpic_reply(&text, &url_for_service)).await??;
+    let held = state.with_service(|s| s.cached_vpic()).await?;
+    Ok(Json(json!({
+        "from_cache": false,
+        "vin": held.as_ref().map(|r| r.vin.clone()),
+        "fetched_at": held.as_ref().map(|r| r.fetched_at.clone()),
+        "source_url": url,
+        "decode": decode,
+    })))
+}
+
+/// Helper to format a cached vPIC reply for JSON output.
+fn cached_json(reply: &aim_session::StoredVpicReply) -> Value {
+    json!({
+        "vin": reply.vin,
+        "fetched_at": reply.fetched_at,
+        "source_url": reply.source_url,
+        "decode": aim_decoders::parse_decode_vin_values(&reply.body).ok()
+    })
 }
 
 // ----------------------------------------------------------------- modules

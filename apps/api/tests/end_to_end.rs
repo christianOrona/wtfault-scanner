@@ -597,3 +597,42 @@ where
         }
     }
 }
+
+/// Looking a VIN up is on request, needs a VIN, and a reply already held is
+/// served from the cache without going to the network (#55).
+#[tokio::test]
+async fn a_vin_lookup_is_on_request_and_served_from_the_cache() {
+    const URL: &str =
+        "https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVinValues/1FT7W2BT6KEC00001?format=json";
+    const F250: &str =
+        include_str!("../../../core/decoders/tests/fixtures/vpic/ford-f250-2019.json");
+
+    let h = Harness::start(ScenarioId::Healthy).await;
+    ok(&h.post("/adapter/connect", json!({})).await, "connect");
+
+    // Nothing held, and asking before the VIN is read is refused before any fetch.
+    assert_eq!(h.get("/vehicles/vpic").await["cached"], Value::Null);
+    let (status, body) = h.post_raw("/vehicles/vpic", json!({})).await;
+    assert_eq!(status, 409, "{body}");
+    assert_eq!(body["error"]["code"], "precondition_failed");
+
+    ok(&h.post("/vehicles/identify", json!({})).await, "identify");
+    assert_eq!(h.get("/vehicles/vpic").await["cached"], Value::Null);
+
+    // A reply already held is served without the network.
+    h.store.store_vpic_reply("1FT7W2BT6KEC00001", URL, F250).unwrap();
+    let held = h.get("/vehicles/vpic").await;
+    assert_eq!(held["cached"]["vin"], "1FT7W2BT6KEC00001");
+    assert_eq!(held["cached"]["source_url"], URL);
+    assert_eq!(held["cached"]["decode"]["model"], "F-250");
+
+    let lookup = h.post("/vehicles/vpic", json!({})).await;
+    assert_eq!(lookup["from_cache"], true);
+    assert_eq!(lookup["decode"]["model"], "F-250");
+    assert_eq!(lookup["vin"], "1FT7W2BT6KEC00001");
+    assert!(lookup["fetched_at"].as_str().is_some_and(|s| !s.is_empty()));
+
+    // And the lookup is part of what the app now knows about the vehicle.
+    let identity = h.get("/vehicles/identity").await;
+    assert!(identity.to_string().contains("F-250"), "{identity}");
+}
