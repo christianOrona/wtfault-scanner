@@ -347,17 +347,50 @@ export default function App() {
               {(() => {
                 const engine = modules.filter((m) => m.answers_obd2 !== false);
                 const body = modules.filter((m) => m.answers_obd2 === false);
-                const item = (m: ModuleRecord) => (
-                  <button
-                    key={m.id}
-                    className="list-item"
-                    aria-selected={m.module_key === selectedModule}
-                    onClick={() => setSelectedModule(m.module_key)}
-                  >
-                    <span className="li-title">{m.name ?? `Module at ${m.address}`}</span>
-                    <span className="li-sub">{m.module_key} - {m.address}</span>
-                  </button>
-                );
+                const item = (m: ModuleRecord) => {
+                  const identity = m.identity;
+                  const showIdentityInfo = identity && (
+                    identity.spare_part_number ||
+                    identity.system_supplier ||
+                    identity.hardware_number ||
+                    identity.supplier_software_version
+                  );
+
+                  // Build the secondary info string if any fields are present
+                  let identityInfo = "";
+                  if (showIdentityInfo) {
+                    const parts = [];
+                    if (identity.spare_part_number) parts.push(`part ${identity.spare_part_number}`);
+                    if (identity.system_supplier) parts.push(identity.system_supplier);
+                    if (identity.hardware_number) parts.push(`hw ${identity.hardware_number}`);
+                    if (identity.supplier_software_version) parts.push(`sw ${identity.supplier_software_version}`);
+                    identityInfo = parts.join(" · ");
+                  }
+
+                  return (
+                    <button
+                      key={m.id}
+                      className="list-item"
+                      aria-selected={m.module_key === selectedModule}
+                      onClick={() => setSelectedModule(m.module_key)}
+                    >
+                      <span
+                        className="li-title"
+                        title={
+                          identity?.system_name && identity.system_name === m.name
+                            ? "Name reported by the module itself (UDS F197)"
+                            : undefined
+                        }
+                      >
+                        {m.name ?? `Module at ${m.address}`}
+                      </span>
+                      <span className="li-sub">{m.module_key} - {m.address}</span>
+                      {showIdentityInfo && (
+                        <span className="li-sub">{identityInfo}</span>
+                      )}
+                    </button>
+                  );
+                };
                 return (
                   <>
                     <div className="list">{engine.map(item)}</div>

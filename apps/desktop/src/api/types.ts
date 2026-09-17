@@ -211,6 +211,18 @@ export interface ModuleIdentity {
   ecu_name: string | null;
   calibration_ids: string[];
   calibration_verification_numbers: string[];
+  /** UDS F197 system name, as the module reported it. */
+  system_name?: string | null;
+  /** UDS F187 manufacturer spare part number. */
+  spare_part_number?: string | null;
+  /** UDS F18A system supplier identifier. */
+  system_supplier?: string | null;
+  /** UDS F191 manufacturer ECU hardware number. */
+  hardware_number?: string | null;
+  /** UDS F195 system supplier ECU software version. */
+  supplier_software_version?: string | null;
+  /** Whether those identifiers have been read, so a scan asks each module once. */
+  uds_identification_read?: boolean;
 }
 
 export interface ModuleRecord {
