@@ -943,6 +943,31 @@ export interface UpdateStatus {
  * awake on the bus, which is why the app mentions it unprompted rather than
  * waiting to be asked.
  */
+/** What NHTSA vPIC decoded a VIN to. Any field can be missing. */
+export interface VpicDecode {
+  make: string | null;
+  model: string | null;
+  model_year: number | null;
+  engine: string | null;
+  fuel: string | null;
+  warning: string | null;
+}
+
+/** A vPIC reply kept on this computer for one VIN. */
+export interface VpicHeld {
+  vin: string;
+  fetched_at: string;
+  source_url: string;
+  /** Null when the kept reply no longer parses. */
+  decode: VpicDecode | null;
+}
+
+/** The result of asking for a lookup. */
+export interface VpicLookup extends VpicHeld {
+  /** True when the kept reply was used and nothing was sent. */
+  from_cache: boolean;
+}
+
 export interface AsBuiltStatus {
   held: boolean;
   vin: string | null;

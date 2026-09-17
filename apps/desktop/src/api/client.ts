@@ -13,6 +13,7 @@ import type {
   AdapterStatus, CapabilitiesResponse, ConnectData, DtcData, FreezeFrameData,
   Health, IdentifyData, Measurement, ModuleIdentity, ModuleRecord, PortsResponse,
   SessionEvent, SessionSummary, SignalsData, ToolResult, ApiError, Dtc, MonitorTestsData,
+  VpicHeld, VpicLookup,
   AgentStatus, InspectResponse, ChatResponse as AgentChatResponse,
   ProvidersResponse, ProviderView, ProviderKindId, ProbeResult, Speed, ExplanationsResponse, FeaturesData, ChangePlan, ApplyResult, WriteGateResult, ProfilesResponse, ClearResult, ReadinessData, ScanPurpose, Tone, FullScanData, ComparisonResponse, UpdateStatus, DownloadState, VehicleKnowledge, SupportReport, AsBuiltStatus, AsBuiltImport,
 } from "./types";
@@ -164,6 +165,10 @@ export const api = {
 
   identify: () => post<ToolResult<IdentifyData>>("/vehicles/identify"),
 
+  /** The NHTSA vPIC reply kept for the connected vehicle. Never sends anything. */
+  vpicStatus: () => request<{ cached: VpicHeld | null }>("/vehicles/vpic"),
+  /** Look the connected vehicle's VIN up with NHTSA vPIC. Sends the VIN unless a reply is kept. */
+  lookupVpic: (refresh = false) => post<VpicLookup>("/vehicles/vpic", { refresh }),
   /** Whether an as-built file is held for this vehicle, and how to get one. */
   asBuiltStatus: () => request<ToolResult<AsBuiltStatus>>("/vehicles/as-built"),
   /** Import one. Refused unless its VIN is the connected vehicle's. */

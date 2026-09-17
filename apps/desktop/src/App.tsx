@@ -6,6 +6,7 @@ import type {
 import { ConnectDialog } from "./components/ConnectDialog";
 import { CodesPane } from "./components/CodesPane";
 import { LivePane } from "./components/LivePane";
+import { VinLookupPanel } from "./components/VinLookupPanel";
 import { AdapterPane } from "./components/AdapterPane";
 import { RecorderPane } from "./components/RecorderPane";
 import { SessionsPane } from "./components/SessionsPane";
@@ -433,6 +434,7 @@ export default function App() {
                       <span>This VIN fails its own SAE check digit.</span>
                     </div>
                   )}
+                  <VinLookupPanel connected={connected} vin={vinDecoded.vin} />
                 </div>
               </div>
             )}
