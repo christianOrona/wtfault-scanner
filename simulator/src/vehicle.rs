@@ -338,6 +338,13 @@ impl VirtualVehicle {
             config_records: BTreeMap::from([
                 (0xDE01u16, vec![0x00, 0x11, 0x22, 0b1011_0011, 0x44, 0x55]),
                 (0xDE02u16, vec![0x01, 0x00]),
+                // The standard identification identifiers, padded the way real
+                // modules pad them. A full scan reads these to name the module.
+                (0xF197u16, b"BODY CONTROL MODULE  \xFF\xFF".to_vec()),
+                (0xF187u16, b"SIM-BCM-14B476".to_vec()),
+                (0xF18Au16, b"SIMSUPPLY".to_vec()),
+                (0xF191u16, b"SIM-HW-01\x00".to_vec()),
+                (0xF195u16, b"1.2.3".to_vec()),
             ]),
             config_write: ConfigWriteBehaviour::Accept,
         };

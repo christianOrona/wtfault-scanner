@@ -122,7 +122,8 @@ pub struct Module {
     pub discovered_at: Timestamp,
 }
 
-/// Identity strings read from a module via OBD-II service 09.
+/// Identity strings a module reported about itself: OBD-II service 09, and the
+/// standard UDS identification identifiers a full scan reads once.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ModuleIdentity {
     /// Service 09 PID 0A ECU name.
@@ -131,6 +132,25 @@ pub struct ModuleIdentity {
     pub calibration_ids: Vec<String>,
     /// Service 09 PID 06 calibration verification number(s), hex.
     pub calibration_verification_numbers: Vec<String>,
+    /// UDS `F197` system name or engine type, as the module reported it.
+    #[serde(default)]
+    pub system_name: Option<String>,
+    /// UDS `F187` manufacturer spare part number.
+    #[serde(default)]
+    pub spare_part_number: Option<String>,
+    /// UDS `F18A` system supplier identifier.
+    #[serde(default)]
+    pub system_supplier: Option<String>,
+    /// UDS `F191` manufacturer ECU hardware number.
+    #[serde(default)]
+    pub hardware_number: Option<String>,
+    /// UDS `F195` system supplier ECU software version.
+    #[serde(default)]
+    pub supplier_software_version: Option<String>,
+    /// Whether the module has answered a read of those identifiers, so a scan
+    /// asks each module once rather than on every visit.
+    #[serde(default)]
+    pub uds_identification_read: bool,
 }
 
 /// Status of a diagnostic trouble code.

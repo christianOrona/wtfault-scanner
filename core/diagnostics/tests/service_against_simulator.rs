@@ -1914,3 +1914,42 @@ fn a_write_gate_measured_before_a_restart_is_still_known_after_it() {
     ));
     assert!(plan.can_apply, "the remembered gate was not read back: {plan:#?}");
 }
+
+/// A module found by an address sweep is "Module at <address>" until it says
+/// what it is. The standard UDS identification identifiers are that statement:
+/// a full scan reads them once and names the module from F197, keeping the
+/// rest as its identity. A module that reports nothing keeps its address label.
+#[test]
+fn a_full_scan_names_a_module_from_what_it_reports_about_itself() {
+    let (mut service, _) = connected(ScenarioId::Healthy);
+    let full = service.scan_all_modules(USER);
+    assert!(full.success, "{:?}", full.error);
+
+    let modules = service.store().modules(service.session_id()).unwrap();
+    let by_key = |key: &str| modules.iter().find(|m| m.module_key == key).unwrap().clone();
+
+    let body = by_key("ECU_7A8");
+    assert_eq!(body.name, "BODY CONTROL MODULE");
+    assert_eq!(body.identity.system_name.as_deref(), Some("BODY CONTROL MODULE"));
+    assert_eq!(body.identity.spare_part_number.as_deref(), Some("SIM-BCM-14B476"));
+    assert_eq!(body.identity.system_supplier.as_deref(), Some("SIMSUPPLY"));
+    assert_eq!(body.identity.hardware_number.as_deref(), Some("SIM-HW-01"));
+    assert_eq!(body.identity.supplier_software_version.as_deref(), Some("1.2.3"));
+    assert!(body.identity.uds_identification_read);
+
+    // Answers the read with serviceNotSupported: asked once, named by address.
+    let quiet = by_key("ECU_768");
+    assert_eq!(quiet.name, "Module at 768");
+    assert!(quiet.identity.uds_identification_read);
+    assert_eq!(quiet.identity.system_name, None);
+
+    // What the scan reports is what the screen draws.
+    let reported = full.data.as_ref().unwrap()["modules"].as_array().unwrap().clone();
+    assert!(reported.iter().any(|m| m["address"] == "7A8" && m["name"] == "BODY CONTROL MODULE"));
+
+    // A second full scan does not ask again, and keeps the name.
+    let again = service.scan_all_modules(USER);
+    assert!(again.success, "{:?}", again.error);
+    let modules = service.store().modules(service.session_id()).unwrap();
+    assert!(modules.iter().any(|m| m.module_key == "ECU_7A8" && m.name == "BODY CONTROL MODULE"));
+}

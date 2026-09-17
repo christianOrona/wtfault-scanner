@@ -215,6 +215,7 @@ fn rediscovering_a_module_updates_it_instead_of_duplicating_it() {
         ecu_name: Some("SIM ENGINE CONTROL".into()),
         calibration_ids: vec!["SIMULATED-CAL-01".into()],
         calibration_verification_numbers: vec!["1a2b3c4d".into()],
+        ..ModuleIdentity::default()
     };
     let again = s.upsert_module(&updated).unwrap();
 

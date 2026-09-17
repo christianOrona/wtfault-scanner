@@ -783,6 +783,107 @@ impl DiagnosticService {
         }
     }
 
+    /// Read the standard UDS identification identifiers once for a module.
+    ///
+    /// A module found by address is described by address until it says what it is.
+    /// The standard identification identifiers are that statement, read once per module.
+    fn read_uds_identification(
+        &mut self,
+        module: &mut Module,
+        target: &RequestTarget,
+        timeout: Duration,
+    ) {
+        if module.identity.uds_identification_read {
+            return;
+        }
+
+        let standard_ids = [0xF197, 0xF187, 0xF18A, 0xF191, 0xF195];
+        let mut answered_once = false;
+        let mut kept: Vec<(u16, Vec<u8>)> = Vec::new();
+
+        for &did in &standard_ids {
+            let request = aim_protocols::UdsRequest::read_data_by_identifier(did).to_bytes();
+            let replies = match self.adapter.request_pdu(&request, target, timeout) {
+                Ok(r) => r,
+                Err(_) => break, // Stop asking on any error
+            };
+
+            let message = replies.into_iter().find(|m| m.address == module.address);
+            if let Some(m) = message {
+                // Check for positive response: 0x62, then echoed DID, then data
+                if m.payload.len() >= 3 && m.payload[0] == 0x62 {
+                    let echoed_did = (m.payload[1] as u16) << 8 | (m.payload[2] as u16);
+                    if echoed_did == did {
+                        kept.push((did, m.payload[3..].to_vec()));
+                        answered_once = true;
+                        continue;
+                    }
+                }
+
+                // Check for serviceNotSupported: 0x7F, 0x22, 0x11
+                if m.payload.len() >= 3
+                    && m.payload[0] == 0x7F
+                    && m.payload[1] == 0x22
+                    && m.payload[2] == 0x11
+                {
+                    answered_once = true;
+                    break; // Stop asking when serviceNotSupported is received
+                }
+
+                // Any other negative response - count as answered and continue
+                answered_once = true;
+            } else {
+                // No message from this module for this DID
+                break; // Treat as error and stop asking
+            }
+        }
+
+        if !answered_once {
+            return; // Module never answered, leave everything unchanged
+        }
+
+        // Mark that we've read the identification
+        module.identity.uds_identification_read = true;
+
+        // Process the collected data
+        let uds =
+            aim_protocols::UdsIdentity::from_dids(kept.iter().map(|(d, b)| (*d, b.as_slice())));
+
+        // Copy into module identity only if new values are Some
+        if let Some(name) = uds.system_name {
+            module.identity.system_name = Some(name);
+        }
+        if let Some(part_number) = uds.spare_part_number {
+            module.identity.spare_part_number = Some(part_number);
+        }
+        if let Some(supplier) = uds.system_supplier {
+            module.identity.system_supplier = Some(supplier);
+        }
+        if let Some(hardware) = uds.hardware_number {
+            module.identity.hardware_number = Some(hardware);
+        }
+        if let Some(software) = uds.software_version {
+            module.identity.supplier_software_version = Some(software);
+        }
+
+        // Store the text representations for later use
+        for (did, bytes) in &kept {
+            if let Some(text) = aim_protocols::identification_text(bytes) {
+                self.identification
+                    .entry(module.module_key.clone())
+                    .or_default()
+                    .insert(*did, text);
+            }
+        }
+
+        // Name the module from its system name if it's still using the default name
+        if let Some(name) = &module.identity.system_name {
+            if module.name.starts_with("Module at ") {
+                module.name = name.clone();
+            }
+        }
+    }
+
     /// Where to send this module something.
     ///
     /// [`Module::address`] is where it *answered*, which is not the same place.
@@ -4516,7 +4617,7 @@ impl DiagnosticService {
             // the check that guards a configuration write, which is exactly the
             // case the full scan exists to reach.
             let key = format!("ECU_{response_addr}");
-            let record = self.keep_what_is_known(Module {
+            let mut record = self.keep_what_is_known(Module {
                 id: aim_types::ModuleId::new(),
                 session_id: self.session.id.clone(),
                 module_key: key.clone(),
@@ -4533,6 +4634,11 @@ impl DiagnosticService {
                 software_version: None,
                 discovered_at: now(),
             });
+
+            // A module found by address is described by address until it says what it is.
+            // The standard identification identifiers are that statement, read once per module.
+            self.read_uds_identification(&mut record, &target, budget.read);
+
             let name = record.name.clone();
             if let Ok(stored) = self.store.upsert_module(&record) {
                 let _ = self.store.append_event(

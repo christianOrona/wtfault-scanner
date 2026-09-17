@@ -463,6 +463,7 @@ mod tests {
                 ecu_name: None,
                 calibration_ids: cal.iter().map(|c| c.to_string()).collect(),
                 calibration_verification_numbers: Vec::new(),
+                ..ModuleIdentity::default()
             },
             software_version: None,
             discovered_at: now(),
