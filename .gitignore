@@ -38,3 +38,6 @@ Thumbs.db
 WORKPROGRESS.md
 WORKPROGRESS.local.md
 *.worklog.md
+
+# scorecard snapshots saved by scripts/scorecard.ps1
+scorecards/

@@ -28,10 +28,12 @@ pub mod identity;
 pub mod knowledge;
 pub mod procedure;
 pub mod recorder;
+pub mod scorecard;
 pub mod service;
 
 pub use config::{plan_change, ChangeContext, ChangePlan, ChangeRequest, Check, DesiredValue};
 pub use identity::{Candidate, Evidence, EvidenceSource, IdentityField, VehicleIdentity};
 pub use procedure::{ConditionCheck, Precondition, Procedure, ProcedureRun, ProcedureState};
 pub use recorder::SessionRecorder;
+pub use scorecard::{Scorecard, ScorecardDiff, SectionDiff};
 pub use service::{capabilities, DiagnosticService, DtcReport};

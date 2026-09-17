@@ -781,6 +781,35 @@ it is passed to everything downstream as unknown rather than as either side's
 answer. `unresolved` lists what nothing has established. `identity` is `null`
 when nothing is connected.
 
+#### `GET /vehicles/scorecard?vin=`
+
+One set of numbers for what the app knows about a vehicle, read by VIN from whatever database the core is pointed at, with nothing plugged in. An unknown VIN answers with an empty scorecard rather than an error; a missing `vin` is `400 bad_request`. One short line each: `identity` lists identity field names that are settled, contested (sources disagree) or unresolved; `modules` counts modules found, how many are named from what they reported versus still an address placeholder, and how many per protocol; `findings` counts vehicle knowledge by outcome; `as_built` says whether an as-built file is held.
+
+```json
+{
+  "vin": "1FT7W2BT6KEC00001",
+  "identity": { "settled": ["make", "model_year", "vin"], "contested": [], "unresolved": ["model"] },
+  "modules": { "found": 6, "named": 2, "placeholder": 4, "by_protocol": { "ISO 15765-4 CAN 11/500": 6 } },
+  "findings": { "established": 3, "ruled_out": 1, "observed": 7 },
+  "as_built": { "held": true }
+}
+```
+
+To compare a cold start with what was learned, save a snapshot from each database. Start the core against a new, empty database with `--db` pointing at a new file (omitting `--db` uses an in-memory database). `scripts/scorecard.ps1 -Vin <VIN>` saves a timestamped snapshot, and `scripts/scorecard.ps1 -Diff <before.json>, <after.json>` compares two and exits 1 when anything was lost.
+
+#### `POST /vehicles/scorecard/diff`
+
+Compares two saved scorecards sent as `{ "before": <scorecard>, "after": <scorecard> }`, where `before` is the earlier snapshot. Each section lists what was `gained`, `lost` and `unchanged`. For identity, a field moving towards settled is a gain. For counts a higher number is a gain, except `placeholder`, where fewer is better.
+
+```json
+{
+  "identity": { "gained": ["model: unresolved -> settled"], "lost": [], "unchanged": ["make: settled", "model_year: settled", "vin: settled"] },
+  "modules": { "gained": ["named: 2 -> 5", "placeholder: 4 -> 1"], "lost": [], "unchanged": ["found: 6", "protocol ISO 15765-4 CAN 11/500: 6"] },
+  "findings": { "gained": ["established: 3 -> 4"], "lost": [], "unchanged": ["observed: 7", "ruled_out: 1"] },
+  "as_built": { "gained": [], "lost": [], "unchanged": ["held: yes"] }
+}
+```
+
 #### `GET /vehicles/as-built` → `ToolResult`
 
 Whether the manufacturer's factory configuration file is held for this vehicle,

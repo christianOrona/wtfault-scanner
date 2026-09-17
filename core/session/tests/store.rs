@@ -523,3 +523,11 @@ fn conn(session: &SessionId, adapter: &str) -> aim_types::Connection {
         capabilities: AdapterCapabilities::unknown(TransportKind::Bluetooth),
     }
 }
+
+#[test]
+fn vehicle_is_found_by_vin_regardless_of_case() {
+    let s = store();
+    let v = s.upsert_vehicle(&Vehicle::from_vin(Some("1FT7W2BT6KEC00001".into()))).unwrap();
+    assert_eq!(s.vehicle_by_vin("1ft7w2bt6kec00001 ").unwrap().map(|x| x.id), Some(v.id));
+    assert!(s.vehicle_by_vin("3MZBPABL2KM000001").unwrap().is_none());
+}

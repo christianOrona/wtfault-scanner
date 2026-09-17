@@ -43,6 +43,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/config/capture", post(capture_configuration))
         .route("/api/v1/config/compare-to-factory", post(compare_to_factory))
         .route("/api/v1/vehicles/knowledge", get(vehicle_knowledge).post(record_vehicle_knowledge))
+        .route("/api/v1/vehicles/scorecard", get(vehicle_scorecard))
+        .route("/api/v1/vehicles/scorecard/diff", post(diff_scorecards))
         .route("/api/v1/config/diff", post(diff_captures))
         .route("/api/v1/config/captures", get(list_captures))
         .route("/api/v1/catalog/signals", get(catalog_signals))
@@ -1038,6 +1040,47 @@ async fn vehicle_knowledge(
             .map(|(vin, count)| json!({ "vin": vin, "findings": count }))
             .collect::<Vec<_>>(),
     })))
+}
+
+#[derive(Debug, Deserialize)]
+struct ScorecardQuery {
+    #[serde(default)]
+    vin: Option<String>,
+}
+
+/// Read a vehicle's scorecard by VIN with nothing plugged in.
+///
+/// An unknown VIN gives an empty scorecard. The scorecard is built from the
+/// store's knowledge and does not touch any vehicle bus.
+async fn vehicle_scorecard(
+    State(state): State<AppState>,
+    Query(q): Query<ScorecardQuery>,
+) -> ApiResult<Json<Value>> {
+    let vin = q
+        .vin
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| ApiError::bad_request("a vin query parameter is required"))?;
+    let card = aim_diagnostics::scorecard::scorecard(&state.store, vin).map_err(ApiError::from)?;
+    Ok(Json(serde_json::to_value(card).map_err(|e| ApiError::internal(e.to_string()))?))
+}
+
+/// Two saved scorecards to compare.
+#[derive(Debug, Deserialize)]
+struct ScorecardDiffBody {
+    /// The earlier snapshot.
+    before: aim_diagnostics::Scorecard,
+    /// The later snapshot.
+    after: aim_diagnostics::Scorecard,
+}
+
+/// Compares two saved scorecards; `before` is the earlier snapshot.
+async fn diff_scorecards(Json(body): Json<ScorecardDiffBody>) -> ApiResult<Json<Value>> {
+    Ok(Json(
+        serde_json::to_value(body.before.diff(&body.after))
+            .map_err(|e| ApiError::internal(e.to_string()))?,
+    ))
 }
 
 #[derive(Debug, Deserialize)]

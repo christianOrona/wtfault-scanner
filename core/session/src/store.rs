@@ -490,6 +490,22 @@ impl SessionStore {
         get_vehicle(&conn, id)
     }
 
+    /// Load the vehicle recorded with this VIN, if any.
+    ///
+    /// VINs are stored as the vehicle reports them, which is upper case, so the
+    /// lookup upper-cases its argument the same way the as-built table does.
+    pub fn vehicle_by_vin(&self, vin: &str) -> AimResult<Option<Vehicle>> {
+        let conn = self.lock()?;
+        conn.query_row(
+            "SELECT id, vin, make, model, year, trim, engine, transmission, discovered_at
+             FROM vehicles WHERE vin = ?1",
+            [vin.trim().to_ascii_uppercase()],
+            row_to_vehicle,
+        )
+        .optional()
+        .map_err(storage)
+    }
+
     // --------------------------------------------------------- connections
 
     /// Record an adapter connection.

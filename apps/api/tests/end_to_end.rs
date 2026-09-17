@@ -510,6 +510,45 @@ async fn unbuilt_features_answer_with_a_reason_rather_than_a_404() {
 }
 
 #[tokio::test]
+async fn the_scorecard_is_read_by_vin_with_nothing_plugged_in() {
+    let h = Harness::start(ScenarioId::Healthy).await;
+
+    // GET without vin returns 400
+    assert_eq!(h.get_status("/vehicles/scorecard").await, 400);
+
+    // GET with vin returns empty scorecard
+    let before = h.get("/vehicles/scorecard?vin=1ft7w2bt6kec00001").await;
+    assert_eq!(before["vin"], "1FT7W2BT6KEC00001");
+    assert_eq!(before["modules"]["found"], 0);
+    assert_eq!(before["findings"]["established"], 0);
+    assert_eq!(before["as_built"]["held"], false);
+
+    // Record a finding and read again
+    h.store
+        .record_finding(
+            "1FT7W2BT6KEC00001",
+            &aim_session::Finding {
+                subject: "egr".into(),
+                outcome: aim_session::FindingOutcome::Established,
+                claim: "c".into(),
+                evidence: "e".into(),
+                authority: "a".into(),
+                observed_at: "2026-09-16T00:00:00Z".into(),
+                session_id: None,
+            },
+        )
+        .unwrap();
+    let after = h.get("/vehicles/scorecard?vin=1ft7w2bt6kec00001").await;
+    assert_eq!(after["findings"]["established"], 1);
+
+    let diff =
+        h.post("/vehicles/scorecard/diff", json!({ "before": before, "after": after })).await;
+    assert_eq!(diff["findings"]["gained"], json!(["established: 0 -> 1"]));
+    assert_eq!(diff["findings"]["lost"], json!([]));
+    assert_eq!(diff["as_built"]["unchanged"], json!(["held: no"]));
+}
+
+#[tokio::test]
 async fn the_tool_registry_is_published_for_the_future_agent() {
     let h = Harness::start(ScenarioId::Healthy).await;
     let tools = h.get("/tools").await;
