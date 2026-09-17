@@ -1953,3 +1953,50 @@ fn a_full_scan_names_a_module_from_what_it_reports_about_itself() {
     let modules = service.store().modules(service.session_id()).unwrap();
     assert!(modules.iter().any(|m| m.module_key == "ECU_7A8" && m.name == "BODY CONTROL MODULE"));
 }
+
+/// A first connect measures a lot that a second visit would otherwise have to
+/// measure again. What a module scan, a supported-PID read and a full scan
+/// learn is recorded against the VIN, so the next visit starts ahead (#58).
+#[test]
+fn a_first_visit_records_what_it_learned_against_the_vin() {
+    let (mut service, _) = connected(ScenarioId::Healthy);
+    assert!(service.identify_vehicle(USER).success);
+    let vin = service.identity().settled("vin").expect("the simulator reports a VIN").to_string();
+    let before = aim_diagnostics::scorecard::scorecard(service.store(), &vin).unwrap();
+
+    assert!(service.scan_modules(USER).success);
+    assert!(service.read_supported_pids("ECU_7E8", USER).success);
+    let full = service.scan_all_modules(USER);
+    assert!(full.success, "{:?}", full.error);
+
+    let knowledge = service.knowledge();
+    let subjects: Vec<String> = knowledge.iter().map(|f| f.subject.clone()).collect();
+    let finding = |subject: &str| {
+        knowledge
+            .iter()
+            .find(|f| f.subject == subject)
+            .unwrap_or_else(|| panic!("nothing recorded for {subject}; recorded: {subjects:?}"))
+            .clone()
+    };
+
+    let protocol = finding("bus.primary.protocol");
+    assert_eq!(protocol.outcome, aim_session::FindingOutcome::Observed);
+    assert!(protocol.claim.contains("CAN"), "{}", protocol.claim);
+
+    let pids = finding("module.ECU_7E8.supported_pids");
+    assert_eq!(pids.outcome, aim_session::FindingOutcome::Observed);
+    assert!(pids.claim.contains("0C"), "engine speed is supported: {}", pids.claim);
+
+    let identity = finding("module.ECU_7A8.identity");
+    assert_eq!(identity.outcome, aim_session::FindingOutcome::Observed);
+    assert!(identity.claim.contains("BODY CONTROL MODULE"), "{}", identity.claim);
+    assert!(identity.claim.contains("SIM-BCM-14B476"), "{}", identity.claim);
+
+    let refused = finding("module.ECU_7EB.refuses.read_dtc");
+    assert_eq!(refused.outcome, aim_session::FindingOutcome::RuledOut);
+
+    let after = aim_diagnostics::scorecard::scorecard(service.store(), &vin).unwrap();
+    let diff = before.diff(&after);
+    assert!(!diff.findings.gained.is_empty(), "the next visit starts ahead: {:?}", diff.findings);
+    assert!(diff.findings.lost.is_empty(), "{:?}", diff.findings);
+}

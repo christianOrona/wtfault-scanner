@@ -882,6 +882,34 @@ impl DiagnosticService {
                 module.name = name.clone();
             }
         }
+
+        if let Some(name) = module.identity.system_name.clone() {
+            let module_key = module.module_key.clone();
+            let part_number = module.identity.spare_part_number.clone();
+            let supplier = module.identity.system_supplier.clone();
+            let hardware = module.identity.hardware_number.clone();
+            let software = module.identity.supplier_software_version.clone();
+            let mut claim = format!("{module_key} identifies itself as {name}");
+            if let Some(part_number) = part_number {
+                claim.push_str(&format!(", part {part_number}"));
+            }
+            if let Some(supplier) = supplier {
+                claim.push_str(&format!(", supplier {supplier}"));
+            }
+            if let Some(hardware) = hardware {
+                claim.push_str(&format!(", hardware {hardware}"));
+            }
+            if let Some(software) = software {
+                claim.push_str(&format!(", software {software}"));
+            }
+            claim.push('.');
+            self.learned(
+                &format!("module.{module_key}.identity"),
+                aim_session::FindingOutcome::Observed,
+                claim,
+                "Read from the standard UDS identification identifiers (F197, F187, F18A, F191, F195).",
+            );
+        }
     }
 
     /// Where to send this module something.
@@ -1363,6 +1391,13 @@ impl DiagnosticService {
                  known on the primary bus, and a TesterPresent address sweep on the secondary.",
             );
         }
+
+        self.learned(
+            "bus.primary.protocol",
+            aim_session::FindingOutcome::Observed,
+            format!("The primary bus answers on {}.", self.adapter.protocol().label()),
+            "The protocol the adapter settled on when a module scan reached the vehicle.",
+        );
 
         Ok(Payload {
             data: Some(serde_json::json!({
@@ -3916,6 +3951,13 @@ impl DiagnosticService {
         }
         let list: Vec<u8> = found.into_iter().collect();
         self.supported_pids.insert(module.module_key.clone(), list.clone());
+        let hex = list.iter().map(|p| format!("{p:02X}")).collect::<Vec<_>>().join(", ");
+        self.learned(
+            &format!("module.{}.supported_pids", module.module_key),
+            aim_session::FindingOutcome::Observed,
+            format!("{} supports mode 01 PIDs {}.", module.module_key, hex),
+            "Read from the module's supported-PID bitmasks.",
+        );
         Ok(list)
     }
 
@@ -4617,6 +4659,14 @@ impl DiagnosticService {
             // the check that guards a configuration write, which is exactly the
             // case the full scan exists to reach.
             let key = format!("ECU_{response_addr}");
+            if let Some(kind) = refusal {
+                self.learned(
+                    &format!("module.{key}.refuses.read_dtc"),
+                    aim_session::FindingOutcome::RuledOut,
+                    format!("{key} refuses to report its faults ({}).", kind.code()),
+                    note.clone().unwrap_or_default(),
+                );
+            }
             let mut record = self.keep_what_is_known(Module {
                 id: aim_types::ModuleId::new(),
                 session_id: self.session.id.clone(),
