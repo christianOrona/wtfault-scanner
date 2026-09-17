@@ -108,6 +108,14 @@ them has to be inferred.
   receives this data under its own privacy policy; a local one (for example
   Ollama) keeps it on hardware the person controls. No provider is configured
   after installation.
+- **To NHTSA's vPIC service**, when the person asks the application to look the
+  connected vehicle up: it sends the vehicle's VIN, and nothing else, over HTTPS
+  to `vpic.nhtsa.dot.gov`, a free public service of the US National Highway
+  Traffic Safety Administration, which answers with the make, model, model year,
+  engine and fuel type. It is only ever sent on request, never automatically.
+  The reply is kept on the computer against that VIN, so each VIN is looked up
+  once and later visits use the kept reply without sending anything; asking to
+  refresh sends the VIN again.
 - **To an address the person enters** when importing a vehicle profile from a
   URL: a request for that file, over HTTPS, with nothing attached.
 
@@ -125,7 +133,7 @@ In the user's application data folder (`%APPDATA%\ai-mechanic` on Windows):
 
 | | |
 |---|---|
-| `data\sessions.sqlite` | Every session: readings, fault codes, the adapter exchange behind them, VINs, recorded findings, imported as-built files. |
+| `data\sessions.sqlite` | Every session: readings, fault codes, the adapter exchange behind them, VINs, recorded findings, imported as-built files, vPIC replies for VINs that were looked up. |
 | `data\providers.json` | Model provider settings. API keys are stored in the operating system's credential store where one exists; the settings screen states where each key is actually kept. |
 | `data\logs\` | Application logs, used when reporting a problem. |
 | `data\profiles\` | Vehicle profile files the person added. |
