@@ -81,8 +81,14 @@ const describe = (tool: string, args: unknown): string => {
  * but it replays the entire session backlog first, and this only ever wants the
  * tail. A three-second poll costs one small request and cannot fall behind in a
  * way that needs recovering from.
+ *
+ * `runId` exists because a run can start while `active` stays true — for example
+ * a retry after a provider failure. Without it, the second run would inherit the
+ * first run's `seen` cursor and prime state, concatenating both runs' tool calls
+ * in one panel. A new runId forces a reset so each run's progress belongs to
+ * exactly one run.
  */
-export function useAgentProgress(sessionId: string | null, active: boolean) {
+export function useAgentProgress(sessionId: string | null, active: boolean, runId: number) {
   const [lines, setLines] = useState<ProgressLine[]>([]);
   const seen = useRef(0);
   /** False until the first poll of a run has skipped past existing history. */
@@ -135,7 +141,7 @@ export function useAgentProgress(sessionId: string | null, active: boolean) {
       cancelled = true;
       if (timer) window.clearTimeout(timer);
     };
-  }, [sessionId, active]);
+  }, [sessionId, active, runId]);
 
   return lines;
 }

@@ -118,8 +118,10 @@ export function InspectPane({
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<{ code: string; message: string } | null>(null);
   const [elapsed, setElapsed] = useState(0);
+  const [runId, setRunId] = useState(0);
+  const [runStartedAt, setRunStartedAt] = useState<Date | null>(null);
   const timer = useRef<number | null>(null);
-  const progress = useAgentProgress(sessionId, running);
+  const progress = useAgentProgress(sessionId, running, runId);
 
   // A scan is minutes, not seconds. A running clock is the difference between
   // "this is working" and "this has hung".
@@ -137,6 +139,8 @@ export function InspectPane({
   }, [running]);
 
   const run = useCallback(async () => {
+    setRunId((n) => n + 1);
+    setRunStartedAt(new Date());
     setRunning(true);
     setError(null);
     setResult(null);
@@ -217,7 +221,7 @@ export function InspectPane({
         </>
       )}
 
-      {running && <LiveProgress elapsed={elapsed} lines={progress} />}
+      {running && <LiveProgress elapsed={elapsed} lines={progress} runId={runId} startedAt={runStartedAt} />}
 
       {result && !result.report && (
         <div className="banner serious">
@@ -367,7 +371,7 @@ function ShareReport({
   );
 }
 
-function LiveProgress({ elapsed, lines }: { elapsed: number; lines: ProgressLine[] }) {
+function LiveProgress({ elapsed, lines, runId, startedAt }: { elapsed: number; lines: ProgressLine[]; runId: number; startedAt: Date | null }) {
   const mins = Math.floor(elapsed / 60);
   const clock = mins ? `${mins}m ${elapsed % 60}s` : `${elapsed}s`;
   const last = lines[lines.length - 1];
@@ -380,6 +384,11 @@ function LiveProgress({ elapsed, lines }: { elapsed: number; lines: ProgressLine
           "hung". Between tool calls the model is thinking, which on local
           hardware is most of the time, so that is said rather than left as a
           silent gap. */}
+      {startedAt && (
+        <div className="faint" style={{ marginTop: 6, fontSize: 12 }}>
+          Run {runId}, started {startedAt.toLocaleTimeString()}
+        </div>
+      )}
       <div style={{ marginTop: 10 }}>
         {lines.length === 0 ? (
           <span className="muted">Starting up…</span>
