@@ -26,6 +26,7 @@ pub mod capture;
 pub mod config;
 pub mod identity;
 pub mod knowledge;
+mod lookup;
 pub mod procedure;
 pub mod recorder;
 pub mod scorecard;

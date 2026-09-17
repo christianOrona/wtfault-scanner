@@ -466,6 +466,7 @@ impl DiagnosticService {
         for (module_key, pids) in &self.supported_pids {
             identity.record_supported_parameters(module_key, pids);
         }
+        crate::lookup::merge_cached_vpic(&mut identity, &self.store);
         identity
     }
 

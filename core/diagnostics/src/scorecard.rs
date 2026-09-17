@@ -282,7 +282,8 @@ pub fn scorecard(
     };
 
     // Build identity
-    let identity_score = crate::identity::VehicleIdentity::assemble(vehicle.as_ref(), &modules);
+    let mut identity_score = crate::identity::VehicleIdentity::assemble(vehicle.as_ref(), &modules);
+    crate::lookup::merge_cached_vpic(&mut identity_score, store);
     let mut settled = Vec::new();
     let mut contested = Vec::new();
     let mut unresolved = Vec::new();
