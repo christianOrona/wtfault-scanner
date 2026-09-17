@@ -26,6 +26,9 @@ pub struct AdapterPersonality {
     pub voltage: f64,
     /// AT commands this device does not implement, answered with `?`.
     pub unsupported: Vec<String>,
+    /// STN firmware identifier, if present. None means the adapter is not
+    /// STN-compatible.
+    pub stn_firmware: Option<String>,
 }
 
 impl AdapterPersonality {
@@ -36,6 +39,7 @@ impl AdapterPersonality {
             description: Some(String::from("OBDII to RS232 Interpreter")),
             voltage: 14.1,
             unsupported: Vec::new(),
+            stn_firmware: None,
         }
     }
 
@@ -48,6 +52,18 @@ impl AdapterPersonality {
             description: None,
             voltage: 14.1,
             unsupported: vec![String::from("AT@1"), String::from("ATAT1")],
+            stn_firmware: None,
+        }
+    }
+
+    /// An OBDLink MX+ adapter with STN firmware.
+    pub fn obdlink_mx() -> Self {
+        AdapterPersonality {
+            banner: String::from("ELM327 v1.5"),
+            description: Some(String::from("OBDLink MX+")),
+            voltage: 14.1,
+            unsupported: Vec::new(),
+            stn_firmware: Some(String::from("STN2255 v5.10.3")),
         }
     }
 }
@@ -86,6 +102,10 @@ pub struct ElmEmulator {
     faults: VecDeque<InjectedFault>,
     /// Every command received, for transcript recording and assertions.
     pub log: Vec<String>,
+    /// Whether we're currently on the second CAN bus.
+    on_secondary_bus: bool,
+    /// Baud rate of the second bus, if active.
+    secondary_baud: u32,
 }
 
 impl ElmEmulator {
@@ -103,6 +123,8 @@ impl ElmEmulator {
             header: 0x7DF,
             faults: VecDeque::new(),
             log: Vec::new(),
+            on_secondary_bus: false,
+            secondary_baud: 0,
         }
     }
 
@@ -144,6 +166,13 @@ impl ElmEmulator {
         if command.is_empty() {
             return self.finish(out, &[]);
         }
+
+        // Handle ST commands first
+        if command.starts_with("ST") {
+            let lines = self.handle_st(&command);
+            return self.finish(out, &lines.iter().map(|s| s.as_str()).collect::<Vec<_>>());
+        }
+
         if let Some(rest) = command.strip_prefix("AT") {
             let lines = self.handle_at(rest, &command);
             return self.finish(out, &lines.iter().map(|s| s.as_str()).collect::<Vec<_>>());
@@ -186,6 +215,8 @@ impl ElmEmulator {
                     // Selecting a protocol drops any established connection,
                     // so the next request searches again.
                     self.protocol = if p == 0 { None } else { Some(p) };
+                    // Reset secondary bus state when changing protocols
+                    self.on_secondary_bus = false;
                     vec![String::from("OK")]
                 }
                 _ => vec![String::from("?")],
@@ -205,6 +236,7 @@ impl ElmEmulator {
                 self.protocol = None;
                 self.requested_protocol = 0;
                 self.header = 0x7DF;
+                self.on_secondary_bus = false;
                 vec![self.personality.banner.clone()]
             }
             "I" => vec![self.personality.banner.clone()],
@@ -256,9 +288,49 @@ impl ElmEmulator {
             },
             "PC" => {
                 self.protocol = None;
+                self.on_secondary_bus = false;
                 vec![String::from("OK")]
             }
+            "MA" => {
+                // ATMA - return traffic on secondary bus at 500kbps
+                if self.on_secondary_bus && self.secondary_baud == 500000 {
+                    vec![
+                        String::from("3B3 40 00 00 00 00 00 00 00"),
+                        String::from("42C 00 00 02 00 00 00 00 00"),
+                    ]
+                } else {
+                    vec![]
+                }
+            }
             _ => vec![String::from("?")],
+        }
+    }
+
+    fn handle_st(&mut self, command: &str) -> Vec<String> {
+        if self.personality.stn_firmware.is_none() {
+            return vec![String::from("?")];
+        }
+
+        match command {
+            "STI" => vec![self.personality.stn_firmware.clone().unwrap()],
+            "STDI" => vec![String::from("OBDLink MX+ r1.2")],
+            "STP53" => {
+                self.on_secondary_bus = true;
+                vec![String::from("OK")]
+            }
+            cmd if cmd.starts_with("STPBR") => {
+                // Parse baud rate from command
+                if let Ok(baud) = cmd[5..].parse::<u32>() {
+                    self.secondary_baud = baud;
+                    vec![String::from("OK")]
+                } else {
+                    vec![String::from("?")]
+                }
+            }
+            _ => {
+                // Other ST commands return OK
+                vec![String::from("OK")]
+            }
         }
     }
 
@@ -284,7 +356,17 @@ impl ElmEmulator {
             lines.push(String::from("SEARCHING..."));
         }
 
-        let replies = self.vehicle.handle(self.header, &request);
+        let replies = if self.on_secondary_bus {
+            // Check if we're on the secondary bus with a supported baud rate
+            if self.secondary_baud == 500000 {
+                self.vehicle.handle_secondary(self.header, &request)
+            } else {
+                // Other baud rates return NO DATA (as per requirements)
+                Vec::new()
+            }
+        } else {
+            self.vehicle.handle(self.header, &request)
+        };
 
         if replies.is_empty() {
             return if self.protocol.is_none() {

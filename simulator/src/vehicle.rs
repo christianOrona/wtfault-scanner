@@ -178,8 +178,10 @@ pub struct VirtualVehicle {
     pub vin: String,
     /// The active fault scenario.
     pub scenario: Scenario,
-    /// The modules on the bus.
+    /// The modules on the primary bus.
     pub ecus: Vec<VirtualEcu>,
+    /// Modules on the second bus, pins 3 and 11, answering only there.
+    pub secondary_ecus: Vec<VirtualEcu>,
     /// Simulated clock.
     pub time: TimeSource,
     /// Set by a service 04 request. The safety gate is supposed to make this
@@ -353,6 +355,40 @@ impl VirtualVehicle {
             vin: String::from(SIMULATED_VIN),
             scenario: Scenario::new(scenario),
             ecus: vec![engine, second, third, brakes, body],
+            secondary_ecus: vec![
+                // Module at 72E - Door module
+                VirtualEcu {
+                    response_id: 0x72E,
+                    label: String::from("Module at 72E"),
+                    ecu_name: Some(pad_ascii("SIM DOOR MODULE", 20)),
+                    calibration_ids: Vec::new(),
+                    cvns: Vec::new(),
+                    supported_service01: Vec::new(),
+                    supported_service09: Vec::new(),
+                    reports_dtcs: false,
+                    runs_monitors: false,
+                    reports_vin: false,
+                    uds_faults: None,
+                    config_records: BTreeMap::new(),
+                    config_write: ConfigWriteBehaviour::Accept,
+                },
+                // Module at 74E - Seat module
+                VirtualEcu {
+                    response_id: 0x74E,
+                    label: String::from("Module at 74E"),
+                    ecu_name: Some(pad_ascii("SIM SEAT MODULE", 20)),
+                    calibration_ids: Vec::new(),
+                    cvns: Vec::new(),
+                    supported_service01: Vec::new(),
+                    supported_service09: Vec::new(),
+                    reports_dtcs: false,
+                    runs_monitors: false,
+                    reports_vin: false,
+                    uds_faults: None,
+                    config_records: BTreeMap::new(),
+                    config_write: ConfigWriteBehaviour::Accept,
+                },
+            ],
             time: TimeSource::deterministic(),
             dtcs_cleared: false,
             // Running, like every scenario. A test that needs the key-on,
@@ -392,6 +428,36 @@ impl VirtualVehicle {
     /// returned vector is empty when nothing answers, which the adapter layer
     /// turns into `NO DATA`.
     pub fn handle(&mut self, target_id: u16, request: &[u8]) -> Vec<EcuReply> {
+        self.handle_on_bus(false, target_id, request)
+    }
+
+    /// Serve one request PDU addressed to `target_id` on the second bus.
+    ///
+    /// Used when the adapter has selected pins 3 and 11. The modules there are
+    /// a separate set: nothing on the primary bus answers, and nothing here
+    /// answers while the primary bus is selected.
+    pub fn handle_secondary(&mut self, target_id: u16, request: &[u8]) -> Vec<EcuReply> {
+        self.handle_on_bus(true, target_id, request)
+    }
+
+    /// One bus's modules answering one request.
+    ///
+    /// The list is moved out of `self` for the duration, so answering can take
+    /// `&self` while a write still lands on the real module.
+    fn handle_on_bus(&mut self, secondary: bool, target_id: u16, request: &[u8]) -> Vec<EcuReply> {
+        let mut ecus =
+            std::mem::take(if secondary { &mut self.secondary_ecus } else { &mut self.ecus });
+        let replies = self.answer_from(&mut ecus, target_id, request);
+        *(if secondary { &mut self.secondary_ecus } else { &mut self.ecus }) = ecus;
+        replies
+    }
+
+    fn answer_from(
+        &mut self,
+        ecus: &mut [VirtualEcu],
+        target_id: u16,
+        request: &[u8],
+    ) -> Vec<EcuReply> {
         self.time.advance();
         if !self.scenario.vehicle_answers || request.is_empty() {
             return Vec::new();
@@ -400,8 +466,7 @@ impl VirtualVehicle {
 
         // Snapshot what each ECU needs before the borrow, so answering can
         // take &self.
-        let addressed: Vec<usize> = self
-            .ecus
+        let addressed: Vec<usize> = ecus
             .iter()
             .enumerate()
             .filter(|(_, e)| target_id == 0x7DF || target_id == e.request_id())
@@ -410,7 +475,7 @@ impl VirtualVehicle {
 
         let mut replies = Vec::new();
         for i in addressed {
-            if let Some(payload) = self.answer(&self.ecus[i], request, &state) {
+            if let Some(payload) = self.answer(&ecus[i], request, &state) {
                 // A configuration write that the module accepted actually
                 // changes it. Applied here because `answer` takes `&self` on
                 // purpose - one place mutates a module, and it is this one.
@@ -420,12 +485,12 @@ impl VirtualVehicle {
                 if request[0] == 0x2E
                     && payload.first() == Some(&0x6E)
                     && request.len() >= 3
-                    && self.ecus[i].config_write == ConfigWriteBehaviour::Accept
+                    && ecus[i].config_write == ConfigWriteBehaviour::Accept
                 {
                     let did = u16::from_be_bytes([request[1], request[2]]);
-                    self.ecus[i].config_records.insert(did, request[3..].to_vec());
+                    ecus[i].config_records.insert(did, request[3..].to_vec());
                 }
-                replies.push(EcuReply { response_id: self.ecus[i].response_id, payload });
+                replies.push(EcuReply { response_id: ecus[i].response_id, payload });
             }
         }
 
