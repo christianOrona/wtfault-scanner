@@ -63,6 +63,8 @@ pub enum EvidenceSource {
     Protocol,
     /// Which parameters a module said it supports.
     SupportedParameters,
+    /// Decoded by NHTSA's vPIC service from the VIN: a lookup, not something the vehicle reported.
+    Vpic,
     /// Stated by the person using the application.
     UserStatement,
 }
@@ -77,6 +79,7 @@ impl EvidenceSource {
             EvidenceSource::ModulePresence => "module_presence",
             EvidenceSource::Protocol => "protocol",
             EvidenceSource::SupportedParameters => "supported_parameters",
+            EvidenceSource::Vpic => "nhtsa_vpic",
             EvidenceSource::UserStatement => "user_statement",
         }
     }
@@ -87,7 +90,7 @@ impl EvidenceSource {
     /// different kind of thing from a module answering — which matters when two
     /// of them disagree.
     pub fn measured(&self) -> bool {
-        !matches!(self, EvidenceSource::UserStatement)
+        !matches!(self, EvidenceSource::UserStatement | EvidenceSource::Vpic)
     }
 }
 
@@ -381,6 +384,70 @@ impl VehicleIdentity {
                 .from_module(module_key)
                 .noting(format!("{} parameters reported as supported", pids.len())),
         );
+    }
+
+    /// Record a vPIC decode, ranking its answers against what the vehicle
+    /// reported rather than replacing it.
+    ///
+    /// vPIC is a lookup service, not something the vehicle reported, so its
+    /// evidence is recorded with [`EvidenceSource::Vpic`] and merged into
+    /// existing candidates when it agrees rather than overwriting them.
+    pub fn record_vpic(&mut self, decode: &aim_decoders::VpicDecode) {
+        let note = match &decode.warning {
+            Some(w) => format!("decoded by NHTSA vPIC, which warned: {w}"),
+            None => String::from("decoded by NHTSA vPIC"),
+        };
+
+        if let Some(make) = decode.make.as_deref().filter(|m| !m.trim().is_empty()) {
+            let evidence = Evidence::new("make", make, EvidenceSource::Vpic).noting(&note);
+            // "FORD" and "Ford Motor Company (US, truck)" are one make said at two
+            // levels of detail. Anything else is a disagreement and stays visible.
+            let lower = make.to_lowercase();
+            let agreeing = self.fields.iter_mut().find(|f| f.field == "make").and_then(|f| {
+                f.candidates.iter_mut().find(|c| c.value.to_lowercase().starts_with(&lower))
+            });
+            match agreeing {
+                Some(candidate) => {
+                    if !candidate.evidence.contains(&evidence) {
+                        candidate.evidence.push(evidence);
+                    }
+                }
+                None => self.propose("make", make, evidence),
+            }
+        }
+
+        if let Some(model) = &decode.model {
+            if !model.trim().is_empty() {
+                self.propose(
+                    "model",
+                    model,
+                    Evidence::new("model", model, EvidenceSource::Vpic).noting(&note),
+                );
+            }
+        }
+
+        if let Some(year) = decode.model_year {
+            let year = year.to_string();
+            self.propose(
+                "model_year",
+                &year,
+                Evidence::new("model_year", &year, EvidenceSource::Vpic).noting(&note),
+            );
+        }
+
+        if let Some(engine) = &decode.engine {
+            if !engine.trim().is_empty() {
+                self.observe(Evidence::new("engine", engine, EvidenceSource::Vpic).noting(&note));
+            }
+        }
+
+        if let Some(fuel) = &decode.fuel {
+            if !fuel.trim().is_empty() {
+                self.observe(Evidence::new("fuel", fuel, EvidenceSource::Vpic).noting(&note));
+            }
+        }
+
+        self.note_gaps();
     }
 
     /// Name every field nobody established.
