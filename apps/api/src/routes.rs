@@ -18,7 +18,7 @@
 use crate::error::{ApiError, ApiResult};
 use crate::state::{AppState, ConnectRequest};
 use crate::ws;
-use aim_types::{SessionId, ToolResult};
+use aim_types::{AimError, ErrorCode, SessionId, ToolResult};
 use axum::extract::{Path, Query, State};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -68,6 +68,7 @@ pub fn router(state: AppState) -> Router {
             get(as_built_status).post(import_as_built).delete(forget_as_built),
         )
         .route("/api/v1/vehicles/vpic", get(vpic_status).post(lookup_vpic))
+        .route("/api/v1/vehicles/obdb", get(obdb_status).post(fetch_obdb))
         // ---- modules, live ----
         .route("/api/v1/modules", get(list_modules).post(scan_modules))
         .route("/api/v1/modules/{key}", get(module_identity))
@@ -653,6 +654,160 @@ async fn lookup_vpic(
         "source_url": url,
         "decode": decode,
     })))
+}
+
+/// Which OBDb signal set belongs to the connected vehicle, and whether it is kept.
+///
+/// Never touches the network.
+async fn obdb_status(State(state): State<AppState>) -> ApiResult<Json<Value>> {
+    let repo = match obdb_repository(&state).await? {
+        Err(why) => return Ok(Json(json!({ "repository": null, "why_not": why }))),
+        Ok(repo) => repo,
+    };
+    let kept = state
+        .config
+        .profiles_dir
+        .as_deref()
+        .and_then(|d| aim_decoders::obdb::cached_signalset(d, &repo))
+        .is_some();
+    Ok(Json(json!({
+        "repository": repo,
+        "kept": kept,
+        "source": aim_decoders::obdb::repository_url(&repo),
+    })))
+}
+
+/// Ask for the connected vehicle's OBDb signal set.
+#[derive(Debug, Default, Deserialize)]
+struct ObdbBody {
+    /// Fetch again even when a copy is kept.
+    #[serde(default)]
+    refresh: bool,
+}
+
+/// Fetch the connected vehicle's OBDb signal set, on request, and keep it.
+///
+/// OBDb is organised by make and model, which come from the NHTSA vPIC lookup,
+/// so that has to have happened first. A kept set loads on the next start.
+async fn fetch_obdb(
+    State(state): State<AppState>,
+    Json(body): Json<ObdbBody>,
+) -> ApiResult<Json<Value>> {
+    let repo = match obdb_repository(&state).await? {
+        Ok(r) => r,
+        Err(why) => return Err(ApiError::from(AimError::new(ErrorCode::PreconditionFailed, why))),
+    };
+
+    let Some(dir) = state.config.profiles_dir.clone() else {
+        return Err(ApiError::bad_request(
+            "this build has no profiles directory, so there is nowhere to keep a signal set",
+        ));
+    };
+
+    if !body.refresh {
+        if let Some(path) = aim_decoders::obdb::cached_signalset(&dir, &repo) {
+            return Ok(Json(json!({
+                "from_cache": true,
+                "repository": repo,
+                "path": path.display().to_string(),
+                "source": aim_decoders::obdb::repository_url(&repo),
+                "loads_on_next_start": true
+            })));
+        }
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|e| ApiError::bad_request(format!("could not build an http client: {e}")))?;
+    let response =
+        client.get(aim_decoders::obdb::signalset_url(&repo)).send().await.map_err(|e| {
+            ApiError::bad_request(format!("could not reach OBDb: {e}. Nothing was changed."))
+        })?;
+
+    if response.status() == 404 {
+        return Err(ApiError::from(AimError::not_found(format!(
+            "OBDb has no signal set for {repo} yet. Nothing was changed."
+        ))));
+    }
+
+    if !response.status().is_success() {
+        return Err(ApiError::bad_request(format!(
+            "OBDb answered {} rather than the signal set. Nothing was changed.",
+            response.status()
+        )));
+    }
+
+    // Checked against the declared length first where there is one, and again
+    // after reading, because a declared length is a claim by the server.
+    if response
+        .content_length()
+        .is_some_and(|n| n as usize > aim_decoders::obdb::MAX_SIGNALSET_BYTES)
+    {
+        return Err(ApiError::bad_request("OBDb signal set reply is too large"));
+    }
+
+    let text = response
+        .text()
+        .await
+        .map_err(|e| ApiError::bad_request(format!("could not read OBDb signal set reply: {e}")))?;
+
+    if text.len() > aim_decoders::obdb::MAX_SIGNALSET_BYTES {
+        return Err(ApiError::bad_request("OBDb signal set reply is too large"));
+    }
+
+    // OBDb has a repository for many models whose signal set is still empty
+    // (Ford-F-250 was, on 2026-09-17). Keeping that would look like a vehicle
+    // with nothing to offer, so it is said plainly instead and nothing is kept.
+    let commands = aim_decoders::signalset::SignalSet::from_json(&text).map(|s| s.commands.len());
+    if commands == Ok(0) {
+        return Err(ApiError::from(AimError::not_found(format!(
+            "OBDb has a page for {repo} but no signals recorded for it yet. Nothing was changed."
+        ))));
+    }
+
+    // Refuses anything that is not a signal set, with its own error code, before writing.
+    let path = aim_decoders::obdb::cache_signalset(&dir, &repo, &text)?;
+
+    Ok(Json(json!({
+        "from_cache": false,
+        "commands": commands.unwrap_or(0),
+        "repository": repo,
+        "path": path.display().to_string(),
+        "source": aim_decoders::obdb::repository_url(&repo),
+        "loads_on_next_start": true
+    })))
+}
+
+/// Helper to determine the OBDb repository name for the connected vehicle.
+async fn obdb_repository(state: &AppState) -> ApiResult<Result<String, String>> {
+    let cached = state.with_service(|s| s.cached_vpic()).await?;
+
+    let reply = match cached {
+        Some(r) => r,
+        None => {
+            return Ok(Err(
+                "look the vehicle up with NHTSA first: OBDb is organised by make and model"
+                    .to_string(),
+            ))
+        }
+    };
+
+    let Ok(decode) = aim_decoders::parse_decode_vin_values(&reply.body) else {
+        return Ok(Err(String::from(
+            "the kept NHTSA reply for this VIN no longer reads; look the vehicle up again",
+        )));
+    };
+
+    let repo = aim_decoders::obdb::repository_name(
+        decode.make.as_deref().unwrap_or(""),
+        decode.model.as_deref().unwrap_or(""),
+    );
+
+    match repo {
+        Some(r) => Ok(Ok(r)),
+        None => Ok(Err("NHTSA did not give a make and model for this VIN, so there is no OBDb signal set to look for".to_string())),
+    }
 }
 
 /// Helper to format a cached vPIC reply for JSON output.

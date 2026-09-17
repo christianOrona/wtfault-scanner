@@ -636,3 +636,42 @@ async fn a_vin_lookup_is_on_request_and_served_from_the_cache() {
     let identity = h.get("/vehicles/identity").await;
     assert!(identity.to_string().contains("F-250"), "{identity}");
 }
+
+/// A vehicle's OBDb signal set is found from the vPIC make and model, fetched on
+/// request, and a kept copy is used without the network (#56).
+#[tokio::test]
+async fn an_obdb_signal_set_follows_the_vin_lookup_and_is_kept() {
+    const URL: &str =
+        "https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVinValues/1FT7W2BT6KEC00001?format=json";
+    const F250: &str =
+        include_str!("../../../core/decoders/tests/fixtures/vpic/ford-f250-2019.json");
+    const SET: &str = include_str!("../../../vehicle-profiles/catalog/obdb/Ford-F-150.json");
+
+    let h = Harness::start(ScenarioId::Healthy).await;
+    ok(&h.post("/adapter/connect", json!({})).await, "connect");
+    ok(&h.post("/vehicles/identify", json!({})).await, "identify");
+
+    // No vPIC lookup yet: no make and model to find a set by, and nothing is fetched.
+    let status = h.get("/vehicles/obdb").await;
+    assert_eq!(status["repository"], Value::Null);
+    assert!(status["why_not"].as_str().is_some_and(|s| s.contains("NHTSA")), "{status}");
+    let (code, body) = h.post_raw("/vehicles/obdb", json!({})).await;
+    assert_eq!(code, 409, "{body}");
+    assert_eq!(body["error"]["code"], "precondition_failed");
+
+    // After the lookup the repository is known; nothing is kept yet.
+    h.store.store_vpic_reply("1FT7W2BT6KEC00001", URL, F250).unwrap();
+    let status = h.get("/vehicles/obdb").await;
+    assert_eq!(status["repository"], "Ford-F-250");
+    assert_eq!(status["kept"], false);
+    assert_eq!(status["source"], "https://github.com/OBDb/Ford-F-250");
+
+    // A kept copy is served without the network.
+    aim_decoders::obdb::cache_signalset(&h._dir.path().join("profiles"), "Ford-F-250", SET)
+        .unwrap();
+    assert_eq!(h.get("/vehicles/obdb").await["kept"], true);
+    let fetched = h.post("/vehicles/obdb", json!({})).await;
+    assert_eq!(fetched["from_cache"], true);
+    assert_eq!(fetched["repository"], "Ford-F-250");
+    assert_eq!(fetched["loads_on_next_start"], true);
+}
