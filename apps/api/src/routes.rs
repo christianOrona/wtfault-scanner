@@ -98,6 +98,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/sessions", get(list_sessions))
         .route("/api/v1/sessions/{id}", get(session_detail))
         .route("/api/v1/sessions/{id}/events", get(session_events))
+        .route("/api/v1/sessions/{id}/transcript", get(session_transcript))
         .route("/api/v1/sessions/{id}/modules", get(session_modules))
         .route("/api/v1/sessions/{id}/dtcs", get(session_dtcs))
         .route("/api/v1/sessions/{id}/measurements", get(session_measurements))
@@ -1070,6 +1071,61 @@ async fn session_events(
         "after_seq": q.after_seq,
         "total": total,
     })))
+}
+
+/// How to export a session transcript.
+#[derive(Debug, Deserialize)]
+struct TranscriptQuery {
+    /// Replace the VIN with an anonymous one. On unless `?redact=false`.
+    #[serde(default = "yes")]
+    redact: bool,
+}
+
+/// Serde default for flags that are on unless turned off.
+fn yes() -> bool {
+    true
+}
+
+/// Export a session as a replay transcript.
+///
+/// If `redact` is true (default), the VIN is replaced with an anonymous one
+/// that preserves the manufacturer code, model year and plant code but replaces
+/// the serial number with zeros and recomputes the check digit.
+async fn session_transcript(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<TranscriptQuery>,
+) -> Result<axum::response::Response, ApiError> {
+    let id = SessionId::from_string(id);
+    let session = state.store.get_session(&id)?;
+
+    let mut text = aim_diagnostics::transcript::export_transcript(
+        &state.store,
+        &id,
+        &format!("session {id}"),
+    )?;
+
+    if q.redact {
+        if let Some(ref vin_id) = session.vehicle_id {
+            if let Some(vehicle) = state.store.get_vehicle(vin_id)? {
+                if let Some(vin) = vehicle.vin {
+                    text = aim_diagnostics::transcript::redact_vin(
+                        &text,
+                        &vin,
+                        &aim_diagnostics::transcript::anonymous_vin(&vin)?,
+                    );
+                }
+            }
+        }
+    }
+
+    use axum::body::Body;
+    let response = axum::response::Response::builder()
+        .header(axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8")
+        .body(Body::from(text))
+        .map_err(|e| ApiError::internal(format!("failed to build response: {e}")))?;
+
+    Ok(response)
 }
 
 async fn session_modules(

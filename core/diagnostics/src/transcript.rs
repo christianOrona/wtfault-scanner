@@ -6,6 +6,7 @@
 //! test anyone can run without that vehicle. Before one is shared, its VIN is
 //! replaced, including where the vehicle sent it as hex across several frames.
 
+use aim_decoders::vin;
 use aim_session::SessionStore;
 use aim_types::{AimResult, EventKind, SessionId};
 use std::collections::BTreeMap;
@@ -38,6 +39,31 @@ pub fn export_transcript(
         }
     }
     Ok(out)
+}
+
+/// Create an anonymous VIN from a real VIN.
+///
+/// Keeps the first 8 characters (manufacturer code), model year (character 10),
+/// and plant code (character 11), replaces the serial number (characters 12-17)
+/// with "000000", and recomputes the check digit so the result is still valid.
+pub fn anonymous_vin(vin: &str) -> AimResult<String> {
+    let vin = vin::validate(vin)?;
+
+    // Keep first 8 chars (manufacturer code), model year (pos 10), plant code (pos 11)
+    // Replace serial number (positions 12-17) with "000000"
+    let mut candidate = vin.chars().collect::<Vec<_>>();
+    candidate[11] = '0'; // Position 12 (0-indexed) - start of serial
+    candidate[12] = '0';
+    candidate[13] = '0';
+    candidate[14] = '0';
+    candidate[15] = '0';
+    candidate[16] = '0';
+
+    // Recompute check digit (position 9, 0-indexed)
+    let check_digit = vin::check_digit(&candidate.iter().collect::<String>())?;
+    candidate[8] = check_digit;
+
+    Ok(candidate.into_iter().collect())
 }
 
 /// Replace a VIN everywhere it appears in a transcript.
@@ -177,5 +203,40 @@ mod tests {
         let out = redact_vin(text, VIN, NEW);
         assert!(out.contains("< 7E9 03 41 00 00"));
         assert!(out.ends_with("< 7E8 22 46 41 30 30 30 30 30"), "{out}");
+    }
+
+    #[test]
+    fn anonymous_vin_creates_valid_anonymous_vin() {
+        let vin = "1FT7W2BT7KEF78036";
+        let result = anonymous_vin(vin).unwrap();
+
+        // Should start with same manufacturer code
+        assert_eq!(&result[..8], "1FT7W2BT");
+
+        // Should have model year and plant code in correct positions
+        assert_eq!(&result[9..11], "KE");
+
+        // Should end with serial number replaced by zeros
+        assert_eq!(&result[11..], "000000");
+
+        // Should be a valid VIN (check digit should validate)
+        assert_eq!(vin::check_digit(&result).unwrap(), result.chars().nth(8).unwrap());
+
+        // Should differ from input
+        assert_ne!(vin, result);
+    }
+
+    #[test]
+    fn anonymous_vin_handles_invalid_vin() {
+        let result = anonymous_vin("INVALID_VIN");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn anonymous_vin_is_idempotent() {
+        let vin = "1FT7W2BT7KEF78036";
+        let result1 = anonymous_vin(vin).unwrap();
+        let result2 = anonymous_vin(&result1).unwrap();
+        assert_eq!(result1, result2);
     }
 }
