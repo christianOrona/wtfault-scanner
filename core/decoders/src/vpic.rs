@@ -231,6 +231,16 @@ pub fn parse_decode_vin_values(json: &str) -> AimResult<VpicDecode> {
     })
 }
 
+/// The vPIC request that decodes one VIN, e.g.
+/// `https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVinValues/1FT7W2BT7KEF78036?format=json`.
+///
+/// Building it validates the VIN first, so nothing malformed is ever sent.
+pub fn decode_vin_values_url(vin: &str) -> AimResult<String> {
+    let vin = crate::vin::validate(vin)?;
+
+    Ok(format!("https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVinValues/{vin}?format=json"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
