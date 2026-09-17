@@ -39,7 +39,7 @@ use aim_protocols::{CanFrame, CanId, IsoTpFrame, IsoTpReceiver, ObdRequest, Rece
 use aim_transport::{read_until, Transport};
 use aim_types::{
     AdapterCapabilities, AdapterHealth, AimError, AimResult, ConnectionState, ErrorCode,
-    ObdProtocol,
+    ObdProtocol, TransportKind,
 };
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -64,6 +64,10 @@ pub struct Elm327Config {
     pub adaptive_timing: bool,
     /// How many times to rebuild the link after it drops mid-session.
     pub max_reconnect_attempts: u32,
+    /// Pause before retrying a Bluetooth port whose first open failed. Windows
+    /// Bluetooth COM ports often time out on the first open after the link has
+    /// been idle, then open normally straight after.
+    pub bluetooth_open_retry_delay: Duration,
 }
 
 impl Default for Elm327Config {
@@ -76,6 +80,7 @@ impl Default for Elm327Config {
             spaces: true,
             adaptive_timing: true,
             max_reconnect_attempts: 2,
+            bluetooth_open_retry_delay: Duration::from_secs(1),
         }
     }
 }
@@ -87,6 +92,7 @@ impl Elm327Config {
             reset_timeout: Duration::from_millis(500),
             at_timeout: Duration::from_millis(300),
             request_timeout: Duration::from_millis(500),
+            bluetooth_open_retry_delay: Duration::from_millis(10),
             ..Default::default()
         }
     }
@@ -199,6 +205,32 @@ impl Elm327Adapter {
         if self.state != next {
             let prev = std::mem::replace(&mut self.state, next);
             self.observer.on_state_change(&prev, &self.state);
+        }
+    }
+
+    /// Open the transport, with a retry for Bluetooth ports that fail on first
+    /// attempt.
+    ///
+    /// Windows Bluetooth COM ports often time out on the first open after the
+    /// link has been idle, then open normally straight after. This method
+    /// handles that case by retrying once with a short delay.
+    fn open_transport(&mut self) -> AimResult<()> {
+        match self.transport.open() {
+            Ok(()) => Ok(()),
+            Err(e)
+                if self.transport.kind() == TransportKind::Bluetooth
+                    && e.code == ErrorCode::TransportOpenFailed =>
+            {
+                // Report the first failure to the observer (flight recorder)
+                self.observer.on_failure(None, &e);
+
+                // Wait before retrying
+                std::thread::sleep(self.config.bluetooth_open_retry_delay);
+
+                // Try again
+                self.transport.open()
+            }
+            Err(e) => Err(e),
         }
     }
 
@@ -1523,7 +1555,7 @@ impl DiagnosticAdapter for Elm327Adapter {
         self.caps = AdapterCapabilities::unknown(self.transport.kind());
         self.caps.baud = self.transport.baud();
 
-        if let Err(e) = self.transport.open() {
+        if let Err(e) = self.open_transport() {
             self.set_state(ConnectionState::Failed { code: e.code, detail: e.message.clone() });
             self.observer.on_failure(None, &e);
             return Err(e);
