@@ -77,3 +77,27 @@ fn a_full_scan_sweeps_both_buses() {
     let after = service.read_dtcs(Some("ECU_7E8"), USER);
     assert!(after.success, "a primary-bus read after the scan: {:?}", after.error);
 }
+
+/// A module found on the second bus can be read and the adapter comes back to
+/// the primary bus. A failure here means the adapter was left on the other bus,
+/// which the next read would fail for a reason nobody would connect to this one.
+#[test]
+fn a_module_found_on_the_second_bus_can_be_read_and_the_adapter_comes_back() {
+    let transport =
+        SimulatedTransport::with_personality(ScenarioId::Healthy, AdapterPersonality::obdlink_mx());
+    let mut service = service_with(transport);
+
+    let scan = service.scan_all_modules(USER);
+    assert!(scan.success, "{:?}", scan.error);
+    let bus2 = keys(&service)
+        .into_iter()
+        .find(|k| k.starts_with("BUS2_"))
+        .expect("a module on the second bus");
+    let read = service.read_dtcs(Some(&bus2), USER);
+    assert!(read.success, "reading {bus2} on the second bus: {:?}", read.error);
+
+    // And it leaves the adapter where it found it, or the next read fails for
+    // a reason nobody would connect to having run a scan.
+    let back = service.read_dtcs(Some("ECU_7E8"), USER);
+    assert!(back.success, "a primary-bus read after a second-bus read: {:?}", back.error);
+}
