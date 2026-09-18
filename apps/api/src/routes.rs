@@ -770,6 +770,26 @@ async fn fetch_obdb(
     // Refuses anything that is not a signal set, with its own error code, before writing.
     let path = aim_decoders::obdb::cache_signalset(&dir, &repo, &text)?;
 
+    // Recorded here rather than in the service because the fetch itself lives
+    // here. The result is deliberately dropped: a set that was kept must never
+    // be reported as a failure because the note about it did not land. This is
+    // what puts the gain on the scorecard (#56), so the next visit starts
+    // ahead of this one.
+    let (subject, claim) =
+        aim_decoders::obdb::signalset_finding(&repo, commands.as_ref().copied().unwrap_or(0));
+    let source = aim_decoders::obdb::repository_url(&repo);
+    let _ = state
+        .with_service(move |s| {
+            s.record_finding(
+                &subject,
+                aim_session::FindingOutcome::Observed,
+                &claim,
+                &source,
+                "fetched_from_obdb",
+            )
+        })
+        .await;
+
     Ok(Json(json!({
         "from_cache": false,
         "commands": commands.unwrap_or(0),

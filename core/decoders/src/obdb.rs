@@ -140,3 +140,58 @@ pub fn cached_signalset(profiles_dir: &Path, repository: &str) -> Option<PathBuf
         None
     }
 }
+
+/// What a fetched signal set records about the vehicle it was fetched for.
+///
+/// Returns the finding's subject and its claim. A signal set is knowledge
+/// about this vehicle and belongs on the scorecard, so that a second visit
+/// starts ahead of the first — but it is a list of what to ask, not a
+/// measurement, so the claim says plainly that nothing in it is verified until
+/// it has actually been read on this vehicle.
+pub fn signalset_finding(repository: &str, commands: usize) -> (String, String) {
+    let subject = format!("signals.obdb.{repository}");
+    let claim = match commands {
+        0 => format!("OBDb has a signal set for {repository} with nothing in it yet"),
+        1 => format!("OBDb offers 1 signal for {repository}, unverified until it is read on this vehicle"),
+        _ => format!("OBDb offers {commands} signals for {repository}, unverified until each is read on this vehicle"),
+    };
+    (subject, claim)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_subject_is_the_repository_under_a_signals_obdb_prefix() {
+        assert_eq!(signalset_finding("Mazda-Mazda3", 0).0, "signals.obdb.Mazda-Mazda3");
+    }
+
+    #[test]
+    fn one_signal_is_not_described_in_the_plural() {
+        let claim = signalset_finding("Mazda-Mazda3", 1).1;
+        assert!(claim.contains("1 signal for"));
+        assert!(!claim.contains("signals"));
+    }
+
+    #[test]
+    fn several_signals_are_counted() {
+        let claim = signalset_finding("Mazda-Mazda3", 214).1;
+        assert!(claim.contains("214 signals for Mazda-Mazda3"));
+    }
+
+    #[test]
+    fn an_empty_set_says_so_rather_than_claiming_nothing() {
+        let claim = signalset_finding("Mazda-Mazda3", 0).1;
+        assert!(claim.contains("nothing in it yet"));
+        assert!(!claim.contains("unverified"));
+    }
+
+    #[test]
+    fn a_claim_about_a_set_with_signals_in_it_always_says_they_are_unverified() {
+        let claim1 = signalset_finding("Mazda-Mazda3", 1).1;
+        let claim214 = signalset_finding("Mazda-Mazda3", 214).1;
+        assert!(claim1.contains("unverified until"));
+        assert!(claim214.contains("unverified until"));
+    }
+}

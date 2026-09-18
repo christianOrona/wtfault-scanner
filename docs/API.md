@@ -869,6 +869,45 @@ asleep or on a bus the adapter cannot reach.
 
 Forget the file held for this vehicle. `data`: `{ "removed": true, "vin": "..." }`.
 
+#### `GET /vehicles/obdb`
+
+Which community signal set (OBDb, CC BY-SA 4.0) belongs to the connected
+vehicle, and whether a copy is kept. **Never touches the network.**
+
+OBDb is organised by make and model, which come from the NHTSA vPIC lookup, so
+that has to have happened first. Until it has, `repository` is null and
+`why_not` names the missing step.
+
+```json
+{ "repository": "Mazda-Mazda3", "kept": false, "source": "https://github.com/OBDb/Mazda-Mazda3" }
+```
+
+#### `POST /vehicles/obdb` → fetch and keep the signal set
+
+```json
+{ "refresh": false }
+```
+
+**The only call in this section that sends anything.** On request only, and
+listed in `docs/CODE_SIGNING.md`. With `refresh` false (the default) a kept copy
+is returned without touching the network.
+
+```json
+{ "from_cache": false, "commands": 214, "repository": "Mazda-Mazda3",
+  "path": "<profiles>/catalog/obdb/Mazda-Mazda3.json",
+  "source": "https://github.com/OBDb/Mazda-Mazda3", "loads_on_next_start": true }
+```
+
+Keeping a set records it against the vehicle's VIN as a finding, so the
+scorecard shows the gain and the next visit starts ahead of this one. The
+signals are unverified until each has actually been read on this vehicle, which
+the finding says plainly: a list of what to ask is not a measurement.
+
+A repository that exists but has no signals in it yet answers `not_found`
+rather than keeping an empty set, because a vehicle with nothing to offer and
+a vehicle nobody has filled in yet are different facts. An oversized reply, or
+anything that is not a signal set, is refused before anything is written.
+
 #### `GET /vehicles/knowledge`
 
 What this application has **concluded** about a vehicle, kept against its VIN
