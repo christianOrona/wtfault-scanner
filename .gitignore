@@ -41,3 +41,6 @@ WORKPROGRESS.local.md
 
 # scorecard snapshots saved by scripts/scorecard.ps1
 scorecards/
+
+# aider (the local agent) writes this cache into whatever tree it runs in.
+.aider*
