@@ -274,7 +274,7 @@ fn split_key(key: &str) -> (String, String) {
 /// test across seven hundred makers will eventually match the wrong one: the
 /// brand appears as a whole word in the description, or the description begins
 /// with it.
-fn makes_match(catalog: &str, reported: &str) -> bool {
+pub fn makes_match(catalog: &str, reported: &str) -> bool {
     if catalog.eq_ignore_ascii_case(reported) {
         return true;
     }

@@ -2392,9 +2392,40 @@ impl DiagnosticService {
                 AimError::new(ErrorCode::NoData, format!("{signal} did not decode to a number"))
             })
     }
+}
 
-    // ------------------------------------------------------------- as-built
+// ------------------------------------------------------------- as-built
 
+/// Ford issues these configuration documents only for its own marques.
+/// Treating another manufacturer's identifiers as Ford blocks would make
+/// live values unsafe to interpret or write.
+///
+/// The make reaching here is whatever decoding the VIN's world manufacturer
+/// identifier produced, and that is a description of the manufacturer rather
+/// than a brand: a real F-250 settles as `"Ford Motor Company (US, truck)"`.
+/// Compared with `makes_match` for that reason - the same whole-word
+/// comparison the signal catalogue already uses - because an equality test
+/// reads a Ford as somebody else's vehicle and refuses the very file that was
+/// issued for it.
+fn make_has_as_built(make: &str) -> bool {
+    ["Ford", "Lincoln", "Mercury"]
+        .iter()
+        .any(|marque| aim_decoders::catalog::makes_match(marque, make))
+}
+
+/// Refuse a known non-Ford vehicle before import, while leaving an
+/// unidentified vehicle to the existing per-VIN validation rather than
+/// inventing a refusal.
+fn as_built_unsupported_reason(make: Option<&str>) -> Option<String> {
+    match make {
+            Some(make) if !make_has_as_built(make) => Some(format!(
+                "as-built files are issued by Ford, and this vehicle is a {make}. Importing one here is not supported: its blocks are numbered for Ford's layout (block N is data identifier 0xDE00 + (N - 1)), so on another make its values would be written against identifiers that mean something else."
+            )),
+            _ => None,
+        }
+}
+
+impl DiagnosticService {
     /// Whether an as-built file would tell us anything, and how to get one.
     ///
     /// # Why this is worth saying unprompted
@@ -2455,6 +2486,7 @@ impl DiagnosticService {
 
         let held = self.store.as_built(&vin).ok().flatten();
         let modules_awake = self.store.modules(&self.session.id).map(|m| m.len()).unwrap_or(0);
+        let unsupported_reason = as_built_unsupported_reason(identity.settled("make"));
 
         Payload {
             data: Some(serde_json::json!({
@@ -2463,6 +2495,8 @@ impl DiagnosticService {
                 "imported_at": held.as_ref().map(|h| h.imported_at.clone()),
                 "source": held.as_ref().and_then(|h| h.source.clone()),
                 "modules_awake_on_the_bus": modules_awake,
+                "supported_on_this_make": unsupported_reason.is_none(),
+                "why_not_supported": unsupported_reason.as_deref(),
                 "what_it_would_add":
                     "The manufacturer's record of how this exact vehicle was configured at the \
                      factory, for every module on it - including any asleep right now, and any \
@@ -2551,6 +2585,9 @@ impl DiagnosticService {
                  is only safe to use on that one.",
             ));
         };
+        if let Some(reason) = as_built_unsupported_reason(identity.settled("make")) {
+            return Err(AimError::new(ErrorCode::PreconditionFailed, reason));
+        }
 
         let Some(file_vin) = data.vin.as_deref() else {
             return Err(AimError::new(
@@ -6459,5 +6496,40 @@ mod tests {
         assert!(cap.level <= aim_safety::MAX_ENABLED_LEVEL, "a person must be able to clear codes");
         assert!(cap.level.requires_confirmation(), "and never without saying so explicitly");
         assert!(cap.mutating, "it changes the vehicle and must be audited as such");
+    }
+
+    #[test]
+    fn as_built_supports_ford_family_marques_case_insensitively() {
+        for make in ["Ford", "Lincoln", "Mercury"] {
+            assert!(make_has_as_built(make), "{make} must support as-built files");
+            assert_eq!(as_built_unsupported_reason(Some(make)), None);
+        }
+        for make in [" ford ", "FORD", " lincoln ", "MERCURY"] {
+            assert!(make_has_as_built(make), "{make:?} must be recognized after normalization");
+        }
+        // How a VIN decode actually names a Ford. An equality test refused
+        // these, which refused the F-250 its own as-built file.
+        for make in ["Ford Motor Company (US, truck)", "Ford Motor Company", "Ford (US)"] {
+            assert!(make_has_as_built(make), "{make:?} is a Ford");
+        }
+    }
+
+    #[test]
+    fn as_built_rejects_non_ford_marques() {
+        for make in ["Mazda", "Honda"] {
+            assert!(!make_has_as_built(make), "{make} must not support Ford as-built files");
+            assert!(as_built_unsupported_reason(Some(make)).is_some());
+        }
+        assert!(!make_has_as_built(""));
+        assert!(!make_has_as_built("Bedford"), "a whole word, not a substring");
+    }
+
+    #[test]
+    fn as_built_unknown_make_is_not_refused_and_message_names_ford_layout() {
+        assert_eq!(as_built_unsupported_reason(None), None);
+        let reason = as_built_unsupported_reason(Some("Mazda"))
+            .expect("a known non-Ford make must be refused");
+        assert!(reason.contains("Mazda"));
+        assert!(reason.contains("0xDE00"));
     }
 }
