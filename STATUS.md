@@ -3,7 +3,7 @@
 Where the project actually is, updated when something significant changes.
 Not a changelog — see `CHANGELOG.md` for releases — and not a diary.
 
-Last reviewed: **2026-09-13**
+Last reviewed: **2026-09-18**
 
 ---
 
@@ -119,11 +119,34 @@ past the cut are silently missing.
   rate itself; confidence is computed from what a finding cites.
 - **Adversarial replay tests.** A scripted provider replays a badly-behaved
   model so the guarantees can be tested without spending API credit.
+- **Two outside sources, on request only.** NHTSA vPIC decodes a VIN to make,
+  model, year, engine and fuel — the things the VIN standard does not encode and
+  this project will not guess at. OBDb supplies community signal definitions for
+  that make and model. Each is a button that says what it sends before it sends
+  it, and each reply is kept, so the same question is never asked twice.
+- **Knowledge kept against the VIN, and a number for it.** What a visit
+  establishes — the protocol it reached the vehicle on, the PIDs each module
+  supports, what each module reports about itself, a module that refused a read
+  and why — is stored against the VIN. The scorecard turns that into counts, so
+  whether a second visit starts ahead of the first is measurable rather than a
+  feeling.
+- **Sessions replay without the vehicle.** A recorded session exports as a
+  transcript with the VIN anonymised, and CI replays recorded sessions and fails
+  when a replay discovers less than the original did.
 
 ## What is not built
 
 Honest gaps, in the order they matter.
 
+- **Neither outside source has been used from a driveway.** The vPIC lookup and
+  the OBDb fetch were built against the simulator and recorded fixtures. Both
+  reach a real service over the network on a real VIN, and neither has been run
+  with a truck plugged in.
+- **An OBDb signal set is a list of claims, not measurements.** A fetched set
+  says what somebody recorded for this make and model; nothing in it is verified
+  until it has been read on the vehicle in front of you, which is what the
+  finding it records says. It also does not shorten the mapping problem below —
+  OBDb documents signals, never configuration.
 - **One verified configuration mapping ships, and one is not a catalogue.**
   AutoLock on the 2019 F-250 was written to a real truck on 2026-09-11 — DID
   `DE0E`, byte 4, `01` → `00` — and confirmed by the owner seeing it change on
@@ -163,7 +186,9 @@ Honest gaps, in the order they matter.
   Everything that measurement exposed has been fixed — the bus type no longer
   names a speed, the capability flag is actually set, the switch uses the
   commands measured to work, discovery sweeps by address instead of
-  broadcasting, and the range reaches the `7F1` where a real module answered.
+  broadcasting, and the range reaches the `7F1` where a real module answered. A
+  full scan now sweeps every bus the adapter can reach rather than only the one
+  it started on, and puts the adapter back where it found it.
   **None of it has been run against a vehicle.** The hand measurement says what
   is there; it does not say the code now finds it.
 - **Silence on the second bus stays silence.** An adapter that accepts every

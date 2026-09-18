@@ -461,6 +461,7 @@ faults in the cars:
 | `docs/SAFETY.md` | the two ceilings, and what has to be true before a write |
 | `docs/SECURITY.md` | threat model, credentials, and where your data goes |
 | `docs/CODE_SIGNING.md` | how releases are built and signed, and the privacy policy |
+| `docs/RELEASING.md` | cutting a release: what to bump, in what order, and the traps |
 | `docs/API.md` | the `/api/v1` contract |
 | `docs/HANDOFF.md` | the specification this is built against |
 
