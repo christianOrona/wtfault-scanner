@@ -854,6 +854,91 @@ other than success, or returns more than 512 KiB is `400 bad_request` with
 nothing changed, and a reply that does not parse is refused and not kept — a
 failed lookup never costs what was already held.
 
+#### `GET /vehicles/obdb`
+
+Which community signal set (OBDb, CC BY-SA 4.0) belongs to the connected
+vehicle, and whether a copy is kept. **Never touches the network**: it works the
+repository name out from what NHTSA already said and looks on disk.
+
+```json
+{
+  "repository": "Ford-F-250",
+  "kept": false,
+  "source": "https://github.com/OBDb/Ford-F-250"
+}
+```
+
+OBDb publishes one repository per make and model, named `Make-Model`, so the
+name can only be worked out once `POST /vehicles/vpic` has established a make
+and a model. The make is not repeated: vPIC's `Mazda3` is OBDb's `Mazda-3`.
+Until a make and model are known, `repository` is `null` and `why_not` says
+which of the three reasons applies — the vehicle has not been looked up yet,
+the kept reply no longer reads, or NHTSA gave no make and model for this VIN:
+
+```json
+{ "repository": null,
+  "why_not": "look the vehicle up with NHTSA first: OBDb is organised by make and model" }
+```
+
+`kept` and `source` are absent in that case. `kept: true` means a copy is on
+disk and `GET /catalog/signals` is already offering its definitions.
+
+#### `POST /vehicles/obdb` → fetch and keep the signal set
+
+Fetch that signal set and keep it. OBDb is a community catalogue of what
+vehicles answer — recorded claims, not measurements and not a standard — and
+what it adds is a list of things worth asking this model.
+
+```json
+{ "refresh": false }
+```
+
+→ where the set came from and where it went:
+
+```json
+{
+  "from_cache": false,
+  "commands": 116,
+  "repository": "Ford-F-150",
+  "path": "<profiles>/catalog/obdb/Ford-F-150.json",
+  "source": "https://github.com/OBDb/Ford-F-150",
+  "loads_on_next_start": true
+}
+```
+
+That example is an F-150, not the simulated F-250: OBDb has a page for the
+F-250 with no signals recorded on it yet, which is one of the refusals below.
+`commands` is absent when a kept copy was used. The file is written to the
+profiles folder with a `<repository>.ATTRIBUTION.md` beside it — OBDb data is
+CC BY-SA 4.0 and the credit travels with the file — and `loads_on_next_start`
+is the honest bit: the decoder set is read at startup, so a set fetched now
+starts offering signals through `GET /catalog/signals` after a restart.
+
+Keeping a set also records it against the vehicle's VIN as a finding, so the
+scorecard shows the gain and the next visit starts ahead of this one. The
+signals are unverified until each has actually been read on this vehicle, which
+the finding says plainly: a list of what to ask is not a measurement. That
+recording can never fail the fetch — a set that was kept is not reported as a
+failure because the note about it did not land.
+
+**This sends a request to GitHub, and only when asked** — the only call in this
+section that sends anything, and listed in `docs/CODE_SIGNING.md`. With
+`refresh` false — the default — a copy already kept is used as it stands,
+`from_cache: true`, and nothing is sent. Otherwise `raw.githubusercontent.com`
+is asked for that repository's `signalsets/v3/default.json`. The request names
+the make and model and carries **no VIN** and nothing else about the vehicle or
+the person.
+
+Two different `404 not_found` refusals, because they are different problems:
+OBDb has no repository for this model at all, or it has a page with no signals
+recorded on it yet. Neither keeps anything — a vehicle with nothing to offer and
+a vehicle nobody has filled in yet are different facts. `409
+precondition_failed` carries the same `why_not` text as the `GET` when the make
+and model are not established. Unreachable, any other unsuccessful status, or
+more than 2 MiB is `400 bad_request` with nothing changed, and a reply that is
+not a signal set is `decoder_input_invalid` — checked before anything is
+written, so a bad fetch never replaces a good kept copy.
+
 #### `GET /vehicles/scorecard?vin=`
 
 One set of numbers for what the app knows about a vehicle, read by VIN from whatever database the core is pointed at, with nothing plugged in. An unknown VIN answers with an empty scorecard rather than an error; a missing `vin` is `400 bad_request`. One short line each: `identity` lists identity field names that are settled, contested (sources disagree) or unresolved; `modules` counts modules found, how many are named from what they reported versus still an address placeholder, and how many per protocol; `findings` counts vehicle knowledge by outcome; `as_built` says whether an as-built file is held.
@@ -941,45 +1026,6 @@ asleep or on a bus the adapter cannot reach.
 #### `DELETE /vehicles/as-built` → `ToolResult`
 
 Forget the file held for this vehicle. `data`: `{ "removed": true, "vin": "..." }`.
-
-#### `GET /vehicles/obdb`
-
-Which community signal set (OBDb, CC BY-SA 4.0) belongs to the connected
-vehicle, and whether a copy is kept. **Never touches the network.**
-
-OBDb is organised by make and model, which come from the NHTSA vPIC lookup, so
-that has to have happened first. Until it has, `repository` is null and
-`why_not` names the missing step.
-
-```json
-{ "repository": "Mazda-Mazda3", "kept": false, "source": "https://github.com/OBDb/Mazda-Mazda3" }
-```
-
-#### `POST /vehicles/obdb` → fetch and keep the signal set
-
-```json
-{ "refresh": false }
-```
-
-**The only call in this section that sends anything.** On request only, and
-listed in `docs/CODE_SIGNING.md`. With `refresh` false (the default) a kept copy
-is returned without touching the network.
-
-```json
-{ "from_cache": false, "commands": 214, "repository": "Mazda-Mazda3",
-  "path": "<profiles>/catalog/obdb/Mazda-Mazda3.json",
-  "source": "https://github.com/OBDb/Mazda-Mazda3", "loads_on_next_start": true }
-```
-
-Keeping a set records it against the vehicle's VIN as a finding, so the
-scorecard shows the gain and the next visit starts ahead of this one. The
-signals are unverified until each has actually been read on this vehicle, which
-the finding says plainly: a list of what to ask is not a measurement.
-
-A repository that exists but has no signals in it yet answers `not_found`
-rather than keeping an empty set, because a vehicle with nothing to offer and
-a vehicle nobody has filled in yet are different facts. An oversized reply, or
-anything that is not a signal set, is refused before anything is written.
 
 #### `GET /vehicles/knowledge`
 
