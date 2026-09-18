@@ -781,6 +781,79 @@ it is passed to everything downstream as unknown rather than as either side's
 answer. `unresolved` lists what nothing has established. `identity` is `null`
 when nothing is connected.
 
+#### `GET /vehicles/vpic`
+
+What NHTSA's vPIC service has already said about this vehicle's VIN, kept on
+this computer against that VIN. **Never touches the network**: this reports the
+reply already held, and the `POST` below is the only thing that asks for one.
+
+```json
+{
+  "cached": {
+    "vin": "1FT7W2BT6KEC00001",
+    "fetched_at": "2026-09-17T15:24:08.7211903Z",
+    "source_url": "https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVinValues/1FT7W2BT6KEC00001?format=json",
+    "decode": {
+      "make": "FORD",
+      "model": "F-250",
+      "model_year": 2019,
+      "engine": "6.7 L V8",
+      "fuel": "Diesel",
+      "warning": null
+    }
+  }
+}
+```
+
+A `200` with `cached: null` means no reply is held — either because this VIN has
+not been looked up, or because no single VIN has been established yet and so
+there is nothing to look one up by. Any field of `decode` can be `null`: only
+what vPIC actually has data for is filled in. `decode` as a whole is `null` when
+the kept reply no longer parses, and `warning` carries vPIC's own complaint
+about the VIN, typically a check digit it does not like. `source_url` is the
+request that produced the reply, so a kept one stays traceable to where it came
+from.
+
+#### `POST /vehicles/vpic`
+
+Ask NHTSA to decode the connected vehicle's VIN. This is what fills in `model`,
+`engine` and `fuel`: the built-in decoder reads only what the VIN standard
+encodes and leaves those `null` (see `POST /vehicles/identify`). Once a reply is
+held it is ranked into the vehicle's identity on every visit, as evidence with
+`source: "vpic"` — a lookup, not something the vehicle reported, and a make it
+disagrees with stays contested rather than overwriting what the bus said.
+
+```json
+{ "refresh": false }
+```
+
+→ the held reply, plus whether anything was sent to get it:
+
+```json
+{
+  "from_cache": false,
+  "vin": "1FT7W2BT6KEC00001",
+  "fetched_at": "2026-09-17T15:24:08.7211903Z",
+  "source_url": "https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVinValues/1FT7W2BT6KEC00001?format=json",
+  "decode": { "make": "FORD", "model": "F-250", "model_year": 2019,
+              "engine": "6.7 L V8", "fuel": "Diesel", "warning": null }
+}
+```
+
+**This is the one endpoint in this section that sends something off the
+machine,** and only when asked. With `refresh` false — the default, and what the
+body is for — a reply already held is returned as it stands, `from_cache: true`,
+and nothing is sent. Otherwise the VIN, and nothing else, goes over HTTPS to
+`vpic.nhtsa.dot.gov`, a free public service of the US National Highway Traffic
+Safety Administration. So each VIN costs one request ever, until somebody asks
+for `refresh: true`. Nothing is sent automatically, at connect or anywhere else.
+
+`409 precondition_failed` when no single VIN has been established: there is
+nothing to ask about. A service that cannot be reached, answers with anything
+other than success, or returns more than 512 KiB is `400 bad_request` with
+nothing changed, and a reply that does not parse is refused and not kept — a
+failed lookup never costs what was already held.
+
 #### `GET /vehicles/scorecard?vin=`
 
 One set of numbers for what the app knows about a vehicle, read by VIN from whatever database the core is pointed at, with nothing plugged in. An unknown VIN answers with an empty scorecard rather than an error; a missing `vin` is `400 bad_request`. One short line each: `identity` lists identity field names that are settled, contested (sources disagree) or unresolved; `modules` counts modules found, how many are named from what they reported versus still an address placeholder, and how many per protocol; `findings` counts vehicle knowledge by outcome; `as_built` says whether an as-built file is held.
