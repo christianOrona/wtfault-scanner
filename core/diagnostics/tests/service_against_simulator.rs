@@ -15,6 +15,22 @@ use std::sync::Arc;
 
 const USER: &str = "user:test";
 
+/// A service whose history is on disk, so a second cold start can open it.
+///
+/// Mirrors [`service`], with the store in a file instead of in memory: what a
+/// visit records is only worth anything if the next visit can still read it.
+fn cold_start_on(db: &std::path::Path) -> DiagnosticService {
+    let transport = SimulatedTransport::new(ScenarioId::Healthy);
+    let adapter: Box<dyn DiagnosticAdapter> =
+        Box::new(Elm327Adapter::new(Box::new(transport), Elm327Config::fast()));
+    let store = SessionStore::open(db).unwrap();
+    let decoders = Arc::new(DecoderSet::generic_obd().unwrap());
+    let mut service =
+        DiagnosticService::start(adapter, store, decoders, SafetyGate::phase1(), None).unwrap();
+    assert!(service.connect(USER).success, "connect");
+    service
+}
+
 fn service(scenario: ScenarioId) -> (DiagnosticService, aim_simulator::SharedEmulator) {
     let transport = SimulatedTransport::new(scenario);
     let emulator = transport.emulator();
@@ -1999,4 +2015,45 @@ fn a_first_visit_records_what_it_learned_against_the_vin() {
     let diff = before.diff(&after);
     assert!(!diff.findings.gained.is_empty(), "the next visit starts ahead: {:?}", diff.findings);
     assert!(diff.findings.lost.is_empty(), "{:?}", diff.findings);
+}
+
+/// The second visit starts ahead of the first (#58).
+///
+/// The point of recording what a connect learns is that it is still there next
+/// time. Measured across two services over one database file rather than
+/// within a single session, because a session that measures itself would pass
+/// even if nothing were ever written down.
+#[test]
+fn a_second_cold_start_on_the_same_vehicle_starts_ahead_of_the_first() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("sessions.sqlite");
+
+    let vin;
+    let empty;
+    {
+        let mut first = cold_start_on(&db);
+        assert!(first.identify_vehicle(USER).success);
+        vin = first.identity().settled("vin").expect("the simulator reports a VIN").to_string();
+        // What the first visit knew before it did anything.
+        empty = aim_diagnostics::scorecard::scorecard(first.store(), &vin).unwrap();
+
+        assert!(first.scan_modules(USER).success);
+        assert!(first.read_supported_pids("ECU_7E8", USER).success);
+        let full = first.scan_all_modules(USER);
+        assert!(full.success, "{:?}", full.error);
+    }
+
+    // A second cold start: new service, new session, same history on disk, and
+    // nothing entered by hand.
+    let mut second = cold_start_on(&db);
+    assert!(second.identify_vehicle(USER).success);
+    let starting = aim_diagnostics::scorecard::scorecard(second.store(), &vin).unwrap();
+
+    let diff = empty.diff(&starting);
+    assert!(
+        !diff.findings.gained.is_empty(),
+        "the second visit starts ahead of the first: {:?}",
+        diff.findings
+    );
+    assert!(diff.findings.lost.is_empty(), "nothing is forgotten in between: {:?}", diff.findings);
 }
