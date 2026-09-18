@@ -3,6 +3,101 @@
 Notable changes, newest first. Versions follow [semantic versioning](https://semver.org),
 with the caveat that everything below 1.0 is allowed to move.
 
+## [0.5.0] — 2026-09-18
+
+Everything this app knew came off the vehicle in front of it or out of a file
+shipped with the build. This release lets it ask two outside sources — by name,
+on request, and never on its own — and keeps what it learns against the VIN, so
+a second visit starts ahead of the first.
+
+### Added
+
+- **Look the vehicle up with NHTSA.** The built-in decoder reads only what the
+  VIN standard actually encodes: manufacturer, plant, model year. Model, engine
+  and fuel were left blank, because this project has no licensed VIN database
+  and will not guess. NHTSA's free vPIC service decodes nearly any VIN sold in
+  the US, and the vehicle card now offers a button that asks it.
+
+  It says what it will send before it sends it: the VIN, and nothing else, to a
+  US government service. Each VIN is asked once — the reply is kept on this
+  computer and used from then on — and Refresh asks again. Nothing is sent
+  unless you press it.
+
+- **Community signal definitions from OBDb.** Once the VIN is looked up the app
+  knows the make and model, which is all OBDb organises by. The vehicle card
+  names the repository for the vehicle and offers to fetch its signal set: a
+  list of things worth asking this model that nobody had to measure here first.
+
+  That request carries the model name to GitHub and no VIN. A fetched set is
+  kept with its CC BY-SA 4.0 credit beside it and loads on the next start, and
+  its signals are marked unverified until each has actually been read on this
+  vehicle — a list of what to ask is not a measurement.
+
+- **A full scan sweeps every bus the adapter can reach,** keys each module by
+  the bus it answered on, and reports a per-bus summary with the combined
+  totals. A bus where nothing answers is a warning naming both possible reasons
+  rather than a failed scan, and the adapter is put back on the bus it started
+  on whatever happens, so a later read does not quietly go to the wrong one.
+
+- **Modules name themselves.** A full scan now reads the standard UDS
+  identification identifiers once per module: system name, spare part number,
+  supplier, hardware number and software version. A module still called "Module
+  at 7A0" takes the name it reports; one that already had a name keeps it, and
+  one that reports nothing keeps its address. A module that does not answer
+  costs a single request, and whether it was asked is remembered.
+
+- **A scorecard for what the app knows about a vehicle,** read by VIN with
+  nothing plugged in: identity fields settled, contested or unresolved; modules
+  found, how many are named from what they reported versus still an address,
+  and how many per protocol; findings by outcome; whether an as-built file is
+  held. `scripts/scorecard.ps1` saves timestamped snapshots and diffs two,
+  exiting 1 when anything was lost. Signals, settings and write gates are not
+  scored yet.
+
+- **What a first visit learns is kept against the VIN,** so the next one starts
+  ahead: the protocol the scan reached the vehicle on, the PIDs each module
+  supports, what each module reports about itself, and any module that refused
+  a fault read, with its reason.
+
+- **Export a session as a replay transcript,** anonymised by default. The
+  replacement VIN keeps what the real one says about model, year and plant,
+  zeroes the serial number and recomputes the check digit, so the transcript
+  still decodes as the same kind of vehicle without identifying one — including
+  a VIN split across ISO-TP frames, which is reassembled per module address
+  before it is replaced. Recorded sessions now replay in CI, and a replay that
+  discovers less than the original fails the build.
+
+### Changed
+
+- **The as-built import is refused on a make that has none.** These files are
+  Ford documents and their blocks are numbered for Ford's layout, so on another
+  make the import would write the file's values against identifiers that mean
+  something else there. A known non-Ford make is now refused with the reason
+  named, and the panel says as-built files are not issued for that make instead
+  of showing a download page and a file picker that would lead to a refusal. A
+  make that has not been established yet is not refused: the per-VIN check
+  already covers the wrong-vehicle case.
+
+### Fixed
+
+- **The first Bluetooth connect after a restart failed instead of retrying.** On
+  an OBDLink MX+ the first open of the COM port after the core restarts fails
+  with a semaphore timeout, and the next one succeeds. It is now retried once.
+  The first failure is still reported, so the flight recorder shows a flaky
+  link, and a link that fails twice fails as before.
+
+- **Two runs of an inspection put their reads in one panel.** Progress now
+  starts empty for every run, even when a retry begins while the previous run
+  still counts as active, and the panel shows the run number and when it
+  started.
+
+### Safety and privacy
+
+Both outside lookups are on request only, are listed in the privacy policy in
+[docs/CODE_SIGNING.md](docs/CODE_SIGNING.md) with what each one sends and to
+whom, and are documented endpoint by endpoint in [docs/API.md](docs/API.md).
+Nothing else in the application contacts anything on its own.
+
 ## [0.4.2] — 2026-09-15
 
 ### Added
