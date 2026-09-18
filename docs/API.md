@@ -822,6 +822,8 @@ and how to get one.
   "source": null,
   "imported_at": null,
   "modules_awake_on_the_bus": 0,
+  "supported_on_this_make": true,
+  "why_not_supported": null,
   "how_to_get_one": [
     "Ford publishes it per VIN on the Motorcraft service site. The account is free; knowing the file exists is the hard part.",
     "Search for this VIN: 1FT7W2BT6KEC00001",
@@ -850,6 +852,14 @@ arbitrary files off the machine, even though it runs on the same one today.
 with `precondition_failed`: the file describes a real vehicle correctly, just
 not this one, and its values would be another truck's configuration presented
 as yours. Stored against the VIN, on this machine only.
+
+**Ford makes only.** These files are issued by Ford, and their blocks are
+numbered for Ford's layout, so an import on any other established make is
+refused with `precondition_failed` rather than writing values against
+identifiers that mean something else there. `supported_on_this_make` on the
+`GET` says so before anything is offered; a make that has not been established
+yet is not refused, because the VIN check already covers the wrong-vehicle
+case.
 
 Why it matters: an as-built block corresponds to a data identifier
 (`block N ↔ 0xDE00 + (N − 1)`), and the file covers every module, including ones

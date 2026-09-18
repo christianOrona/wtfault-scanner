@@ -64,6 +64,22 @@ export function AsBuiltPanel({ connected }: { connected: boolean }) {
     );
   }
 
+  // An as-built file is a Ford document and its blocks are numbered for Ford's
+  // layout, so on any other make there is nothing here to import. Say that,
+  // rather than offering a Ford download page and a file picker that would
+  // refuse the file anyway (#60). An absent field means a server that does not
+  // report this yet, which keeps the previous behaviour.
+  if (data.supported_on_this_make === false) {
+    return (
+      <div className="banner info">
+        <span className="b-code">as-built</span>
+        <span>
+          {data.why_not_supported ?? "As-built files are not issued for this make."}
+        </span>
+      </div>
+    );
+  }
+
   async function importFile(file: File) {
     setBusy(true);
     setError(null);

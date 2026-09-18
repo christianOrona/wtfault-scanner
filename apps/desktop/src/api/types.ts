@@ -999,6 +999,15 @@ export interface AsBuiltStatus {
   what_it_is_not?: string;
   /** Present instead of the above when no single VIN has been established. */
   why_not_yet?: string;
+  /**
+   * False when as-built files are not issued for this make at all.
+   *
+   * Absent from a server that does not report it yet, so only an explicit
+   * `false` means unsupported.
+   */
+  supported_on_this_make?: boolean;
+  /** Why the import is not offered on this make, when it is not. */
+  why_not_supported?: string | null;
 }
 
 /** The result of importing one. */
