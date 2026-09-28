@@ -59,6 +59,20 @@ pub enum AgentError {
         provider: String,
         /// Seconds the provider asked us to wait, when it said.
         retry_after_secs: Option<u64>,
+        /// The provider's own explanation, when it gave one. A busy model and
+        /// a used-up daily allowance both answer 429, and only this tells
+        /// them apart.
+        message: Option<String>,
+    },
+
+    /// An allowance that resets on a schedule has been used up, so no retry
+    /// or other model will help until it does.
+    #[error("{provider}: {detail}")]
+    DailyLimit {
+        /// Which provider.
+        provider: String,
+        /// What was used up and when it comes back, for a person.
+        detail: String,
     },
 
     /// The answer did not have the shape the provider's API documents.
@@ -113,6 +127,7 @@ impl AgentError {
             AgentError::Unreachable { .. } => "provider_unreachable",
             AgentError::Api { .. } => "provider_error",
             AgentError::RateLimited { .. } => "provider_rate_limited",
+            AgentError::DailyLimit { .. } => "provider_daily_limit",
             AgentError::MalformedResponse { .. } => "provider_malformed_response",
             AgentError::Refused { .. } => "model_refused",
             AgentError::StepLimit { .. } => "agent_step_limit",
@@ -194,9 +209,12 @@ mod tests {
 
     #[test]
     fn retryable_classification() {
-        assert!(
-            AgentError::RateLimited { provider: "p".into(), retry_after_secs: None }.is_retryable()
-        );
+        assert!(AgentError::RateLimited {
+            provider: "p".into(),
+            retry_after_secs: None,
+            message: None
+        }
+        .is_retryable());
         assert!(AgentError::Api { provider: "p".into(), status: 503, message: String::new() }
             .is_retryable());
         assert!(!AgentError::Api { provider: "p".into(), status: 400, message: String::new() }

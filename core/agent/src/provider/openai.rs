@@ -26,6 +26,9 @@ pub struct OpenAiProvider {
     model: String,
     base_url: String,
     api_key: Option<Secret>,
+    /// Sent with every request. Empty for everything except OpenRouter, which
+    /// uses them to attribute traffic to an app.
+    headers: Vec<(&'static str, String)>,
     http: reqwest::Client,
 }
 
@@ -48,6 +51,7 @@ impl OpenAiProvider {
             model: model.into(),
             base_url: base_url.trim_end_matches('/').to_string(),
             api_key: api_key.filter(|k| !k.is_empty()),
+            headers: Vec::new(),
             http: reqwest::Client::builder()
                 .timeout(Duration::from_secs(600))
                 .build()
@@ -55,27 +59,30 @@ impl OpenAiProvider {
         })
     }
 
+    /// Send `name: value` with every request.
+    pub fn with_header(mut self, name: &'static str, value: impl Into<String>) -> Self {
+        self.headers.push((name, value.into()));
+        self
+    }
+
     fn authed(&self, rb: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        let rb = self.headers.iter().fold(rb, |rb, (name, value)| rb.header(*name, value));
         match &self.api_key {
             Some(k) => rb.header("authorization", format!("Bearer {}", k.expose())),
             None => rb,
         }
     }
-}
 
-#[async_trait::async_trait]
-impl LlmProvider for OpenAiProvider {
-    fn id(&self) -> &str {
-        &self.id
-    }
-    fn label(&self) -> &str {
-        &self.label
-    }
-    fn model(&self) -> &str {
-        &self.model
-    }
-
-    async fn chat(&self, request: &ChatRequest) -> Result<ChatResponse, AgentError> {
+    /// One chat turn, asking for `model` rather than the configured one.
+    ///
+    /// For a caller that chooses the model per request, such as OpenRouter's
+    /// free-model rotation, where the model that answers the next turn may not
+    /// be the one that answered this.
+    pub async fn chat_with(
+        &self,
+        model: &str,
+        request: &ChatRequest,
+    ) -> Result<ChatResponse, AgentError> {
         let endpoint = format!("{}/chat/completions", self.base_url);
 
         let mut messages = vec![json!({ "role": "system", "content": request.system })];
@@ -84,7 +91,7 @@ impl LlmProvider for OpenAiProvider {
         }
 
         let mut body = json!({
-            "model": self.model,
+            "model": model,
             "max_tokens": request.max_tokens,
             "messages": messages,
         });
@@ -111,6 +118,17 @@ impl LlmProvider for OpenAiProvider {
 
         if !(200..300).contains(&status) {
             return Err(status_error(&self.label, status, &text, retry_after));
+        }
+
+        // Some gateways, OpenRouter among them, report a failure from the
+        // model behind them inside a 200: an `error` object and no choices.
+        // Read as a status error so the caller can tell a busy model from a
+        // broken reply.
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+            if let Some(code) = v.get("error").and_then(|e| e.get("code")).and_then(|c| c.as_u64())
+            {
+                return Err(status_error(&self.label, code as u16, &text, retry_after));
+            }
         }
 
         let parsed: WireResponse = serde_json::from_str(&text).map_err(|e| {
@@ -152,7 +170,7 @@ impl LlmProvider for OpenAiProvider {
         };
 
         Ok(ChatResponse {
-            model: parsed.model.unwrap_or_else(|| self.model.clone()),
+            model: parsed.model.unwrap_or_else(|| model.to_string()),
             content,
             stop_reason,
             usage: Usage {
@@ -161,6 +179,23 @@ impl LlmProvider for OpenAiProvider {
                 cache_read_tokens: 0,
             },
         })
+    }
+}
+
+#[async_trait::async_trait]
+impl LlmProvider for OpenAiProvider {
+    fn id(&self) -> &str {
+        &self.id
+    }
+    fn label(&self) -> &str {
+        &self.label
+    }
+    fn model(&self) -> &str {
+        &self.model
+    }
+
+    async fn chat(&self, request: &ChatRequest) -> Result<ChatResponse, AgentError> {
+        self.chat_with(&self.model, request).await
     }
 
     async fn probe(&self) -> Result<ProviderInfo, AgentError> {

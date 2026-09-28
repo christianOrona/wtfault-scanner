@@ -259,6 +259,7 @@ pub(crate) fn status_error(
         429 => AgentError::RateLimited {
             provider: provider.to_string(),
             retry_after_secs: retry_after,
+            message: (!body.trim().is_empty()).then(|| extract_message(body)),
         },
         _ => AgentError::Api {
             provider: provider.to_string(),
