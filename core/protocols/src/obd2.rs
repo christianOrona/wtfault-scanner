@@ -272,12 +272,17 @@ impl MonitorTest {
     /// Scaling-independent: all three numbers share whatever unit the UASID
     /// declares, so this is correct even when that unit is unknown.
     ///
-    /// Signed scalings are the one caveat — for those the raw comparison can
-    /// mislead, so callers that know the UASID is signed should say so rather
-    /// than trusting this. Every unsigned scaling, which is nearly all of them,
-    /// compares correctly here.
+    /// For signed scalings (UASIDs 0x80..=0xFE), values are compared as two's
+    /// complement. This ensures correct pass/fail behavior for negative values.
     pub fn passed(&self) -> bool {
-        self.value >= self.min && self.value <= self.max
+        if self.is_signed() {
+            let value = self.value as i16;
+            let min = self.min as i16;
+            let max = self.max as i16;
+            value >= min && value <= max
+        } else {
+            self.value >= self.min && self.value <= self.max
+        }
     }
 
     /// How much room is left before the test fails, as a fraction of the limit
@@ -286,15 +291,34 @@ impl MonitorTest {
     /// This is the number worth showing. `0.03` means the component is within
     /// three percent of failing — which is a warning a trouble code will not
     /// give you for months.
+    ///
+    /// For signed scalings (UASIDs 0x80..=0xFE), values are compared as two's
+    /// complement. This ensures correct margin calculation for negative values.
     pub fn margin(&self) -> Option<f64> {
-        let (lo, hi) = (self.min as f64, self.max as f64);
+        let (lo, hi, v) = if self.is_signed() {
+            let value = self.value as i16;
+            let min = self.min as i16;
+            let max = self.max as i16;
+            (min as f64, max as f64, value as f64)
+        } else {
+            let (lo, hi) = (self.min as f64, self.max as f64);
+            let v = self.value as f64;
+            (lo, hi, v)
+        };
         let band = hi - lo;
         if band <= 0.0 {
             return None;
         }
-        let v = self.value as f64;
         // Distance to the nearer limit, normalised by the band.
         Some(((v - lo).min(hi - v) / band).max(0.0))
+    }
+
+    /// Whether this test uses a signed scaling (UASID 0x80..=0xFE).
+    ///
+    /// Per SAE J1979, UASIDs in the range 0x80..=0xFE are signed scalings
+    /// (two's complement), while 0x00..=0x7F are unsigned.
+    pub fn is_signed(&self) -> bool {
+        self.uasid >= 0x80 && self.uasid != 0xFF
     }
 }
 
@@ -684,6 +708,55 @@ mod tests {
         let mut payload = vec![0x01];
         payload.extend_from_slice(b"CAL-ID-EXAMPLE\0\0");
         assert_eq!(decode_ascii_records(&payload, 16), vec![String::from("CAL-ID-EXAMPLE")]);
+    }
+
+    #[test]
+    fn signed_monitor_tests_are_compared_as_twos_complement() {
+        // Records measured on a 2019 F-250 diesel (2026-09-28). All 19 read as
+        // failing when compared unsigned, on a truck with the MIL off.
+        let test_cases = [
+            (0x87, 65533, 65491, 32767), // -3 within [-45, 32767]
+            (0x87, 65533, 32768, 1900),  // -3 within [-32768, 1900]
+            (0x82, 65521, 32768, 80),    // -15 within [-32768, 80]
+            (0x82, 8, 65426, 32767),
+            (0x96, 1025, 32768, 1760),
+            (0x83, 65535, 64352, 1184), // -1 within [-1184, 1184]
+            (0xFB, 5, 63036, 32767),
+            (0xFC, 104, 65336, 30036),
+        ];
+
+        for (uasid, value, min, max) in test_cases {
+            let t = MonitorTest { mid: 0x21, tid: 0x80, uasid, value, min, max };
+            assert!(t.passed(), "Signed test case ({uasid}, {value}, {min}, {max}) should pass");
+        }
+
+        // Test a failing signed case
+        let t =
+            MonitorTest { mid: 0x21, tid: 0x80, uasid: 0x83, value: 1200, min: 64352, max: 1184 };
+        assert!(!t.passed(), "Signed test case (0x83, 1200, 64352, 1184) should fail");
+
+        // Test unsigned cases (unchanged behavior)
+        let t = MonitorTest { mid: 0x21, tid: 0x80, uasid: 0x0B, value: 580, min: 0, max: 600 };
+        assert!(t.passed(), "Unsigned test case (0x0B, 580, 0, 600) should pass");
+
+        let t = MonitorTest { mid: 0x21, tid: 0x80, uasid: 0x0B, value: 700, min: 0, max: 600 };
+        assert!(!t.passed(), "Unsigned test case (0x0B, 700, 0, 600) should fail");
+    }
+
+    #[test]
+    fn margin_calculation_works_for_signed_values() {
+        // Test margin calculation for signed values
+        let t = MonitorTest { mid: 0x21, tid: 0x80, uasid: 0x83, value: 0, min: 64352, max: 1184 };
+        assert_eq!(t.margin(), Some(0.5), "Margin should be 0.5 for value 0 in band [-1184, 1184]");
+
+        // Test that is_signed works correctly
+        let t_signed =
+            MonitorTest { mid: 0x21, tid: 0x80, uasid: 0x83, value: 0, min: 0, max: 100 };
+        assert!(t_signed.is_signed(), "UASID 0x83 should be signed");
+
+        let t_unsigned =
+            MonitorTest { mid: 0x21, tid: 0x80, uasid: 0x0B, value: 0, min: 0, max: 100 };
+        assert!(!t_unsigned.is_signed(), "UASID 0x0B should be unsigned");
     }
 }
 

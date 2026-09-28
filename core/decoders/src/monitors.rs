@@ -9,7 +9,8 @@
 //! 1. **Pass/fail and margin never depend on the scaling.** The value and both
 //!    limits arrive in the same unit, so the comparison is exact even when the
 //!    unit is unknown. That is the useful part of service 06 and it is always
-//!    trustworthy.
+//!    trustworthy. Signed scalings (UASIDs 0x80..=0xFE) are compared as two's
+//!    complement to ensure correct pass/fail behavior for negative values.
 //! 2. **Scaled values are marked unverified.** The UAS table has not been
 //!    validated against a real vehicle by this project, so a scaled number is
 //!    supporting evidence, never a measurement.
@@ -124,7 +125,7 @@ impl MonitorCatalog {
         let scale = |raw: u16| -> Option<f64> {
             let u = unit?;
             // A signed scaling reads the same bits as two's complement.
-            let n = if u.signed { raw as i16 as f64 } else { raw as f64 };
+            let n = if u.signed || t.is_signed() { raw as i16 as f64 } else { raw as f64 };
             Some(n * u.scale + u.offset)
         };
 
