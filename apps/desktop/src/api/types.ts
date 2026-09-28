@@ -161,6 +161,8 @@ export interface SerialPortInfo {
   manufacturer: string | null;
   product: string | null;
   likely_obd_adapter: boolean;
+  /** Why this port is not worth trying, when it is not. */
+  unusable_because?: string | null;
 }
 
 export interface ProbedPort {

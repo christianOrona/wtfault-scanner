@@ -10,6 +10,9 @@ import { api, describeError } from "../api/client";
 import type { Health, PortsResponse, ProbedPort, SerialPortInfo, ToolResult, ConnectData } from "../api/types";
 import { ErrorBanner, FailedResult, Spinner } from "./primitives";
 
+/** The Android build reaches a paired adapter by name, not through a COM port. */
+const onAndroid = /Android/i.test(navigator.userAgent);
+
 type Transport = "simulator" | "serial";
 
 export function ConnectDialog({
@@ -139,7 +142,7 @@ export function ConnectDialog({
           </div>
         ) : (
           <div className="field">
-            <label>Serial port</label>
+            <label>{onAndroid ? "Paired adapter" : "Serial port"}</label>
             <ErrorBanner error={portError} />
             <div className="row">
               <select
@@ -152,8 +155,8 @@ export function ConnectDialog({
                   const info = isProbed(p) ? p.port : p;
                   return (
                     <option key={info.name} value={info.name}>
-                      {info.name}
-                      {info.kind ? ` - ${info.kind}` : ""}
+                      {onAndroid && info.product ? info.product : info.name}
+                      {!onAndroid && info.kind ? ` - ${info.kind}` : ""}
                       {info.likely_obd_adapter ? " (likely OBD)" : ""}
                     </option>
                   );
@@ -165,9 +168,13 @@ export function ConnectDialog({
               </button>
             </div>
 
+            <UnusablePort ports={ports} port={port} />
+
             <span className="faint">
-              A paired Bluetooth ELM327 shows up as an outgoing COM port. The
-              &quot;likely OBD&quot; hint is name-based only - probe to confirm.
+              {onAndroid
+                ? "Adapters paired in Android's Bluetooth settings are listed by name. "
+                : "A paired Bluetooth ELM327 shows up as an outgoing COM port. "}
+              The &quot;likely OBD&quot; hint is name-based only - probe to confirm.
             </span>
 
             {ports?.probed && <ProbeResults ports={ports.ports} />}
@@ -182,10 +189,20 @@ export function ConnectDialog({
                 <span className="b-code">no adapter</span>
                 <div>
                   <div>
-                    No COM ports yet, so there is nothing to connect to. To pair one: Settings
-                    &gt; Bluetooth &amp; devices &gt; Add device (PIN is usually 1234 or 0000),
-                    then use the <strong>Outgoing</strong> port under More Bluetooth options &gt;
-                    COM Ports.
+                    {onAndroid ? (
+                      <>
+                        No paired adapters yet, so there is nothing to connect to. To pair one:
+                        Settings &gt; Connected devices &gt; Pair new device (PIN is usually 1234
+                        or 0000), then press Refresh.
+                      </>
+                    ) : (
+                      <>
+                        No COM ports yet, so there is nothing to connect to. To pair one: Settings
+                        &gt; Bluetooth &amp; devices &gt; Add device (PIN is usually 1234 or 0000),
+                        then use the <strong>Outgoing</strong> port under More Bluetooth options
+                        &gt; COM Ports.
+                      </>
+                    )}
                   </div>
                   <div style={{ marginTop: 8 }}>
                     You do not need one to try the app. The virtual vehicle is a full 2019 F-250
@@ -220,6 +237,24 @@ export function ConnectDialog({
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * The reason the selected port cannot work, when there is one. On Android this
+ * is where "Bluetooth is off" or "allow the permission" appears, instead of an
+ * empty list with no explanation.
+ */
+function UnusablePort({ ports, port }: { ports: PortsResponse | null; port: string }) {
+  const selected = ports?.ports
+    .map((p) => (isProbed(p) ? p.port : p))
+    .find((p) => p.name === port);
+  if (!selected?.unusable_because) return null;
+  return (
+    <div className="banner caution" style={{ marginTop: 8 }}>
+      <span className="b-code">can&apos;t use</span>
+      <div>{selected.unusable_because}</div>
     </div>
   );
 }

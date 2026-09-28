@@ -1084,7 +1084,9 @@ a.mini.button:hover { border-color: var(--accent-dim); background: #1c222c; }
     overflow-y: auto;
   }
   .overlay {
-    padding: 8px;
+    /* The overlay is fixed to the screen, not inside .app, so it keeps clear
+       of the status bar itself. */
+    padding: max(8px, env(safe-area-inset-top)) 8px max(8px, env(safe-area-inset-bottom));
     align-items: flex-start;
   }
   .row {
