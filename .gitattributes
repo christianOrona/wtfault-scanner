@@ -14,3 +14,8 @@
 # Generated lockfiles: keep them, but do not offer them up in review diffs.
 Cargo.lock linguist-generated=true
 package-lock.json linguist-generated=true
+
+# cmd.exe misreads a batch file with LF endings, and the Gradle wrapper jar is
+# a binary like any other.
+*.bat text eol=crlf
+*.jar binary
