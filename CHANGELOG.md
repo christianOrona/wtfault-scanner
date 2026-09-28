@@ -13,11 +13,20 @@ with the caveat that everything below 1.0 is allowed to move.
   the adapter by name. Everything the desktop does, the phone does, including
   the virtual vehicle. The Bluetooth link has not yet been used with a real
   adapter; see `docs/ANDROID.md`.
+- **Free AI, no GPU: OpenRouter.** Add OpenRouter as the model provider with a
+  free key and leave the model on *Automatic*. The assistant uses the newest
+  free model that can use its tools, and moves to the next one when that one is
+  busy or withdrawn. Free models allow 50 requests a day (an inspection takes
+  10–30); when they run out the app says so once, with when they come back.
+  Whoever serves a free model may keep what it is sent, so the VIN is withheld
+  by default.
 - **The interface fits a phone.** Below 760 px wide it stacks instead of
   squeezing, and wide tables scroll inside their own box.
 
 ### Fixed
 
+- The Android app no longer says the last session ended unexpectedly every
+  time it starts: Android closing a backgrounded app is not a crash.
 - The connect dialog says why a port cannot be used — Bluetooth off, permission
   not granted, nothing paired — instead of listing it beside the working ones.
 
