@@ -125,10 +125,12 @@ and were reported as not describing the vehicle.
 **Fixed.** 74 now decode on the truck, from OBDb's make-level `Ford` set (the
 `Ford-F-250` set is empty; the fetch now falls back to the make's). Two agree
 with standard readings from the same visit: coolant 29.9 °C against PID 05's
-30 °C, battery 12.3 V against `ATRV`. Odometer 157,473.8 km and tire pressures
-52.8 / 54.1 / 60.3 / 60.6 psi are unconfirmed against the dash. The rear inner
-pair read 150 psi on a single-rear-wheel truck: a no-sensor value, not a
-pressure.
+30 °C, battery 12.3 V against `ATRV`. The odometer (157,473.8 km) and all four
+tire pressures (52.8 / 54.1 / 60.3 / 60.6 psi) were confirmed by the owner
+against the dash. These are the first community signals verified on a real
+vehicle, and they are recorded against the VIN as established. The rear inner
+pair read 150 psi on a single-rear-wheel truck: a no-sensor value, recorded as
+ruled out.
 
 ### A long UDS fault reply was cut off by a timeout
 
