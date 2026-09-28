@@ -87,14 +87,18 @@ const LOOPBACK: [&str; 4] = ["127.0.0.1", "localhost", "::1", "[::1]"];
 
 /// Where a provider runs, from its kind and its endpoint.
 ///
-/// Anthropic and xAI are somebody else's by definition. Everything else is
+/// Anthropic, xAI and OpenRouter are somebody else's by definition. Everything else is
 /// decided by the host in the URL, because "ollama" says what dialect it
 /// speaks and nothing at all about where it is: an Ollama endpoint on a GPU
 /// box in the next room is not this machine, and an OpenAI-compatible endpoint
 /// on `127.0.0.1` is.
 pub fn locality_of(config: &ProviderConfig) -> Locality {
     match config.kind {
-        ProviderKind::Anthropic | ProviderKind::Xai => Locality::SomebodyElse,
+        // OpenRouter passes the request on to whoever serves the model, and
+        // for a free model that is often someone who keeps what it is sent.
+        ProviderKind::Anthropic | ProviderKind::Xai | ProviderKind::OpenRouter => {
+            Locality::SomebodyElse
+        }
         ProviderKind::Ollama | ProviderKind::OpenAiCompatible => {
             let url = config
                 .base_url

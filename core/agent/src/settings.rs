@@ -19,7 +19,8 @@
 use crate::credentials::{CredentialStore, KeySource, OsCredentialStore};
 use crate::error::{AgentError, Secret};
 use crate::provider::{
-    anthropic::AnthropicProvider, ollama::OllamaProvider, openai::OpenAiProvider, LlmProvider,
+    anthropic::AnthropicProvider, ollama::OllamaProvider, openai::OpenAiProvider,
+    openrouter::OpenRouterProvider, LlmProvider,
 };
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -52,12 +53,17 @@ pub enum ProviderKind {
     /// that transport; it exists as its own kind only so the UI can prefill the
     /// URL and know that a key is required.
     Xai,
+    /// OpenRouter. Also the OpenAI dialect, but with a model setting of its
+    /// own, `auto:free`, that picks among the free models and moves on when
+    /// one is busy. See [`crate::provider::openrouter`].
+    #[serde(rename = "openrouter")]
+    OpenRouter,
 }
 
 impl ProviderKind {
     /// Whether this kind cannot work without a credential.
     pub fn requires_key(self) -> bool {
-        matches!(self, ProviderKind::Anthropic | ProviderKind::Xai)
+        matches!(self, ProviderKind::Anthropic | ProviderKind::Xai | ProviderKind::OpenRouter)
     }
 
     /// A sensible base URL to prefill in the UI.
@@ -66,6 +72,7 @@ impl ProviderKind {
             ProviderKind::Anthropic => Some("https://api.anthropic.com"),
             ProviderKind::Ollama => Some(crate::provider::ollama::DEFAULT_BASE_URL),
             ProviderKind::Xai => Some(XAI_BASE_URL),
+            ProviderKind::OpenRouter => Some(crate::provider::openrouter::BASE_URL),
             ProviderKind::OpenAiCompatible => None,
         }
     }
@@ -221,7 +228,7 @@ impl ProviderConfig {
             // a switch that quietly does nothing.
             speed_supported: !matches!(
                 self.kind,
-                ProviderKind::OpenAiCompatible | ProviderKind::Xai
+                ProviderKind::OpenAiCompatible | ProviderKind::Xai | ProviderKind::OpenRouter
             ),
             selected,
         }
@@ -264,6 +271,15 @@ impl ProviderConfig {
                     self.api_key.clone(),
                 )?))
             }
+            ProviderKind::OpenRouter => Ok(Box::new(OpenRouterProvider::new(
+                &self.id,
+                &self.label,
+                &self.model,
+                self.base_url.as_deref(),
+                self.api_key.clone().ok_or_else(|| AgentError::MissingCredential {
+                    provider: self.label.clone(),
+                })?,
+            )?)),
             ProviderKind::Ollama => Ok(Box::new(OllamaProvider::new(
                 &self.id,
                 &self.label,
@@ -647,7 +663,7 @@ mod tests {
         assert_eq!(name(ProviderKind::Xai), "\"xai\"");
 
         // And they round-trip, which is what the POST body actually does.
-        for s in ["anthropic", "ollama", "openai_compatible", "xai"] {
+        for s in ["anthropic", "ollama", "openai_compatible", "xai", "openrouter"] {
             serde_json::from_str::<ProviderKind>(&format!("\"{s}\""))
                 .unwrap_or_else(|e| panic!("{s} should deserialize: {e}"));
         }

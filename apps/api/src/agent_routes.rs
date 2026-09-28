@@ -65,6 +65,11 @@ pub async fn list_providers(State(state): State<AppState>) -> ApiResult<Json<Val
             { "id": "xai", "label": "xAI (Grok)", "requires_key": true,
               "default_base_url": aim_agent::settings::XAI_BASE_URL,
               "help": "Grok, via xAI's OpenAI-compatible API. Leave the model blank and press Test - it will list what your key can use." },
+            { "id": "openrouter", "label": "OpenRouter (free models)", "requires_key": true,
+              "default_base_url": aim_agent::provider::openrouter::BASE_URL,
+              "default_model": aim_agent::provider::openrouter::AUTO_FREE,
+              "key_url": "https://openrouter.ai/keys",
+              "help": "Free models, no GPU needed. Needs a free OpenRouter key. Automatic picks the best free model and moves on when one is busy. Free models allow 50 requests a day (an inspection takes 10-30), and whoever serves a free model may keep what it is sent." },
             { "id": "openai_compatible", "label": "OpenAI-compatible", "requires_key": false,
               "default_base_url": null,
               "help": "vLLM, LM Studio, OpenRouter, or anything speaking /chat/completions." }
