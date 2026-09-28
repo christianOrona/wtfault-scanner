@@ -3,6 +3,24 @@
 Notable changes, newest first. Versions follow [semantic versioning](https://semver.org),
 with the caveat that everything below 1.0 is allowed to move.
 
+## [Unreleased]
+
+### Added
+
+- **An Android app.** The same scanner runs on an Android phone, so the thing
+  that goes to the car can be the thing in your pocket. Pair the ELM327 in
+  Android's Bluetooth settings, install the `.apk` from the release, and pick
+  the adapter by name. Everything the desktop does, the phone does, including
+  the virtual vehicle. The Bluetooth link has not yet been used with a real
+  adapter; see `docs/ANDROID.md`.
+- **The interface fits a phone.** Below 760 px wide it stacks instead of
+  squeezing, and wide tables scroll inside their own box.
+
+### Fixed
+
+- The connect dialog says why a port cannot be used — Bluetooth off, permission
+  not granted, nothing paired — instead of listing it beside the working ones.
+
 ## [0.5.0] — 2026-09-18
 
 Everything this app knew came off the vehicle in front of it or out of a file

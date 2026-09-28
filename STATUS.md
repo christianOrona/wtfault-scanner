@@ -130,6 +130,10 @@ past the cut are silently missing.
   and why — is stored against the VIN. The scorecard turns that into counts, so
   whether a second visit starts ahead of the first is measurable rather than a
   feeling.
+- **An Android build of the same app.** The core, the API and the interface are
+  shared; a Kotlin plugin reaches a paired adapter over Bluetooth Classic and is
+  listed and opened like a port. CI builds a debug APK on every push and a
+  signed one for every release.
 - **Sessions replay without the vehicle.** A recorded session exports as a
   transcript with the VIN anonymised, and CI replays recorded sessions and fails
   when a replay discovers less than the original did.
@@ -137,6 +141,11 @@ past the cut are silently missing.
 ## What is not built
 
 Honest gaps, in the order they matter.
+
+- **The Android app has never met a real adapter.** It builds in CI, installs,
+  and runs the whole core in the emulator against the virtual vehicle. The
+  Bluetooth link to a paired ELM327 is written but unverified until a phone
+  connects to one in the driveway (#64).
 
 - **Neither outside source has been used from a driveway.** The vPIC lookup and
   the OBDb fetch were built against the simulator and recorded fixtures. Both
