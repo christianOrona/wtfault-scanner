@@ -214,6 +214,12 @@ fn start_core(app: &mut tauri::App) -> tauri::Result<()> {
     // that froze or was killed never removed its marker, and this is the only
     // place that failure can be noticed — by definition it could not report
     // itself while it was happening.
+    //
+    // Desktop only. Android ends a backgrounded app by killing it, as a matter
+    // of course and without warning, so on a phone a missing goodbye is the
+    // normal case and the warning would appear on nearly every launch. Android
+    // reports real crashes itself.
+    #[cfg(desktop)]
     if let Some(previous) = aim_api::support::begin_run() {
         tracing::warn!(
             previous_version = %previous.version,
