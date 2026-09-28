@@ -130,3 +130,62 @@ jobs:
       - name: Clippy
         working-directory: apps/desktop/src-tauri
         run: cargo clippy --all-targets --locked -- -D warnings
+
+  android:
+    name: android app (linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      # Pinned so CI and a developer machine build with the same NDK. Bump it
+      # here and in docs/ANDROID.md together.
+      NDK_VERSION: 29.0.14206865
+    steps:
+      - uses: actions/checkout@v5
+
+      # The Android Gradle plugin needs JDK 17 or newer.
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      # The runner ships the SDK; the NDK version is ours to choose.
+      - name: Install the NDK
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$NDK_VERSION" > /dev/null
+          echo "NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+
+      # arm64 only: every phone this app is likely to meet. The release build
+      # adds 32-bit ARM.
+      - name: Add the Android target
+        run: rustup target add aarch64-linux-android
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+
+      - name: Install UI dependencies
+        working-directory: apps/desktop
+        run: npm ci
+
+      # A debug APK: no signing key needed, and it installs on a phone as it
+      # is. Building it proves the core, the shell and the Kotlin plugin still
+      # compile for Android; nothing else on this list would notice.
+      - name: Build a debug APK
+        working-directory: apps/desktop
+        run: npx tauri android build --debug --apk --target aarch64 --ci
+
+      # Kept for a fortnight so any commit on main can be installed on a phone
+      # straight from the run's page, without cutting a release.
+      - name: Keep the APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: wtfault-scanner-android-debug
+          path: apps/desktop/src-tauri/gen/android/app/build/outputs/apk/**/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
