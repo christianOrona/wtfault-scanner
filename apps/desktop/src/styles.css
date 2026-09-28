@@ -1029,3 +1029,79 @@ a.mini.button:hover { border-color: var(--accent-dim); background: #1c222c; }
   padding-top: 10px;
   border-top: 1px dashed var(--line);
 }
+
+/* ---------- phone ----------
+   The Android build runs this same interface on a screen about 400 px wide.
+   Nothing is hidden on a phone; things stack, and anything wider than the
+   screen scrolls inside its own box instead of pushing the page sideways. */
+@media (max-width: 760px) {
+  body { font-size: 15px; }
+  .topbar {
+    height: auto;
+    min-height: 48px;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 6px 10px;
+  }
+  .body {
+    flex-direction: column;
+    overflow-y: auto;
+  }
+  .sidebar {
+    width: auto;
+    max-height: 38vh;
+    border-right: none;
+    border-bottom: 1px solid var(--line);
+  }
+  .main {
+    min-height: 60vh;
+  }
+  .tabs {
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  .tabs::-webkit-scrollbar {
+    display: none;
+  }
+  .tabs button {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+  table {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+  }
+  .grid-2 {
+    grid-template-columns: 1fr;
+  }
+  .dialog {
+    width: calc(100vw - 16px);
+    max-width: calc(100vw - 16px);
+    max-height: calc(100vh - 16px);
+    overflow-y: auto;
+  }
+  .overlay {
+    padding: 8px;
+    align-items: flex-start;
+  }
+  .row {
+    flex-wrap: wrap;
+  }
+  button,
+  select,
+  input[type="text"],
+  input[type="number"] {
+    min-height: 40px;
+  }
+  select {
+    max-width: 100%;
+  }
+  .pane {
+    padding: 10px;
+  }
+}
+
+.app { padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
