@@ -294,23 +294,30 @@ impl MonitorTest {
     ///
     /// For signed scalings (UASIDs 0x80..=0xFE), values are compared as two's
     /// complement. This ensures correct margin calculation for negative values.
+    ///
+    /// A limit at the end of the range (0 or 65535, or -32768 or 32767 when
+    /// signed) is no limit: most tests are one-sided and fill the other side
+    /// with the extreme. Measured on a 2019 F-250 (2026-09-28), measuring from
+    /// those put 23 of 54 passing tests "within ten percent of failing",
+    /// including zero misfires against a band of 0 to 65535. A one-sided test
+    /// is measured against its real limit, as a fraction of that limit.
     pub fn margin(&self) -> Option<f64> {
-        let (lo, hi, v) = if self.is_signed() {
-            let value = self.value as i16;
-            let min = self.min as i16;
-            let max = self.max as i16;
-            (min as f64, max as f64, value as f64)
+        let (lo, hi, v, floor, ceiling) = if self.is_signed() {
+            let (value, min, max) = (self.value as i16, self.min as i16, self.max as i16);
+            (min as f64, max as f64, value as f64, i16::MIN as f64, i16::MAX as f64)
         } else {
-            let (lo, hi) = (self.min as f64, self.max as f64);
-            let v = self.value as f64;
-            (lo, hi, v)
+            (self.min as f64, self.max as f64, self.value as f64, 0.0, u16::MAX as f64)
         };
-        let band = hi - lo;
-        if band <= 0.0 {
+        if hi - lo <= 0.0 {
             return None;
         }
-        // Distance to the nearer limit, normalised by the band.
-        Some(((v - lo).min(hi - v) / band).max(0.0))
+        match (lo > floor, hi < ceiling) {
+            // Distance to the nearer limit, normalised by the band.
+            (true, true) => Some(((v - lo).min(hi - v) / (hi - lo)).max(0.0)),
+            (true, false) => Some(((v - lo) / lo.abs().max(1.0)).clamp(0.0, 1.0)),
+            (false, true) => Some(((hi - v) / hi.abs().max(1.0)).clamp(0.0, 1.0)),
+            (false, false) => None,
+        }
     }
 
     /// Whether this test uses a signed scaling (UASID 0x80..=0xFE).
@@ -741,6 +748,23 @@ mod tests {
 
         let t = MonitorTest { mid: 0x21, tid: 0x80, uasid: 0x0B, value: 700, min: 0, max: 600 };
         assert!(!t.passed(), "Unsigned test case (0x0B, 700, 0, 600) should fail");
+    }
+
+    #[test]
+    fn a_limit_at_the_end_of_the_range_is_no_limit() {
+        let t =
+            |uasid, value, min, max| MonitorTest { mid: 0x01, tid: 0x0B, uasid, value, min, max };
+        // Zero misfires in 0..=65535: nothing to be near.
+        assert_eq!(t(0x24, 0, 0, 65535).margin(), None);
+        // -3 against a lower limit of -45, no upper limit: 42 of 45 to spare.
+        let m = t(0x87, 65533, 65491, 32767).margin().unwrap();
+        assert!((m - 42.0 / 45.0).abs() < 1e-9, "{m}");
+        // Upper limit only: 970 against 1000 is three percent from failing.
+        assert_eq!(t(0x0B, 970, 0, 1000).margin(), Some(0.03));
+        // Past a one-sided limit is no room at all, not a negative amount.
+        assert_eq!(t(0x0B, 1200, 0, 1000).margin(), Some(0.0));
+        // A zero band ("must be zero") stays undefined.
+        assert_eq!(t(0x24, 0, 0, 0).margin(), None);
     }
 
     #[test]
