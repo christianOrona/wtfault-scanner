@@ -422,7 +422,7 @@ export type StreamFrame =
 
 // ---------------------------------------------------------------- the agent
 
-export type ProviderKindId = "anthropic" | "ollama" | "openai_compatible" | "xai";
+export type ProviderKindId = "anthropic" | "ollama" | "openai_compatible" | "xai" | "openrouter";
 
 /** How much the model should deliberate. Applied differently per provider. */
 export type Speed = "quality" | "fast";
@@ -460,6 +460,10 @@ export interface ProviderKindInfo {
   label: string;
   requires_key: boolean;
   default_base_url: string | null;
+  /** A model to prefill, when the kind has an obvious one. */
+  default_model?: string | null;
+  /** Where to get a key, when the kind needs one. */
+  key_url?: string | null;
   help: string;
 }
 

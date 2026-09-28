@@ -70,7 +70,7 @@ export function SettingsPane({
       kind,
       label: info?.label ?? "",
       base_url: info?.default_base_url ?? "",
-      model: kind === "anthropic" ? "claude-opus-5" : "",
+      model: info?.default_model ?? (kind === "anthropic" ? "claude-opus-5" : ""),
       api_key: "",
       speed: "quality",
       max_steps: null,
@@ -269,7 +269,12 @@ export function SettingsPane({
               onChange={(e) => {
                 const kind = e.target.value as ProviderKindId;
                 const info = kinds.find((k) => k.id === kind);
-                setDraft((d) => ({ ...d, kind, base_url: info?.default_base_url ?? "" }));
+                setDraft((d) => ({
+                  ...d,
+                  kind,
+                  base_url: info?.default_base_url ?? "",
+                  model: info?.default_model ?? d.model,
+                }));
               }}
             >
               {kinds.map((k) => <option key={k.id} value={k.id}>{k.label}</option>)}
@@ -287,8 +292,8 @@ export function SettingsPane({
             />
           </div>
 
-          {/* Anthropic is the only endpoint with no reason to be overridden. */}
-          {draft.kind !== "anthropic" && (
+          {/* Endpoints with no reason to be overridden. */}
+          {draft.kind !== "anthropic" && draft.kind !== "openrouter" && (
             <div className="field">
               <label>Endpoint{draft.kind === "openai_compatible" ? "" : " (optional)"}</label>
               <input
@@ -309,9 +314,25 @@ export function SettingsPane({
             <input
               type="text"
               value={draft.model}
+              list={draft.kind === "openrouter" ? "openrouter-models" : undefined}
               placeholder={draft.kind === "anthropic" ? "claude-opus-5" : "qwen2.5:7b"}
               onChange={(e) => setDraft((d) => ({ ...d, model: e.target.value }))}
             />
+            {draft.kind === "openrouter" && (
+              <>
+                {/* The free models the last Test found, offered as choices. */}
+                <datalist id="openrouter-models">
+                  {openRouterModels(editing ? probes[editing] : undefined).map((m) => (
+                    <option key={m} value={m} />
+                  ))}
+                </datalist>
+                <span className="faint">
+                  <code>auto:free</code> is Automatic: the newest free model that can use the
+                  app&apos;s tools, moving to the next when one is busy. Press Test after saving to
+                  see the free models, then pick one here to always use that model instead.
+                </span>
+              </>
+            )}
           </div>
 
           {(kindInfo?.requires_key || draft.kind === "openai_compatible") && (
@@ -326,10 +347,18 @@ export function SettingsPane({
                 placeholder={
                   editing !== "new" && data?.providers.find((p) => p.id === editing)?.has_key
                     ? "leave blank to keep the stored key"
-                    : "sk-ant-…"
+                    : draft.kind === "openrouter"
+                      ? "sk-or-…"
+                      : "sk-ant-…"
                 }
                 onChange={(e) => setDraft((d) => ({ ...d, api_key: e.target.value }))}
               />
+              {kindInfo?.key_url && (
+                <span className="faint">
+                  <ExternalLink href={kindInfo.key_url} label="Get a key" /> An OpenRouter key
+                  is free and needs no card.
+                </span>
+              )}
               {data && (
                 <span className="faint">
                   {data.storage_note} The file itself is at <code>{data.settings_path}</code>.
@@ -725,6 +754,12 @@ function AboutDialog({ health, onClose }: { health: Health | null; onClose: () =
       </div>
     </div>
   );
+}
+
+/** Model ids a Test of an OpenRouter provider offered, `auto:free` first. */
+function openRouterModels(probe: ProbeResult | "running" | undefined): string[] {
+  const listed = probe && probe !== "running" ? (probe.models ?? []) : [];
+  return listed.includes("auto:free") ? listed : ["auto:free", ...listed];
 }
 
 /**
