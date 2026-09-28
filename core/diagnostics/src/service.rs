@@ -5759,9 +5759,16 @@ impl DiagnosticService {
             ));
         };
 
+        // Most community signals live on body modules, and on a 2019 F-250 those
+        // are on the second bus. Asked from the primary bus, all 349 definitions
+        // read there on 2026-09-28 came back `NO DATA` and were reported as not
+        // describing the vehicle, when not one of them had reached its module.
         let target = RequestTarget::Physical(command.hdr.clone());
         let budget = self.adapter.capabilities().discovery_budget().read;
-        let replies = self.adapter.request_pdu(&request, &target, budget)?;
+        let home = self.reach_module(&command.hdr);
+        let replies = self.adapter.request_pdu(&request, &target, budget);
+        self.restore_bus(home);
+        let replies = replies?;
 
         // A positive response echoes the service with 0x40 added, then the
         // parameter. Anything else is not an answer to this question.
