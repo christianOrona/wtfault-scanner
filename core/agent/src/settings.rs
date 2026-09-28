@@ -376,12 +376,28 @@ pub struct SettingsStore {
     credentials: Box<dyn CredentialStore>,
 }
 
+/// The credential store this platform actually has.
+///
+/// `keyring` has no Android backend, and where it has none it falls back to an
+/// in-memory mock that reports success. A key saved there would be described as
+/// kept in the operating system's store, removed from the file, and gone at the
+/// next start. On Android keys therefore stay in the settings file, which sits
+/// in the app's private storage where other apps cannot read it, and the
+/// interface says so.
+fn platform_credentials() -> Box<dyn CredentialStore> {
+    if cfg!(target_os = "android") {
+        Box::new(crate::credentials::NoCredentialStore)
+    } else {
+        Box::new(OsCredentialStore)
+    }
+}
+
 impl SettingsStore {
     /// Point at a settings file, keeping keys in the OS credential store.
     ///
     /// The file need not exist yet.
     pub fn new(path: impl Into<PathBuf>) -> Self {
-        SettingsStore { path: path.into(), credentials: Box::new(OsCredentialStore) }
+        SettingsStore { path: path.into(), credentials: platform_credentials() }
     }
 
     /// Point at a settings file with a particular credential store.
