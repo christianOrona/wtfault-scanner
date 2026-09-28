@@ -74,10 +74,55 @@ pub fn repository_url(repository: &str) -> String {
 /// A name that can only ever be a file in the catalogue folder: letters, digits
 /// and hyphens, in OBDb's `Make-Model` shape. The hyphen also rules out Windows
 /// device names such as `CON`, which no folder may hold a file called.
+///
+/// This function now also accepts make-only repositories (e.g. "Ford") that are
+/// valid if they contain only ASCII letters and digits, are at most 64 characters,
+/// and are not Windows reserved device names.
 fn valid_repository(repository: &str) -> bool {
-    repository.contains('-')
-        && !repository.starts_with('-')
-        && repository.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+    // Check for Windows reserved device names (case-insensitive)
+    let lower_repo = repository.to_lowercase();
+    if ["con", "prn", "aux", "nul"].contains(&lower_repo.as_str()) {
+        return false;
+    }
+
+    // Check for COM and LPT devices
+    if lower_repo.starts_with("com") || lower_repo.starts_with("lpt") {
+        if let Ok(num) = lower_repo[3..].parse::<u32>() {
+            if (1..=9).contains(&num) {
+                return false;
+            }
+        }
+    }
+
+    // Check length
+    if repository.is_empty() || repository.len() > 64 {
+        return false;
+    }
+
+    // Check for hyphenated names (old rule)
+    if repository.contains('-') {
+        !repository.starts_with('-')
+            && repository.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+            && !repository.ends_with('-')
+            && !repository.contains("--")
+    } else {
+        // Make-only names (new rule)
+        repository.chars().all(|c| c.is_ascii_alphanumeric())
+    }
+}
+
+/// The make-level repository for a model repository, i.e. the part before the first '-'.
+///
+/// Returns `None` when the name has no hyphen (it is already a make) or the part
+/// before the hyphen is empty.
+pub fn make_repository(repository: &str) -> Option<String> {
+    if let Some(hyphen_pos) = repository.find('-') {
+        let make = &repository[..hyphen_pos];
+        if !make.is_empty() {
+            return Some(make.to_string());
+        }
+    }
+    None
 }
 
 /// Keep a fetched signal set where community sets are loaded from.
@@ -161,6 +206,8 @@ pub fn signalset_finding(repository: &str, commands: usize) -> (String, String) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::env;
+    use std::fs;
 
     #[test]
     fn the_subject_is_the_repository_under_a_signals_obdb_prefix() {
@@ -193,5 +240,64 @@ mod tests {
         let claim214 = signalset_finding("Mazda-Mazda3", 214).1;
         assert!(claim1.contains("unverified until"));
         assert!(claim214.contains("unverified until"));
+    }
+
+    #[test]
+    fn valid_repository_accepts_valid_names() {
+        assert!(valid_repository("Ford-F-250"));
+        assert!(valid_repository("Mazda-3"));
+        assert!(valid_repository("Ford"));
+    }
+
+    #[test]
+    fn valid_repository_rejects_invalid_names() {
+        assert!(!valid_repository(""));
+        assert!(!valid_repository("-Ford"));
+        assert!(!valid_repository("Ford-"));
+        assert!(!valid_repository("Ford--F"));
+        assert!(!valid_repository("CON"));
+        assert!(!valid_repository("con"));
+        assert!(!valid_repository("Com1"));
+        assert!(!valid_repository("LPT9"));
+        assert!(!valid_repository("Fo rd"));
+        assert!(!valid_repository("Ford/.."));
+        assert!(!valid_repository(".."));
+        assert!(!valid_repository("Ford\\x"));
+    }
+
+    #[test]
+    fn make_repository_works() {
+        assert_eq!(make_repository("Ford-F-250"), Some("Ford".to_string()));
+        assert_eq!(make_repository("Mazda-3"), Some("Mazda".to_string()));
+        assert_eq!(make_repository("Ford"), None);
+    }
+
+    #[test]
+    fn cache_signalset_with_make_repository() {
+        let temp_dir = env::temp_dir().join(format!("obdb_test_{}", std::process::id()));
+        let test_dir = temp_dir.join("catalog").join("obdb");
+        fs::create_dir_all(&test_dir).unwrap();
+
+        // Test caching a make-level repository
+        let result = cache_signalset(&temp_dir, "Ford", r#"{"commands":[]}"#);
+        assert!(result.is_ok());
+
+        // Verify the files were created
+        let json_path = test_dir.join("Ford.json");
+        let attribution_path = test_dir.join("Ford.ATTRIBUTION.md");
+        assert!(json_path.exists());
+        assert!(attribution_path.exists());
+
+        // Test that cached_signalset works
+        let cached = cached_signalset(&temp_dir, "Ford");
+        assert!(cached.is_some());
+        assert_eq!(cached.unwrap(), json_path);
+
+        // Test that cache_signalset rejects invalid repository names
+        let result = cache_signalset(&temp_dir, "CON", r#"{"commands":[]}"#);
+        assert!(result.is_err());
+
+        // Clean up
+        fs::remove_dir_all(&temp_dir).unwrap();
     }
 }
