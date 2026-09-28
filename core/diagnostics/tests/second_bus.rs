@@ -50,6 +50,30 @@ fn an_stn_adapter_reaches_modules_on_the_second_bus() {
     assert!(keys.iter().any(|k| !k.starts_with("BUS2_")), "primary modules still found: {keys:?}");
 }
 
+/// A full scan straight after a module scan still reaches the primary bus.
+///
+/// Measured on a 2019 F-250 (2026-09-28): the module scan went back to the
+/// primary bus with `ATSP0`, which makes the adapter search again, and every
+/// `3E00` probe of the full scan that followed was cut off mid-search. It found
+/// nothing on a truck that had answered three minutes earlier.
+#[test]
+fn a_full_scan_after_a_module_scan_still_finds_the_primary_bus() {
+    let transport =
+        SimulatedTransport::with_personality(ScenarioId::Healthy, AdapterPersonality::obdlink_mx());
+    let mut service = service_with(transport);
+
+    assert!(service.scan_modules(USER).success);
+    let scan = service.scan_all_modules(USER);
+    assert!(scan.success, "{:?}", scan.error);
+    let data = scan.data.expect("a full scan reports its buses");
+    let primary = data["buses"]
+        .as_array()
+        .and_then(|b| b.iter().find(|b| b["bus"] == "ECU"))
+        .map(|b| b["modules"].as_u64().unwrap_or(0))
+        .unwrap_or(0);
+    assert!(primary > 0, "primary-bus modules in the full scan: {}", data["buses"]);
+}
+
 #[test]
 fn a_clone_adapter_reports_only_the_primary_bus() {
     let mut service = service_with(SimulatedTransport::new(ScenarioId::Healthy));

@@ -353,6 +353,14 @@ impl ElmEmulator {
         let mut lines = Vec::new();
         let searching = self.protocol.is_none();
         if searching {
+            // A real search tries the non-CAN protocols first and takes several
+            // seconds, longer than any discovery probe waits. Measured on a 2019
+            // F-250 (2026-09-28): after `ATSP0`, every `3E00` probe was cut off
+            // before the search reached CAN. Only a legislated OBD request
+            // (services 01-0A) is given the time to finish one.
+            if !(0x01..=0x0A).contains(&request[0]) {
+                return Vec::new();
+            }
             lines.push(String::from("SEARCHING..."));
         }
 

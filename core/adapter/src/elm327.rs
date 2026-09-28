@@ -562,7 +562,8 @@ impl Elm327Adapter {
         // vehicle, where the answer means something.
         if self.caps.multiple_can_buses {
             self.caps.add_caveat(
-                "this adapter reports being able to reach a second CAN bus (125 kbit/s). Whether \
+                "this adapter reports being able to reach a second CAN bus; its speed is found \
+                 when it is first used. Whether \
                  anything answers there also depends on the cable being wired to pins 3 and 11, \
                  which no adapter can report",
             );
@@ -1212,11 +1213,19 @@ impl Elm327Adapter {
     /// cannot.
     /// Back to the bus every OBD-II tool reaches.
     ///
-    /// `ATSP0` rather than a remembered protocol number: the primary bus is
-    /// whatever the vehicle negotiates, and the adapter is better at finding
-    /// that than a cached answer from before the bus was changed.
+    /// The protocol negotiated at connect, not `ATSP0`. Measured on a 2019
+    /// F-250 on 2026-09-28: after `ATSP0` the adapter searches again on the
+    /// next request, and a search that starts with the non-CAN protocols
+    /// outlasts every deadline a discovery sweep uses. Each request was cut
+    /// off before the search reached CAN, the next command answered
+    /// `STOPPED`, and a full scan found nothing on a truck that had answered
+    /// three minutes earlier. `ATSP0` is left for when nothing was negotiated.
     fn select_primary_bus(&mut self) -> AimResult<()> {
-        if !self.configure("ATSP0", "return to the primary bus")? {
+        let command = match self.protocol.elm_id() {
+            Some(id) => format!("ATSP{id}"),
+            None => String::from("ATSP0"),
+        };
+        if !self.configure(&command, "return to the primary bus")? {
             return Err(AimError::new(
                 ErrorCode::AdapterRejectedCommand,
                 "the adapter refused to return to the primary bus",
