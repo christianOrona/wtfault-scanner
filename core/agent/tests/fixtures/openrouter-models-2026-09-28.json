@@ -1,0 +1,1748 @@
+{
+ "data": [
+  {
+   "id": "stealth/space-bunny-alpha",
+   "canonical_slug": "stealth/space-bunny-alpha",
+   "hugging_face_id": null,
+   "name": "Space Bunny Alpha",
+   "created": 1790174884,
+   "context_length": 1000000,
+   "architecture": {
+    "modality": "text+image+video->text",
+    "input_modalities": [
+     "text",
+     "image",
+     "video"
+    ],
+    "output_modalities": [
+     "text"
+    ],
+    "tokenizer": "Other",
+    "instruct_type": null
+   },
+   "pricing": {
+    "prompt": "0",
+    "completion": "0"
+   },
+   "top_provider": {
+    "context_length": 1000000,
+    "max_completion_tokens": 524288,
+    "is_moderated": false
+   },
+   "per_request_limits": null,
+   "supported_parameters": [
+    "include_reasoning",
+    "max_tokens",
+    "reasoning",
+    "reasoning_effort",
+    "response_format",
+    "temperature",
+    "tool_choice",
+    "tools",
+    "top_p"
+   ],
+   "default_parameters": {},
+   "supported_voices": null,
+   "knowledge_cutoff": null,
+   "expiration_date": null,
+   "links": {
+    "details": "/api/v1/models/stealth/space-bunny-alpha/endpoints"
+   },
+   "reasoning": {
+    "mandatory": true,
+    "supported_efforts": [
+     "max",
+     "xhigh",
+     "high",
+     "medium",
+     "low"
+    ],
+    "default_effort": "max"
+   }
+  },
+  {
+   "id": "inclusionai/ling-3.0-flash-sante:free",
+   "canonical_slug": "inclusionai/ling-3.0-flash-sante-20260904",
+   "hugging_face_id": null,
+   "name": "inclusionAI: Ling 3.0 Flash Sante (free)",
+   "created": 1788545946,
+   "context_length": 262144,
+   "architecture": {
+    "modality": "text->text",
+    "input_modalities": [
+     "text"
+    ],
+    "output_modalities": [
+     "text"
+    ],
+    "tokenizer": "Other",
+    "instruct_type": null
+   },
+   "pricing": {
+    "prompt": "0",
+    "completion": "0"
+   },
+   "top_provider": {
+    "context_length": 262144,
+    "max_completion_tokens": 32768,
+    "is_moderated": false
+   },
+   "per_request_limits": null,
+   "supported_parameters": [
+    "frequency_penalty",
+    "include_reasoning",
+    "logprobs",
+    "max_tokens",
+    "presence_penalty",
+    "reasoning",
+    "repetition_penalty",
+    "seed",
+    "stop",
+    "temperature",
+    "tool_choice",
+    "tools",
+    "top_k",
+    "top_logprobs",
+    "top_p"
+   ],
+   "default_parameters": {},
+   "supported_voices": null,
+   "knowledge_cutoff": null,
+   "expiration_date": null,
+   "links": {
+    "details": "/api/v1/models/inclusionai/ling-3.0-flash-sante-20260904/endpoints"
+   },
+   "reasoning": {
+    "mandatory": false,
+    "default_enabled": true
+   }
+  },
+  {
+   "id": "qwen/qwen3.8-27b:free",
+   "canonical_slug": "qwen/qwen3.8-27b-20260814",
+   "hugging_face_id": "Qwen/Qwen3.8-27B",
+   "name": "Qwen: Qwen3.8 27B (free)",
+   "created": 1786722910,
+   "context_length": 262144,
+   "architecture": {
+    "modality": "text+image+video->text",
+    "input_modalities": [
+     "text",
+     "image",
+     "video"
+    ],
+    "output_modalities": [
+     "text"
+    ],
+    "tokenizer": "Qwen",
+    "instruct_type": null
+   },
+   "pricing": {
+    "prompt": "0",
+    "completion": "0"
+   },
+   "top_provider": {
+    "context_length": 262144,
+    "max_completion_tokens": 235929,
+    "is_moderated": false
+   },
+   "per_request_limits": null,
+   "supported_parameters": [
+    "frequency_penalty",
+    "include_reasoning",
+    "max_tokens",
+    "presence_penalty",
+    "reasoning",
+    "reasoning_effort",
+    "repetition_penalty",
+    "stop",
+    "structured_outputs",
+    "temperature",
+    "tool_choice",
+    "tools",
+    "top_p"
+   ],
+   "default_parameters": {
+    "temperature": 1,
+    "top_p": 0.95,
+    "top_k": 20
+   },
+   "supported_voices": null,
+   "knowledge_cutoff": null,
+   "expiration_date": null,
+   "links": {
+    "details": "/api/v1/models/qwen/qwen3.8-27b-20260814/endpoints"
+   },
+   "benchmarks": {
+    "design_arena": [],
+    "artificial_analysis": {
+     "intelligence_index": 33.7,
+     "coding_index": 68.1,
+     "agentic_index": 45.8
+    }
+   },
+   "reasoning": {
+    "mandatory": false,
+    "default_enabled": true,
+    "supported_efforts": [
+     "xhigh",
+     "medium",
+     "low"
+    ],
+    "default_effort": "xhigh"
+   }
+  },
+  {
+   "id": "dots-studio/dots-3-note-preview:free",
+   "canonical_slug": "dots-studio/dots-3-note-preview-20260813",
+   "hugging_face_id": null,
+   "name": "Dots Studio: Dots3-Note Preview (free)",
+   "created": 1786680361,
+   "context_length": 512000,
+   "architecture": {
+    "modality": "text+image->text",
+    "input_modalities": [
+     "text",
+     "image"
+    ],
+    "output_modalities": [
+     "text"
+    ],
+    "tokenizer": "Other",
+    "instruct_type": null
+   },
+   "pricing": {
+    "prompt": "0",
+    "completion": "0"
+   },
+   "top_provider": {
+    "context_length": 512000,
+    "max_completion_tokens": 460800,
+    "is_moderated": false
+   },
+   "per_request_limits": null,
+   "supported_parameters": [
+    "include_reasoning",
+    "max_tokens",
+    "reasoning",
+    "response_format",
+    "structured_outputs",
+    "temperature",
+    "tool_choice",
+    "tools",
+    "top_p"
+   ],
+   "default_parameters": {},
+   "supported_voices": null,
+   "knowledge_cutoff": null,
+   "expiration_date": null,
+   "links": {
+    "details": "/api/v1/models/dots-studio/dots-3-note-preview-20260813/endpoints"
+   },
+   "reasoning": {
+    "mandatory": false
+   }
+  },
+  {
+   "id": "liquid/lfm-2.5-2.6b:free",
+   "canonical_slug": "liquid/lfm-2.5-2.6b-20260811",
+   "hugging_face_id": "LiquidAI/LFM2.5-2.6B",
+   "name": "LiquidAI: LFM2.5-2.6B (free)",
+   "created": 1786470519,
+   "context_length": 65536,
+   "architecture": {
+    "modality": "text->text",
+    "input_modalities": [
+     "text"
+    ],
+    "output_modalities": [
+     "text"
+    ],
+    "tokenizer": "Other",
+    "instruct_type": null
+   },
+   "pricing": {
+    "prompt": "0",
+    "completion": "0"
+   },
+   "top_provider": {
+    "context_length": 65536,
+    "max_completion_tokens": 8192,
+    "is_moderated": false
+   },
+   "per_request_limits": null,
+   "supported_parameters": [
+    "frequency_penalty",
+    "include_reasoning",
+    "logprobs",
+    "max_completion_tokens",
+    "max_tokens",
+    "min_p",
+    "presence_penalty",
+    "reasoning",
+    "repetition_penalty",
+    "response_format",
+    "seed",
+    "stop",
+    "structured_outputs",
+    "temperature",
+    "tool_choice",
+    "tools",
+    "top_k",
+    "top_logprobs",
+    "top_p"
+   ],
+   "default_parameters": {
+    "temperature": 0.1,
+    "top_k": 50,
+    "repetition_penalty": 1.1
+   },
+   "supported_voices": null,
+   "knowledge_cutoff": null,
+   "expiration_date": null,
+   "links": {
+    "details": "/api/v1/models/liquid/lfm-2.5-2.6b-20260811/endpoints"
+   },
+   "reasoning": {
+    "mandatory": true
+   }
+  },
+  {
+   "id": "nvidia/nemotron-3.5-lightning:free",
+   "canonical_slug": "nvidia/nemotron-3.5-lightning-20260807",
+   "hugging_face_id": "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16",
+   "name": "NVIDIA: Nemotron 3.5 Lightning (free)",
+   "created": 1786452751,
+   "context_length": 1000000,
+   "architecture": {
+    "modality": "text->text",
+    "input_modalities": [
+     "text"
+    ],
+    "output_modalities": [
+     "text"
+    ],
+    "tokenizer": "Other",
+    "instruct_type": null
+   },
+   "pricing": {
+    "prompt": "0",
+    "completion": "0"
+   },
+   "top_provider": {
+    "context_length": 1000000,
+    "max_completion_tokens": 65536,
+    "is_moderated": false
+   },
+   "per_request_limits": null,
+   "supported_parameters": [
+    "include_reasoning",
+    "max_tokens",
+    "reasoning",
+    "seed",
+    "temperature",
+    "tool_choice",
+    "tools",
+    "top_p"
+   ],
+   "default_parameters": {},
+   "supported_voices": null,
+   "knowledge_cutoff": null,
+   "expiration_date": null,
+   "links": {
+    "details": "/api/v1/models/nvidia/nemotron-3.5-lightning-20260807/endpoints"
+   },
+   "benchmarks": {
+    "design_arena": [],
+    "artificial_analysis": {
+     "intelligence_index": 12.9,
+     "coding_index": 26.8,
+     "agentic_index": 3.5
+    }
+   },
+   "reasoning": {
+    "mandatory": false
+   }
+  },
+  {
+   "id": "thinkingmachines/inkling-small:free",
+   "canonical_slug": "thinkingmachines/inkling-small-20260730",
+   "hugging_face_id": "thinkingmachines/Inkling-Small",
+   "name": "Thinking Machines: Inkling Small (free)",
+   "created": 1785443117,
+   "context_length": 1048576,
+   "architecture": {
+    "modality": "text+image+audio->text",
+    "input_modalities": [
+     "text",
+     "image",
+     "audio"
+    ],
+    "output_modalities": [
+     "text"
+    ],
+    "tokenizer": "Other",
+    "instruct_type": null
+   },
+   "pricing": {
+    "prompt": "0",
+    "completion": "0"
+   },
+   "top_provider": {
+    "context_length": 1048576,
+    "max_completion_tokens": 262144,
+    "is_moderated": false
+   },
+   "per_request_limits": null,
+   "supported_parameters": [
+    "frequency_penalty",
+    "include_reasoning",
+    "max_tokens",
+    "presence_penalty",
+    "reasoning",
+    "reasoning_effort",
+    "seed",
+    "stop",
+    "temperature",
+    "tools",
+    "top_p"
+   ],
+   "default_parameters": {
+    "temperature": null,
+    "top_p": null,
+    "top_k": null,
+    "frequency_penalty": null,
+    "presence_penalty": null,
+    "repetition_penalty": null
+   },
+   "supported_voices": null,
+   "knowledge_cutoff": null,
+   "expiration_date": null,
+   "links": {
+    "details": "/api/v1/models/thinkingmachines/inkling-small-20260730/endpoints"
+   },
+   "benchmarks": {
+    "design_arena": [],
+    "artificial_analysis": {
+     "intelligence_index": null,
+     "coding_index": 52.9,
+     "agentic_index": null
+    }
+   },
+   "reasoning": {
+    "mandatory": false,
+    "default_enabled": true,
+    "supported_efforts": [
+     "max",
+     "high",
+     "medium",
+     "low",
+     "minimal",
+     "none"
+    ],
+    "default_effort": "high"
+   }
+  },
+  {
+   "id": "poolside/laguna-s-2.1:free",
+   "canonical_slug": "poolside/laguna-s-2.1-20260720",
+   "hugging_face_id": "poolside/Laguna-S-2.1",
+   "name": "Poolside: Laguna S 2.1 (free)",
+   "created": 1784652683,
+   "context_length": 262144,
+   "architecture": {
+    "modality": "text->text",
+    "input_modalities": [
+     "text"
+    ],
+    "output_modalities": [
+     "text"
+    ],
+    "tokenizer": "Other",
+    "instruct_type": null
+   },
+   "pricing": {
+    "prompt": "0",
+    "completion": "0"
+   },
+   "top_provider": {
+    "context_length": 262144,
+    "max_completion_tokens": 32768,
+    "is_moderated": false
+   },
+   "per_request_limits": null,
+   "supported_parameters": [
+    "include_reasoning",
+    "max_tokens",
+    "reasoning",
+    "temperature",
+    "tool_choice",
+    "tools"
+   ],
+   "default_parameters": {},
+   "supported_voices": null,
+   "knowledge_cutoff": null,
+   "expiration_date": null,
+   "links": {
+    "details": "/api/v1/models/poolside/laguna-s-2.1-20260720/endpoints"
+   },
+   "reasoning": {
+    "mandatory": false,
+    "default_enabled": true
+   }
+  },
+  {
+   "id": "thinkingmachines/inkling:free",
+   "canonical_slug": "thinkingmachines/inkling-20260715",
+   "hugging_face_id": "thinkingmachines/Inkling",
+   "name": "Thinking Machines: Inkling (free)",
+   "created": 1784325956,
+   "context_length": 1048576,
+   "architecture": {
+    "modality": "text+image+audio->text",
+    "input_modalities": [
+     "text",
+     "image",
+     "audio"
+    ],
+    "output_modalities": [
+     "text"
+    ],
+    "tokenizer": "Other",
+    "instruct_type": null
+   },
+   "pricing": {
+    "prompt": "0",
+    "completion": "0"
+   },
+   "top_provider": {
+    "context_length": 1048576,
+    "max_completion_tokens": 262144,
+    "is_moderated": false
+   },
+   "per_request_limits": null,
+   "supported_parameters": [
+    "frequency_penalty",
+    "include_reasoning",
+    "max_tokens",
+    "presence_penalty",
+    "reasoning",
+    "reasoning_effort",
+    "seed",
+    "stop",
+    "temperature",
+    "tools",
+    "top_p"
+   ],
+   "default_parameters": {
+    "temperature": null,
+    "top_p": null,
+    "top_k": null,
+    "frequency_penalty": null,
+    "presence_penalty": null,
+    "repetition_penalty": null
+   },
+   "supported_voices": null,
+   "knowledge_cutoff": null,
+   "expiration_date": null,
+   "links": {
+    "details": "/api/v1/models/thinkingmachines/inkling-20260715/endpoints"
+   },
+   "benchmarks": {
+    "design_arena": [
+     {
+      "arena": "models",
+      "category": "3d",
+      "elo": 1178,
+      "win_rate": 40.4,
+      "rank": 55
+     },
+     {
+      "arena": "models",
+      "category": "asciiart",
+      "elo": 1104,
+      "win_rate": 33.9,
+      "rank": 59
+     },
+     {
+      "arena": "models",
+      "category": "codecategories",
+      "elo": 1212,
+      "win_rate": 42.1,
+      "rank": 49
+     },
+     {
+      "arena": "models",
+      "category": "dataviz",
+      "elo": 1178,
+      "win_rate": 38.3,
+      "rank": 63
+     },
+     {
+      "arena": "models",
+      "category": "gamedev",
+      "elo": 1176,
+      "win_rate": 37.8,
+      "rank": 61
+     },
+     {
+      "arena": "models",
+      "category": "svg",
+      "elo": 1111,
+      "win_rate": 34.5,
+      "rank": 54
+     },
+     {
+      "arena": "models",
+      "category": "uicomponent",
+      "elo": 1207,
+      "win_rate": 41.2,
+      "rank": 49
+     },
+     {
+      "arena": "models",
+      "category": "website",
+      "elo": 1229,
+      "win_rate": 44.1,
+      "rank": 47
+     }
+    ],
+    "artificial_analysis": {
+     "intelligence_index": 25,
+     "coding_index": 52.1,
+     "agentic_index": 22.5
+    }
+   },
+   "reasoning": {
+    "mandatory": false,
+    "default_enabled": true,
+    "supported_efforts": [
+     "max",
+     "high",
+     "medium",
+     "low",
+     "minimal",
+     "none"
+    ],
+    "default_effort": "high"
+   }
+  },
+  {
+   "id": "poolside/laguna-xs-2.1:free",
+   "canonical_slug": "poolside/laguna-xs-2.1-20260625",
+   "hugging_face_id": "poolside/Laguna-XS-2.1",
+   "name": "Poolside: Laguna XS 2.1 (free)",
+   "created": 1783002429,
+   "context_length": 262144,
+   "architecture": {
+    "modality": "text->text",
+    "input_modalities": [
+     "text"
+    ],
+    "output_modalities": [
+     "text"
+    ],
+    "tokenizer": "Other",
+    "instruct_type": null
+   },
+   "pricing": {
+    "prompt": "0",
+    "completion": "0"
+   },
+   "top_provider": {
+    "context_length": 262144,
+    "max_completion_tokens": 32768,
+    "is_moderated": false
+   },
+   "per_request_limits": null,
+   "supported_parameters": [
+    "include_reasoning",
+    "max_tokens",
+    "reasoning",
+    "temperature",
+    "tool_choice",
+    "tools"
+   ],
+   "default_parameters": {},
+   "supported_voices": null,
+   "knowledge_cutoff": null,
+   "expiration_date": null,
+   "links": {
+    "details": "/api/v1/models/poolside/laguna-xs-2.1-20260625/endpoints"
+   },
+   "reasoning": {
+    "mandatory": false,
+    "default_enabled": true
+   }
+  },
+  {
+   "id": "cohere/north-mini-code:free",
+   "canonical_slug": "cohere/north-mini-code-20260617",
+   "hugging_face_id": "CohereLabs/North-Mini-Code-1.0",
+   "name": "Cohere: North Mini Code (free)",
+   "created": 1781723748,
+   "context_length": 256000,
+   "architecture": {
+    "modality": "text->text",
+    "input_modalities": [
+     "text"
+    ],
+    "output_modalities": [
+     "text"
+    ],
+    "tokenizer": "Cohere",
+    "instruct_type": null
+   },
+   "pricing": {
+    "prompt": "0",
+    "completion": "0"
+   },
+   "top_provider": {
+    "context_length": 256000,
+    "max_completion_tokens": 64000,
+    "is_moderated": true
+   },
+   "per_request_limits": null,
+   "supported_parameters": [
+    "frequency_penalty",
+    "include_reasoning",
+    "max_tokens",
+    "presence_penalty",
+    "reasoning",
+    "seed",
+    "stop",
+    "temperature",
+    "tool_choice",
+    "tools",
+    "top_k",
+    "top_p"
+   ],
+   "default_parameters": {
+    "temperature": null,
+    "top_p": null,
+    "top_k": null,
+    "frequency_penalty": null,
+    "presence_penalty": null,
+    "repetition_penalty": null
+   },
+   "supported_voices": null,
+   "knowledge_cutoff": null,
+   "expiration_date": null,
+   "links": {
+    "details": "/api/v1/models/cohere/north-mini-code-20260617/endpoints"
+   },
+   "benchmarks": {
+    "design_arena": [],
+    "artificial_analysis": {
+     "intelligence_index": 9.9,
+     "coding_index": 36.5,
+     "agentic_index": 1.1
+    }
+   },
+   "reasoning": {
+    "mandatory": false
+   }
+  },
+  {
+   "id": "nvidia/nemotron-3.5-content-safety:free",
+   "canonical_slug": "nvidia/nemotron-3.5-content-safety-20260604",
+   "hugging_face_id": "nvidia/Nemotron-3.5-Content-Safety",
+   "name": "NVIDIA: Nemotron 3.5 Content Safety (free)",
+   "created": 1780581864,
+   "context_length": 128000,
+   "architecture": {
+    "modality": "text+image->text",
+    "input_modalities": [
+     "text",
+     "image"
+    ],
+    "output_modalities": [
+     "text"
+    ],
+    "tokenizer": "Other",
+    "instruct_type": null
+   },
+   "pricing": {
+    "prompt": "0",
+    "completion": "0"
+   },
+   "top_provider": {
+    "context_length": 128000,
+    "max_completion_tokens": 8192,
+    "is_moderated": false
+   },
+   "per_request_limits": null,
+   "supported_parameters": [
+    "include_reasoning",
+    "max_tokens",
+    "reasoning",
+    "seed",
+    "temperature",
+    "top_p"
+   ],
+   "default_parameters": {
+    "temperature": null,
+    "top_p": null,
+    "top_k": null,
+    "frequency_penalty": null,
+    "presence_penalty": null,
+    "repetition_penalty": null
+   },
+   "supported_voices": null,
+   "knowledge_cutoff": null,
+   "expiration_date": null,
+   "links": {
+    "details": "/api/v1/models/nvidia/nemotron-3.5-content-safety-20260604/endpoints"
+   },
+   "reasoning": {
+    "mandatory": false,
+    "default_enabled": true
+   }
+  },
+  {
+   "id": "nvidia/nemotron-3-ultra-550b-a55b:free",
+   "canonical_slug": "nvidia/nemotron-3-ultra-550b-a55b-20260604",
+   "hugging_face_id": "nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-BF16",
+   "name": "NVIDIA: Nemotron 3 Ultra (free)",
+   "created": 1780551208,
+   "context_length": 1000000,
+   "architecture": {
+    "modality": "text->text",
+    "input_modalities": [
+     "text"
+    ],
+    "output_modalities": [
+     "text"
+    ],
+    "tokenizer": "Other",
+    "instruct_type": null
+   },
+   "pricing": {
+    "prompt": "0",
+    "completion": "0"
+   },
+   "top_provider": {
+    "context_length": 1000000,
+    "max_completion_tokens": 65536,
+    "is_moderated": false
+   },
+   "per_request_limits": null,
+   "supported_parameters": [
+    "include_reasoning",
+    "max_tokens",
+    "reasoning",
+    "reasoning_effort",
+    "seed",
+    "temperature",
+    "tool_choice",
+    "tools",
+    "top_p"
+   ],
+   "default_parameters": {
+    "temperature": 1,
+    "top_p": 0.95,
+    "top_k": null,
+    "frequency_penalty": null,
+    "presence_penalty": null,
+    "repetition_penalty": null
+   },
+   "supported_voices": null,
+   "knowledge_cutoff": null,
+   "expiration_date": null,
+   "links": {
+    "details": "/api/v1/models/nvidia/nemotron-3-ultra-550b-a55b-20260604/endpoints"
+   },
+   "benchmarks": {
+    "design_arena": [
+     {
+      "arena": "models",
+      "category": "3d",
+      "elo": 1151,
+      "win_rate": 39.4,
+      "rank": 65
+     },
+     {
+      "arena": "models",
+      "category": "asciiart",
+      "elo": 1102,
+      "win_rate": 37.6,
+      "rank": 61
+     },
+     {
+      "arena": "models",
+      "category": "codecategories",
+      "elo": 1153,
+      "win_rate": 36.3,
+      "rank": 75
+     },
+     {
+      "arena": "models",
+      "category": "dataviz",
+      "elo": 1153,
+      "win_rate": 37.8,
+      "rank": 74
+     },
+     {
+      "arena": "models",
+      "category": "gamedev",
+      "elo": 1151,
+      "win_rate": 36.8,
+      "rank": 71
+     },
+     {
+      "arena": "models",
+      "category": "svg",
+      "elo": 1067,
+      "win_rate": 33.1,
+      "rank": 66
+     },
+     {
+      "arena": "models",
+      "category": "uicomponent",
+      "elo": 1149,
+      "win_rate": 36.9,
+      "rank": 71
+     },
+     {
+      "arena": "models",
+      "category": "website",
+      "elo": 1147,
+      "win_rate": 34.9,
+      "rank": 85
+     }
+    ],
+    "artificial_analysis": {
+     "intelligence_index": 22.9,
+     "coding_index": 49.3,
+     "agentic_index": 20.1
+    }
+   },
+   "reasoning": {
+    "mandatory": false,
+    "default_enabled": true,
+    "supports_max_tokens": true,
+    "supported_efforts": [
+     "high",
+     "medium"
+    ],
+    "default_effort": "high"
+   }
+  },
+  {
+   "id": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+   "canonical_slug": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning-20260428",
+   "hugging_face_id": "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16",
+   "name": "NVIDIA: Nemotron 3 Nano Omni (free)",
+   "created": 1777393095,
+   "context_length": 256000,
+   "architecture": {
+    "modality": "text+image+audio+video->text",
+    "input_modalities": [
+     "text",
+     "audio",
+     "image",
+     "video"
+    ],
+    "output_modalities": [
+     "text"
+    ],
+    "tokenizer": "Other",
+    "instruct_type": null
+   },
+   "pricing": {
+    "prompt": "0",
+    "completion": "0"
+   },
+   "top_provider": {
+    "context_length": 256000,
+    "max_completion_tokens": 65536,
+    "is_moderated": false
+   },
+   "per_request_limits": null,
+   "supported_parameters": [
+    "include_reasoning",
+    "max_tokens",
+    "reasoning",
+    "seed",
+    "temperature",
+    "tool_choice",
+    "tools",
+    "top_p"
+   ],
+   "default_parameters": {
+    "temperature": 0.6,
+    "top_p": 0.95,
+    "top_k": null,
+    "frequency_penalty": null,
+    "presence_penalty": null,
+    "repetition_penalty": null
+   },
+   "supported_voices": null,
+   "knowledge_cutoff": null,
+   "expiration_date": null,
+   "links": {
+    "details": "/api/v1/models/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning-20260428/endpoints"
+   },
+   "benchmarks": {
+    "design_arena": [],
+    "artificial_analysis": {
+     "intelligence_index": null,
+     "coding_index": 13.8,
+     "agentic_index": null
+    }
+   },
+   "reasoning": {
+    "mandatory": false,
+    "default_enabled": true,
+    "supports_max_tokens": true
+   }
+  },
+  {
+   "id": "google/gemma-4-26b-a4b-it:free",
+   "canonical_slug": "google/gemma-4-26b-a4b-it-20260403",
+   "hugging_face_id": "google/gemma-4-26B-A4B-it",
+   "name": "Google: Gemma 4 26B A4B  (free)",
+   "created": 1775227989,
+   "context_length": 262144,
+   "architecture": {
+    "modality": "text+image+video->text",
+    "input_modalities": [
+     "image",
+     "text",
+     "video"
+    ],
+    "output_modalities": [
+     "text"
+    ],
+    "tokenizer": "Gemma",
+    "instruct_type": null
+   },
+   "pricing": {
+    "prompt": "0",
+    "completion": "0"
+   },
+   "top_provider": {
+    "context_length": 262144,
+    "max_completion_tokens": 32768,
+    "is_moderated": false
+   },
+   "per_request_limits": null,
+   "supported_parameters": [
+    "include_reasoning",
+    "max_tokens",
+    "reasoning",
+    "response_format",
+    "seed",
+    "temperature",
+    "tool_choice",
+    "tools",
+    "top_p"
+   ],
+   "default_parameters": {
+    "temperature": 1,
+    "top_p": 0.95,
+    "top_k": 64
+   },
+   "supported_voices": null,
+   "knowledge_cutoff": null,
+   "expiration_date": null,
+   "links": {
+    "details": "/api/v1/models/google/gemma-4-26b-a4b-it-20260403/endpoints"
+   },
+   "benchmarks": {
+    "design_arena": [],
+    "artificial_analysis": {
+     "intelligence_index": null,
+     "coding_index": 39.3,
+     "agentic_index": null
+    }
+   },
+   "reasoning": {
+    "mandatory": false,
+    "default_enabled": false
+   }
+  },
+  {
+   "id": "google/gemma-4-31b-it:free",
+   "canonical_slug": "google/gemma-4-31b-it-20260402",
+   "hugging_face_id": "google/gemma-4-31B-it",
+   "name": "Google: Gemma 4 31B (free)",
+   "created": 1775148486,
+   "context_length": 262144,
+   "architecture": {
+    "modality": "text+image+video->text",
+    "input_modalities": [
+     "image",
+     "text",
+     "video"
+    ],
+    "output_modalities": [
+     "text"
+    ],
+    "tokenizer": "Gemma",
+    "instruct_type": null
+   },
+   "pricing": {
+    "prompt": "0",
+    "completion": "0"
+   },
+   "top_provider": {
+    "context_length": 262144,
+    "max_completion_tokens": 32768,
+    "is_moderated": false
+   },
+   "per_request_limits": null,
+   "supported_parameters": [
+    "include_reasoning",
+    "max_tokens",
+    "reasoning",
+    "response_format",
+    "seed",
+    "temperature",
+    "tool_choice",
+    "tools",
+    "top_p"
+   ],
+   "default_parameters": {
+    "temperature": 1,
+    "top_p": 0.95,
+    "top_k": 64,
+    "frequency_penalty": null,
+    "presence_penalty": null,
+    "repetition_penalty": null
+   },
+   "supported_voices": null,
+   "knowledge_cutoff": null,
+   "expiration_date": null,
+   "links": {
+    "details": "/api/v1/models/google/gemma-4-31b-it-20260402/endpoints"
+   },
+   "benchmarks": {
+    "design_arena": [],
+    "artificial_analysis": {
+     "intelligence_index": null,
+     "coding_index": 43.4,
+     "agentic_index": 4.2
+    }
+   },
+   "reasoning": {
+    "mandatory": false,
+    "default_enabled": false
+   }
+  },
+  {
+   "id": "google/lyria-3-pro-preview",
+   "canonical_slug": "google/lyria-3-pro-preview-20260330",
+   "hugging_face_id": null,
+   "name": "Google: Lyria 3 Pro Preview",
+   "created": 1774907286,
+   "context_length": 1048576,
+   "architecture": {
+    "modality": "text+image->text+audio",
+    "input_modalities": [
+     "text",
+     "image"
+    ],
+    "output_modalities": [
+     "text",
+     "audio"
+    ],
+    "tokenizer": "Other",
+    "instruct_type": null
+   },
+   "pricing": {
+    "prompt": "0",
+    "completion": "0"
+   },
+   "top_provider": {
+    "context_length": 1048576,
+    "max_completion_tokens": 65536,
+    "is_moderated": false
+   },
+   "per_request_limits": null,
+   "supported_parameters": [
+    "max_tokens",
+    "response_format",
+    "seed",
+    "temperature",
+    "top_p"
+   ],
+   "default_parameters": {
+    "temperature": null,
+    "top_p": null,
+    "top_k": null,
+    "frequency_penalty": null,
+    "presence_penalty": null,
+    "repetition_penalty": null
+   },
+   "supported_voices": null,
+   "knowledge_cutoff": null,
+   "expiration_date": null,
+   "links": {
+    "details": "/api/v1/models/google/lyria-3-pro-preview-20260330/endpoints"
+   }
+  },
+  {
+   "id": "google/lyria-3-clip-preview",
+   "canonical_slug": "google/lyria-3-clip-preview-20260330",
+   "hugging_face_id": null,
+   "name": "Google: Lyria 3 Clip Preview",
+   "created": 1774907255,
+   "context_length": 1048576,
+   "architecture": {
+    "modality": "text+image->text+audio",
+    "input_modalities": [
+     "text",
+     "image"
+    ],
+    "output_modalities": [
+     "text",
+     "audio"
+    ],
+    "tokenizer": "Other",
+    "instruct_type": null
+   },
+   "pricing": {
+    "prompt": "0",
+    "completion": "0"
+   },
+   "top_provider": {
+    "context_length": 1048576,
+    "max_completion_tokens": 65536,
+    "is_moderated": false
+   },
+   "per_request_limits": null,
+   "supported_parameters": [
+    "max_tokens",
+    "response_format",
+    "seed",
+    "temperature",
+    "top_p"
+   ],
+   "default_parameters": {
+    "temperature": null,
+    "top_p": null,
+    "top_k": null,
+    "frequency_penalty": null,
+    "presence_penalty": null,
+    "repetition_penalty": null
+   },
+   "supported_voices": null,
+   "knowledge_cutoff": null,
+   "expiration_date": null,
+   "links": {
+    "details": "/api/v1/models/google/lyria-3-clip-preview-20260330/endpoints"
+   }
+  },
+  {
+   "id": "nvidia/nemotron-3-super-120b-a12b:free",
+   "canonical_slug": "nvidia/nemotron-3-super-120b-a12b-20230311",
+   "hugging_face_id": "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-FP8",
+   "name": "NVIDIA: Nemotron 3 Super (free)",
+   "created": 1773245239,
+   "context_length": 262144,
+   "architecture": {
+    "modality": "text->text",
+    "input_modalities": [
+     "text"
+    ],
+    "output_modalities": [
+     "text"
+    ],
+    "tokenizer": "Other",
+    "instruct_type": null
+   },
+   "pricing": {
+    "prompt": "0",
+    "completion": "0"
+   },
+   "top_provider": {
+    "context_length": 262144,
+    "max_completion_tokens": 235929,
+    "is_moderated": false
+   },
+   "per_request_limits": null,
+   "supported_parameters": [
+    "include_reasoning",
+    "max_tokens",
+    "reasoning",
+    "reasoning_effort",
+    "response_format",
+    "seed",
+    "structured_outputs",
+    "temperature",
+    "tool_choice",
+    "tools",
+    "top_p"
+   ],
+   "default_parameters": {
+    "temperature": 1,
+    "top_p": 0.95,
+    "top_k": null,
+    "frequency_penalty": null,
+    "presence_penalty": null,
+    "repetition_penalty": null
+   },
+   "supported_voices": null,
+   "knowledge_cutoff": null,
+   "expiration_date": null,
+   "links": {
+    "details": "/api/v1/models/nvidia/nemotron-3-super-120b-a12b-20230311/endpoints"
+   },
+   "benchmarks": {
+    "design_arena": [],
+    "artificial_analysis": {
+     "intelligence_index": 12.8,
+     "coding_index": 37.7,
+     "agentic_index": 1.7
+    }
+   },
+   "reasoning": {
+    "mandatory": false,
+    "default_enabled": true,
+    "supports_max_tokens": true,
+    "supported_efforts": [
+     "medium",
+     "low"
+    ],
+    "default_effort": "medium"
+   }
+  },
+  {
+   "id": "openrouter/free",
+   "canonical_slug": "openrouter/free",
+   "hugging_face_id": "",
+   "name": "Free Models Router",
+   "created": 1769917427,
+   "context_length": 200000,
+   "architecture": {
+    "modality": "text+image->text",
+    "input_modalities": [
+     "text",
+     "image"
+    ],
+    "output_modalities": [
+     "text"
+    ],
+    "tokenizer": "Router",
+    "instruct_type": null
+   },
+   "pricing": {
+    "prompt": "0",
+    "completion": "0"
+   },
+   "top_provider": {
+    "context_length": null,
+    "max_completion_tokens": null,
+    "is_moderated": false
+   },
+   "per_request_limits": null,
+   "supported_parameters": [
+    "frequency_penalty",
+    "include_reasoning",
+    "logprobs",
+    "max_completion_tokens",
+    "max_tokens",
+    "min_p",
+    "presence_penalty",
+    "reasoning",
+    "reasoning_effort",
+    "repetition_penalty",
+    "response_format",
+    "seed",
+    "stop",
+    "structured_outputs",
+    "temperature",
+    "tool_choice",
+    "tools",
+    "top_k",
+    "top_logprobs",
+    "top_p"
+   ],
+   "default_parameters": {
+    "temperature": null,
+    "top_p": null,
+    "frequency_penalty": null
+   },
+   "supported_voices": null,
+   "knowledge_cutoff": null,
+   "expiration_date": null,
+   "links": {
+    "details": "/api/v1/models/openrouter/free/endpoints"
+   }
+  },
+  {
+   "id": "anthropic/claude-sonnet-5.5",
+   "canonical_slug": "anthropic/claude-sonnet-5.5-20260928",
+   "hugging_face_id": null,
+   "name": "Anthropic: Claude Sonnet 5.5",
+   "created": 1790618686,
+   "context_length": 1000000,
+   "architecture": {
+    "modality": "text+image+file->text",
+    "input_modalities": [
+     "text",
+     "image",
+     "file"
+    ],
+    "output_modalities": [
+     "text"
+    ],
+    "tokenizer": "Claude",
+    "instruct_type": null
+   },
+   "pricing": {
+    "prompt": "0.000002",
+    "completion": "0.00001",
+    "web_search": "0.01",
+    "input_cache_read": "0.0000002",
+    "input_cache_write": "0.0000025",
+    "input_cache_write_1h": "0.000004"
+   },
+   "top_provider": {
+    "context_length": 1000000,
+    "max_completion_tokens": 128000,
+    "is_moderated": true
+   },
+   "per_request_limits": null,
+   "supported_parameters": [
+    "include_reasoning",
+    "max_completion_tokens",
+    "max_tokens",
+    "reasoning",
+    "reasoning_effort",
+    "response_format",
+    "stop",
+    "structured_outputs",
+    "temperature",
+    "tool_choice",
+    "tools",
+    "verbosity"
+   ],
+   "default_parameters": {},
+   "supported_voices": null,
+   "knowledge_cutoff": null,
+   "expiration_date": null,
+   "links": {
+    "details": "/api/v1/models/anthropic/claude-sonnet-5.5-20260928/endpoints"
+   },
+   "reasoning": {
+    "mandatory": true,
+    "supported_efforts": [
+     "max",
+     "xhigh",
+     "high",
+     "medium",
+     "low"
+    ],
+    "default_effort": "high"
+   }
+  },
+  {
+   "id": "anthropic/claude-sonnet-5.5:batch",
+   "canonical_slug": "anthropic/claude-sonnet-5.5-20260928",
+   "hugging_face_id": null,
+   "name": "Anthropic: Claude Sonnet 5.5 (batch)",
+   "created": 1790618686,
+   "context_length": 1000000,
+   "architecture": {
+    "modality": "text+image+file->text",
+    "input_modalities": [
+     "text",
+     "image",
+     "file"
+    ],
+    "output_modalities": [
+     "text"
+    ],
+    "tokenizer": "Claude",
+    "instruct_type": null
+   },
+   "pricing": {
+    "prompt": "0.000001",
+    "completion": "0.000005",
+    "web_search": "0.01",
+    "input_cache_read": "0.0000001",
+    "input_cache_write": "0.00000125",
+    "input_cache_write_1h": "0.000002"
+   },
+   "top_provider": {
+    "context_length": 1000000,
+    "max_completion_tokens": 128000,
+    "is_moderated": true
+   },
+   "per_request_limits": null,
+   "supported_parameters": [
+    "include_reasoning",
+    "max_tokens",
+    "reasoning",
+    "reasoning_effort",
+    "response_format",
+    "stop",
+    "structured_outputs",
+    "tool_choice",
+    "tools",
+    "verbosity"
+   ],
+   "default_parameters": {},
+   "supported_voices": null,
+   "knowledge_cutoff": null,
+   "expiration_date": null,
+   "links": {
+    "details": "/api/v1/models/anthropic/claude-sonnet-5.5-20260928/endpoints"
+   },
+   "reasoning": {
+    "mandatory": true,
+    "supported_efforts": [
+     "max",
+     "xhigh",
+     "high",
+     "medium",
+     "low"
+    ],
+    "default_effort": "high"
+   }
+  },
+  {
+   "id": "typesafe/jev-router",
+   "canonical_slug": "typesafe/jev-router",
+   "hugging_face_id": null,
+   "name": "TypeSafe: Jev Router",
+   "created": 1790363560,
+   "context_length": 1000000,
+   "architecture": {
+    "modality": "text+image+file+audio+video->text",
+    "input_modalities": [
+     "audio",
+     "file",
+     "image",
+     "text",
+     "video"
+    ],
+    "output_modalities": [
+     "text"
+    ],
+    "tokenizer": "Router",
+    "instruct_type": null
+   },
+   "pricing": {
+    "prompt": "-1",
+    "completion": "-1"
+   },
+   "top_provider": {
+    "context_length": null,
+    "max_completion_tokens": null,
+    "is_moderated": false
+   },
+   "per_request_limits": null,
+   "supported_parameters": [],
+   "default_parameters": {},
+   "supported_voices": null,
+   "knowledge_cutoff": null,
+   "expiration_date": null,
+   "links": {
+    "details": "/api/v1/models/typesafe/jev-router/endpoints"
+   }
+  },
+  {
+   "id": "perceptron/perceptron-mk1.5",
+   "canonical_slug": "perceptron/perceptron-mk1.5-20260925",
+   "hugging_face_id": null,
+   "name": "Perceptron: Perceptron Mk1.5",
+   "created": 1790352661,
+   "context_length": 36864,
+   "architecture": {
+    "modality": "text+image+audio+video->text",
+    "input_modalities": [
+     "text",
+     "image",
+     "video",
+     "audio"
+    ],
+    "output_modalities": [
+     "text"
+    ],
+    "tokenizer": "Other",
+    "instruct_type": null
+   },
+   "pricing": {
+    "prompt": "0.00000015",
+    "completion": "0.0000015"
+   },
+   "top_provider": {
+    "context_length": 36864,
+    "max_completion_tokens": 8192,
+    "is_moderated": false
+   },
+   "per_request_limits": null,
+   "supported_parameters": [
+    "frequency_penalty",
+    "include_reasoning",
+    "max_tokens",
+    "presence_penalty",
+    "reasoning",
+    "reasoning_effort",
+    "structured_outputs",
+    "temperature",
+    "tool_choice",
+    "tools",
+    "top_k",
+    "top_p"
+   ],
+   "default_parameters": {},
+   "supported_voices": null,
+   "knowledge_cutoff": null,
+   "expiration_date": null,
+   "links": {
+    "details": "/api/v1/models/perceptron/perceptron-mk1.5-20260925/endpoints"
+   },
+   "reasoning": {
+    "mandatory": false,
+    "supported_efforts": [
+     "high",
+     "medium",
+     "low",
+     "minimal",
+     "none"
+    ],
+    "default_effort": "high"
+   }
+  },
+  {
+   "id": "fireworks/ember-1",
+   "canonical_slug": "fireworks/ember-1-20260923",
+   "hugging_face_id": null,
+   "name": "Fireworks: Ember-1",
+   "created": 1790208461,
+   "context_length": 1048576,
+   "architecture": {
+    "modality": "text+image->text",
+    "input_modalities": [
+     "text",
+     "image"
+    ],
+    "output_modalities": [
+     "text"
+    ],
+    "tokenizer": "Other",
+    "instruct_type": null
+   },
+   "pricing": {
+    "prompt": "0.000003",
+    "completion": "0.000015",
+    "input_cache_read": "0.0000003"
+   },
+   "top_provider": {
+    "context_length": 1048576,
+    "max_completion_tokens": 943718,
+    "is_moderated": false
+   },
+   "per_request_limits": null,
+   "supported_parameters": [
+    "frequency_penalty",
+    "include_reasoning",
+    "logit_bias",
+    "logprobs",
+    "max_tokens",
+    "presence_penalty",
+    "reasoning",
+    "reasoning_effort",
+    "repetition_penalty",
+    "response_format",
+    "stop",
+    "structured_outputs",
+    "temperature",
+    "tool_choice",
+    "tools",
+    "top_k",
+    "top_logprobs",
+    "top_p"
+   ],
+   "default_parameters": {},
+   "supported_voices": null,
+   "knowledge_cutoff": null,
+   "expiration_date": null,
+   "links": {
+    "details": "/api/v1/models/fireworks/ember-1-20260923/endpoints"
+   },
+   "reasoning": {
+    "mandatory": false,
+    "default_enabled": true,
+    "supported_efforts": [
+     "max",
+     "high",
+     "low"
+    ],
+    "default_effort": "max"
+   }
+  },
+  {
+   "id": "z-ai/glm-5.3-prime",
+   "canonical_slug": "z-ai/glm-5.3-prime-20260921",
+   "hugging_face_id": null,
+   "name": "Z.ai: GLM 5.3 Prime",
+   "created": 1790199651,
+   "context_length": 1000000,
+   "architecture": {
+    "modality": "text->text",
+    "input_modalities": [
+     "text"
+    ],
+    "output_modalities": [
+     "text"
+    ],
+    "tokenizer": "Other",
+    "instruct_type": null
+   },
+   "pricing": {
+    "prompt": "0.0000028",
+    "completion": "0.0000088",
+    "input_cache_read": "0.00000056"
+   },
+   "top_provider": {
+    "context_length": 1000000,
+    "max_completion_tokens": 131072,
+    "is_moderated": false
+   },
+   "per_request_limits": null,
+   "supported_parameters": [
+    "frequency_penalty",
+    "include_reasoning",
+    "logprobs",
+    "max_tokens",
+    "presence_penalty",
+    "reasoning",
+    "reasoning_effort",
+    "response_format",
+    "seed",
+    "stop",
+    "temperature",
+    "tool_choice",
+    "tools",
+    "top_k",
+    "top_logprobs",
+    "top_p"
+   ],
+   "default_parameters": {
+    "temperature": 1,
+    "top_p": 0.95
+   },
+   "supported_voices": null,
+   "knowledge_cutoff": null,
+   "expiration_date": null,
+   "links": {
+    "details": "/api/v1/models/z-ai/glm-5.3-prime-20260921/endpoints"
+   },
+   "reasoning": {
+    "mandatory": true,
+    "default_enabled": true,
+    "supported_efforts": [
+     "max",
+     "high",
+     "low"
+    ],
+    "default_effort": "max"
+   }
+  }
+ ]
+}
