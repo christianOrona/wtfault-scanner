@@ -19,7 +19,9 @@
 #   5. Signs both installers.
 #   6. Verifies every signature, including the executable *inside* each
 #      installer, and fails if anything is not exactly as expected.
-#   7. On a tag, creates a DRAFT release. Publishing is always a person pressing
+#   7. Alongside, on Linux, builds the Android APK and signs it with the key
+#      in repository secrets (see docs/ANDROID.md).
+#   8. On a tag, creates a DRAFT release. Publishing is always a person pressing
 #      a button: the in-app updater reads the latest published release, so a
 #      release that published itself would install itself on people's machines.
 #
@@ -336,9 +338,116 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  android:
+    name: build and sign (android)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      NDK_VERSION: 29.0.14206865
+    outputs:
+      signed: ${{ steps.sign.outputs.signed }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Check the version numbers agree
+        env:
+          EVENT: ${{ github.event_name }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(jq -r .version apps/desktop/src-tauri/tauri.conf.json)
+          if [ "$EVENT" = push ] && [ "$TAG" != "v$version" ]; then
+            echo "::error::Tag $TAG does not match version $version"; exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Install the NDK
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$NDK_VERSION" > /dev/null
+          echo "NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+
+      # 64- and 32-bit ARM: every Android phone. No x86; that is emulators.
+      - name: Add the Android targets
+        run: rustup target add aarch64-linux-android armv7-linux-androideabi
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Install UI dependencies
+        working-directory: apps/desktop
+        run: npm ci
+
+      # The Gradle project signs a release build when keystore.properties
+      # exists (see its build.gradle.kts). Without the secrets the APK is built
+      # unsigned, and the release notes say so. Android refuses to install an
+      # unsigned APK, so that build is only good for checking the pipeline.
+      #
+      # The key must never change once people have installed a release:
+      # Android refuses an update signed by a different key. It lives in
+      # repository secrets and in a backup kept outside the repository.
+      - name: Put the signing key in place
+        id: sign
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          if [ -z "$KEYSTORE" ]; then
+            echo "::warning::No Android signing key in secrets; this APK is unsigned."
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          store="$RUNNER_TEMP/release.jks"
+          echo "$KEYSTORE" | base64 -d > "$store"
+          {
+            echo "storeFile=$store"
+            echo "storePassword=$PASSWORD"
+            echo "keyAlias=$ALIAS"
+            echo "keyPassword=$PASSWORD"
+          } > apps/desktop/src-tauri/gen/android/keystore.properties
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+
+      # No Rust cache here either, for the same reason as the Windows build.
+      - name: Build the release APK
+        working-directory: apps/desktop
+        run: npx tauri android build --apk --target aarch64 --target armv7 --ci
+
+      # Checked, not assumed: apksigner says whether the file that ships is
+      # signed, and with which certificate.
+      - name: Verify the signature and collect the APK
+        env:
+          SIGNED: ${{ steps.sign.outputs.signed }}
+        run: |
+          dir=apps/desktop/src-tauri/gen/android/app/build/outputs/apk/universal/release
+          ls -la "$dir"
+          if [ "$SIGNED" = true ]; then
+            apk="$dir/app-universal-release.apk"
+            apksigner=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+            "$apksigner" verify --print-certs "$apk"
+          else
+            apk="$dir/app-universal-release-unsigned.apk"
+          fi
+          mkdir -p out
+          cp "$apk" "out/WTFault.Scanner_${VERSION}_android.apk"
+
+      - name: Keep the APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: wtfault-scanner-${{ env.VERSION }}-android
+          path: out/
+          if-no-files-found: error
+          retention-days: 30
+
   draft-release:
     name: draft release
-    needs: build
+    needs: [build, android]
     # A tag only. A manual run is a dry run and never touches Releases.
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
@@ -353,6 +462,20 @@ jobs:
           name: wtfault-scanner-${{ needs.build.outputs.version }}-windows
           path: out
 
+      - uses: actions/download-artifact@v8
+        with:
+          name: wtfault-scanner-${{ needs.build.outputs.version }}-android
+          path: out
+
+      # The Windows job wrote checksums for its own files; the release has the
+      # APK as well, so they are written again over everything.
+      - name: Write checksums
+        working-directory: out
+        run: |
+          rm -f SHA256SUMS.txt
+          sha256sum -- * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
       # The release notes are what the in-app updater shows before somebody
       # installs, so they come from the changelog entry for this version rather
       # than from commit titles. Said plainly when the build is unsigned.
@@ -360,6 +483,7 @@ jobs:
         env:
           VERSION: ${{ needs.build.outputs.version }}
           SIGNING: ${{ needs.build.outputs.signing }}
+          APK_SIGNED: ${{ needs.android.outputs.signed }}
         run: |
           awk -v v="$VERSION" '
             $0 ~ "^## \\[" v "\\]" { on = 1; next }
@@ -377,6 +501,12 @@ jobs:
               release-signing) echo "Signed. Free code signing provided by [SignPath.io](https://signpath.io), certificate by [SignPath Foundation](https://signpath.org). See [the code signing policy](https://github.com/${GITHUB_REPOSITORY}/blob/main/docs/CODE_SIGNING.md)." ;;
               *) echo "**This build is not code signed.** Windows SmartScreen will warn before it runs." ;;
             esac
+            echo
+            if [ "$APK_SIGNED" = true ]; then
+              echo "**Android:** install the \`.apk\` on the phone (it will ask to allow installs from your browser or file manager). Updates install over it."
+            else
+              echo "**Android:** the \`.apk\` in this release is unsigned and Android will not install it."
+            fi
             echo
             echo "SHA-256 checksums are in \`SHA256SUMS.txt\`."
           } >> notes.md
