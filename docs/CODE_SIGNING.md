@@ -146,6 +146,23 @@ In the user's application data folder (`%APPDATA%\ai-mechanic` on Windows):
 | `data\logs\` | Application logs, used when reporting a problem. |
 | `data\profiles\` | Vehicle profile files the person added, and OBDb community signal sets fetched on request (in `catalog\obdb\`, each with its attribution file). |
 
+### On Android
+
+The Android app is the same program and everything above applies to it, with
+these differences:
+
+- **Nothing is sent over Bluetooth except to the adapter the person picked.**
+  The app asks for one permission, **Nearby devices**, and uses it only to
+  connect to an adapter already paired in Android's settings. It never scans for
+  devices and never asks for location.
+- **The update check** still asks GitHub for the latest release, but the app
+  never downloads or installs anything itself. A newer version is installed by
+  the person, from the release page.
+- **The same files** are kept in the app's private storage, which other apps
+  cannot read. Android has no credential store the app can use, so **API keys
+  are kept in `providers.json`**, and the settings screen says so. Uninstalling
+  the app deletes all of it.
+
 ## What it does to the computer and to a vehicle
 
 **The computer.** The NSIS installer installs for the current user, under

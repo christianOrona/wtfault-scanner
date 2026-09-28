@@ -13,7 +13,7 @@ it cannot do is hand you a guess wearing the label of something your car said.
 [![status: work in progress](https://img.shields.io/badge/status-work%20in%20progress-orange)](#status)
 [![release](https://img.shields.io/github/v/release/christianOrona/wtfault-scanner?include_prereleases&sort=semver)](https://github.com/christianOrona/wtfault-scanner/releases)
 [![licence](https://img.shields.io/badge/licence-MIT%20OR%20Apache--2.0-blue)](#licence)
-[![platform](https://img.shields.io/badge/platform-Windows-lightgrey)](#getting-started)
+[![platform](https://img.shields.io/badge/platform-Windows%20%7C%20Android-lightgrey)](#getting-started)
 
 </div>
 
@@ -257,6 +257,11 @@ the `-setup.exe` for most people, the `.msi` for managed installs. Once
 installed, the app tells you when there is a newer version, and downloads and
 installs it when you press the buttons to.
 
+**Android:** from the next release on, each release also has an `.apk`. Pair
+the ELM327 in Android's Bluetooth settings, install the APK, and pick the
+adapter by name. [docs/ANDROID.md](docs/ANDROID.md) covers installing, what
+differs from the desktop, and building it.
+
 From the next release on, installers are built by
 [the release workflow](.github/workflows/release.yml) from a tagged commit rather
 than on a developer's machine, and each release lists SHA-256 checksums.
@@ -416,7 +421,9 @@ faults in the cars:
 **Known gaps, in the order they matter**
 
 - **Windows only in practice.** The core is portable and CI builds it on Linux,
-  but the desktop shell has only ever been built and run on Windows.
+  but the desktop shell has only ever been built and run on Windows. The
+  Android build runs the whole core in the emulator, and its Bluetooth link
+  has not yet met a real adapter.
 - **Mode 06 scalings are unverified.** Pass/fail and margin are exact regardless,
   because they come from the same scaling on both sides — but the *units* on a
   monitor value are a best guess and are labelled as one.
@@ -462,6 +469,7 @@ faults in the cars:
 | `docs/SECURITY.md` | threat model, credentials, and where your data goes |
 | `docs/CODE_SIGNING.md` | how releases are built and signed, and the privacy policy |
 | `docs/RELEASING.md` | cutting a release: what to bump, in what order, and the traps |
+| `docs/ANDROID.md` | the Android app: installing, building, signing, and how it differs |
 | `docs/API.md` | the `/api/v1` contract |
 | `docs/HANDOFF.md` | the specification this is built against |
 
