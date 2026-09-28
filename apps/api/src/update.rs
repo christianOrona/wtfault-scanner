@@ -125,6 +125,15 @@ fn is_newer(latest: &str, current: &str) -> bool {
     false
 }
 
+/// Whether this build can download and run its own installer.
+///
+/// Only the Windows installer can. On Android an update is an APK, and Android
+/// installs one only through its own prompt, from the release page.
+const SELF_INSTALL: bool = !cfg!(target_os = "android");
+
+const NOT_HERE: &str =
+    "this app cannot install updates itself on this platform; install the new version from the      release page";
+
 /// The Windows installer among a release's assets.
 fn installer(assets: &[Asset]) -> Option<Asset> {
     assets
@@ -188,6 +197,27 @@ pub async fn check() -> UpdateStatus {
         Ok(r) => r,
         Err(e) => return UpdateStatus::failed(format!("could not read the release: {e}")),
     };
+
+    // A phone cannot run a Windows installer, and Android only installs an
+    // APK through its own prompt. Say that a newer version exists and where it
+    // is, and never offer the install button that could not work.
+    if !SELF_INSTALL {
+        let newer = is_newer(&release.tag_name, current_version());
+        return UpdateStatus {
+            current: current_version().to_string(),
+            update_available: false,
+            latest: Some(release.tag_name.clone()),
+            notes: release.body.clone(),
+            url: release.html_url.clone(),
+            size: None,
+            error: newer.then(|| {
+                format!(
+                    "{} is out. This app cannot install it itself here: open the release page and                      install the APK from it.",
+                    release.tag_name
+                )
+            }),
+        };
+    }
 
     let asset = installer(&release.assets);
     UpdateStatus {
@@ -276,6 +306,13 @@ fn set_state(state: DownloadState) {
 /// Idempotent: asking again while one is running, or after one has finished,
 /// does nothing.
 pub async fn download() -> DownloadState {
+    if !SELF_INSTALL {
+        return DownloadState {
+            stage: Stage::Failed,
+            error: Some(NOT_HERE.into()),
+            ..Default::default()
+        };
+    }
     {
         let current = download_state();
         if matches!(current.stage, Stage::Downloading | Stage::Ready) {
@@ -409,6 +446,9 @@ const SILENT_INSTALL_ARGS: [&str; 3] = ["/S", "/UPDATE", "/R"];
 /// Downloads first if nobody has already, so this is still one call for anyone
 /// who wants the old behaviour.
 pub async fn apply() -> Result<String, String> {
+    if !SELF_INSTALL {
+        return Err(NOT_HERE.into());
+    }
     let state = match download_state().stage {
         Stage::Ready => download_state(),
         _ => download().await,
