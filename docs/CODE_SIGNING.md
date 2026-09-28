@@ -108,6 +108,19 @@ them has to be inferred.
   receives this data under its own privacy policy; a local one (for example
   Ollama) keeps it on hardware the person controls. No provider is configured
   after installation.
+- **To OpenRouter, when the person has chosen it as the model provider**: the
+  same data as for any hosted provider above, over HTTPS to `openrouter.ai`,
+  which passes it on to whichever company serves the model. The VIN is withheld
+  by default, as for every provider that is not on the person's own network.
+  **Free models are often served by companies that keep, and may train on,
+  what they are sent**; OpenRouter's model pages say which do, and its privacy
+  settings can exclude them. Requests carry the headers OpenRouter asks apps to
+  send (`HTTP-Referer` naming this project's repository, and `X-Title: WTFault
+  Scanner`), which identify the app and nothing about the person or vehicle.
+  To choose among the free models, the app also reads OpenRouter's public
+  model list (`openrouter.ai/api/v1/models`, no key sent), at most once an hour
+  while OpenRouter is in use, and the **Test** button checks the key at
+  `openrouter.ai/api/v1/key`.
 - **To NHTSA's vPIC service**, when the person asks the application to look the
   connected vehicle up: it sends the vehicle's VIN, and nothing else, over HTTPS
   to `vpic.nhtsa.dot.gov`, a free public service of the US National Highway

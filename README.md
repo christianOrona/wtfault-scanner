@@ -71,6 +71,7 @@ No scanner ties you to its vendor's cloud. This one does not tie you to
 | **Anthropic** | strongest reasoning, pay per scan, your data leaves the machine |
 | **Ollama** | runs on your own hardware — a GPU box on your network, or this laptop |
 | **xAI** | Grok, same deal as Anthropic |
+| **OpenRouter (free)** | free models with a free key and no GPU; picks the best one and moves on when it is busy. 50 requests a day, and whoever serves a free model may keep what it is sent |
 | **Anything OpenAI-shaped** | point it at a URL and it works |
 
 The tool layer is vendor-neutral JSON Schema, so switching from a hosted model

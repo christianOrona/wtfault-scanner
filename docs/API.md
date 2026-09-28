@@ -2376,10 +2376,20 @@ it. Keys go to the operating system's credential store where there is one.
       "help": "Strongest reasoning. Needs an API key; your data leaves this machine." },
     { "id": "ollama", "label": "Ollama", "requires_key": false, "default_base_url": "http://127.0.0.1:11434", "help": "..." },
     { "id": "xai", "label": "xAI (Grok)", "requires_key": true, "default_base_url": "...", "help": "..." },
+    { "id": "openrouter", "label": "OpenRouter (free models)", "requires_key": true,
+      "default_base_url": "https://openrouter.ai/api/v1", "default_model": "auto:free",
+      "key_url": "https://openrouter.ai/keys", "help": "..." },
     { "id": "openai_compatible", "label": "OpenAI-compatible", "requires_key": false, "default_base_url": null, "help": "..." }
   ]
 }
 ```
+
+`default_model` and `key_url` appear only where a kind has one. An OpenRouter
+provider whose model is `auto:free` picks the newest free model that can call
+tools and moves to the next when one is busy; its `test` lists `auto:free`
+followed by those models. When the account's free requests for the day are
+used up, the agent fails with `provider_daily_limit` rather than
+`provider_rate_limited`, because no retry helps until the allowance resets.
 
 A key is never returned. `key_hint` shows just enough to recognise it.
 `key_source` is `environment`, `operating_system`, `plain_file` or `none`, and
