@@ -11,6 +11,7 @@
 //! | [`SerialTransport`] | Real hardware. On Windows a paired Bluetooth-SPP ELM327 is an outgoing COM port, so Bluetooth *is* serial here. Linux `/dev/rfcomm0`, macOS `/dev/tty.*`. |
 //! | [`LoopbackTransport`] | Tests: a scripted request→response table. |
 //! | `SimulatedTransport` (in `aim-simulator`) | The virtual vehicle. |
+//! | A [`platform::PlatformLinks`] provider | Links only the host shell can reach, such as Bluetooth on Android. |
 //!
 //! The trait is deliberately **blocking**. Serial ports are blocking, ELM327
 //! exchanges are strictly request/response, and the whole diagnostic core runs
@@ -20,6 +21,7 @@
 
 pub mod bluetooth_windows;
 pub mod loopback;
+pub mod platform;
 pub mod ports;
 #[cfg(feature = "serial")]
 pub mod serial;

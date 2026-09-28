@@ -432,6 +432,13 @@ fn list_ports_blocking(probe: bool) -> Value {
 
 #[cfg(not(feature = "serial"))]
 fn list_ports_blocking(probe: bool) -> Value {
+    // No serial support, but the shell may still provide links of its own
+    // (Bluetooth on Android). Listed without probing: a probe would open each
+    // one, and opening a Bluetooth link is slow and visible to the user.
+    let ports = aim_transport::list_ports();
+    if !ports.is_empty() {
+        return json!({ "ports": ports, "probed": false });
+    }
     json!({
         "ports": [],
         "probed": probe,

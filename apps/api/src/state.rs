@@ -365,6 +365,12 @@ fn build_adapter(
                     "a serial connection needs a port name; GET /api/v1/adapters/ports lists them",
                 )
             })?;
+            // A link the shell provides (Bluetooth on Android) is opened by
+            // name like a port, and never reaches the serial code: there is
+            // no line speed to find on it.
+            if let Some(transport) = aim_transport::platform::transport(&port) {
+                return Ok(Box::new(Elm327Adapter::new(transport?, Elm327Config::default())));
+            }
             build_serial_adapter(&port, known_baud)
         }
     }

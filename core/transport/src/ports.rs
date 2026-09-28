@@ -98,13 +98,21 @@ impl PortInfo {
     }
 }
 
-/// Enumerate serial ports visible to the OS.
+/// Every link the user could pick: the OS's serial ports, then whatever the
+/// shell's platform provider offers (see [`crate::platform`]).
 ///
 /// Returns an empty list when the `serial` feature is disabled (for example in
-/// a CI container with no libudev). Callers must treat "no ports" as a normal
-/// state, not an error.
-#[cfg(feature = "serial")]
+/// a CI container with no libudev) and no provider is installed. Callers must
+/// treat "no ports" as a normal state, not an error.
 pub fn list_ports() -> Vec<PortInfo> {
+    let mut ports = serial_ports();
+    ports.extend(crate::platform::list());
+    ports
+}
+
+/// Enumerate serial ports visible to the OS.
+#[cfg(feature = "serial")]
+fn serial_ports() -> Vec<PortInfo> {
     let ports = match serialport::available_ports() {
         Ok(p) => p,
         Err(e) => {
@@ -193,7 +201,7 @@ fn apply_bluetooth_role(mut port: PortInfo) -> PortInfo {
 
 /// Enumerate serial ports — stub used when the `serial` feature is off.
 #[cfg(not(feature = "serial"))]
-pub fn list_ports() -> Vec<PortInfo> {
+fn serial_ports() -> Vec<PortInfo> {
     Vec::new()
 }
 
