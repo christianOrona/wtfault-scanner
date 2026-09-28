@@ -29,6 +29,23 @@ with the caveat that everything below 1.0 is allowed to move.
   time it starts: Android closing a backgrounded app is not a crash.
 - The connect dialog says why a port cannot be used — Bluetooth off, permission
   not granted, nothing paired — instead of listing it beside the working ones.
+- **A full scan straight after a module scan found nothing.** Going back to the
+  main bus made the adapter search for the protocol again, and the search took
+  longer than the scan waited. It now goes back on the protocol it already
+  found. Measured on a 2019 F-250: 35 modules across both buses.
+- **Monitor tests (Mode 06) showed passing tests as failed.** Some results are
+  negative numbers and were read as huge positive ones. On a 2019 F-250 diesel
+  that turned 19 passing tests into failures; now none fail. Tests with a limit
+  on only one side are no longer called "close to failing" because of the
+  side with no limit. That was 23 results on the same truck, and is now 1.
+- **Community signals on the second bus were never asked.** Reading an OBDb
+  definition always went to the main bus, so body-module signals such as tire
+  pressures and the odometer came back "does not apply". They are now asked on
+  the bus their module is on.
+- **When OBDb has nothing for your model, you get the make's set.** The
+  Ford-F-250 set is empty; the Ford set is not. The vehicle card says when the
+  kept set covers every vehicle of the make, since many of its signals will not
+  apply to yours.
 
 ## [0.5.0] — 2026-09-18
 

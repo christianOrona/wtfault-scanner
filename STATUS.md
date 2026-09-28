@@ -3,7 +3,7 @@
 Where the project actually is, updated when something significant changes.
 Not a changelog — see `CHANGELOG.md` for releases — and not a diary.
 
-Last reviewed: **2026-09-18**
+Last reviewed: **2026-09-28**
 
 ---
 
@@ -90,8 +90,45 @@ them as faults and the per-module read called them pending. A 2012 F-250
 returned 543 records, of which 5 had fault bits set.
 
 **Fixed.** Only records with one of the low four status bits set are listed,
-counted or stored; the rest are counted in a `uds_codes_not_faults` note. Not yet
-re-run on the vehicle.
+counted or stored; the rest are counted in a `uds_codes_not_faults` note.
+Re-run on the 2019 F-250 on 2026-09-28: 725 records set aside, 8 real faults
+in 6 modules.
+
+### A full scan after a module scan found nothing
+
+Measured 2026-09-28 on the 2019 F-250. The module scan went back to the
+primary bus with `ATSP0`; the adapter then searched again on the next request,
+and a search that starts with the non-CAN protocols outlasts every discovery
+deadline. All 510 addresses were silent, and each header change answered
+`STOPPED`, which may account for part of the `stopped` count above.
+
+**Fixed.** The primary bus is selected by the protocol already negotiated. Same
+truck, same sequence: 35 modules, 6 primary and 29 secondary.
+
+### Mode 06 called passing tests failed, and most of the rest marginal
+
+The same truck returned 54 service 06 results — not the zero recorded before —
+and the app called 19 failing with the MIL off. Every one used a unit id of
+`0x80` or above, which J1979 defines as signed, compared unsigned. Of the rest,
+23 were "within ten percent of failing" because a limit of 0 or 65535 (no limit
+at all) was measured against.
+
+**Fixed.** Signed ids compare signed; a limit at the end of the range is no
+limit. Same truck: 0 failing, 1 marginal, a genuinely two-sided boost test.
+
+### Community signals were never asked on the bus their module is on
+
+Every OBDb definition was sent from the primary bus. On the F-250 the body
+modules are on the second bus, so all 349 definitions tried came back `NO DATA`
+and were reported as not describing the vehicle.
+
+**Fixed.** 74 now decode on the truck, from OBDb's make-level `Ford` set (the
+`Ford-F-250` set is empty; the fetch now falls back to the make's). Two agree
+with standard readings from the same visit: coolant 29.9 °C against PID 05's
+30 °C, battery 12.3 V against `ATRV`. Odometer 157,473.8 km and tire pressures
+52.8 / 54.1 / 60.3 / 60.6 psi are unconfirmed against the dash. The rear inner
+pair read 150 psi on a single-rear-wheel truck: a no-sensor value, not a
+pressure.
 
 ### A long UDS fault reply was cut off by a timeout
 
@@ -147,10 +184,10 @@ Honest gaps, in the order they matter.
   Bluetooth link to a paired ELM327 is written but unverified until a phone
   connects to one in the driveway (#64).
 
-- **Neither outside source has been used from a driveway.** The vPIC lookup and
-  the OBDb fetch were built against the simulator and recorded fixtures. Both
-  reach a real service over the network on a real VIN, and neither has been run
-  with a truck plugged in.
+- **Both outside sources have been used from a driveway once** (2026-09-28,
+  the 2019 F-250). vPIC decoded it as a 6.7 L V8 diesel F-250 and settled the
+  model on the scorecard; OBDb had nothing for the model and the make-level set
+  was fetched instead. One vehicle, one make.
 - **An OBDb signal set is a list of claims, not measurements.** A fetched set
   says what somebody recorded for this make and model; nothing in it is verified
   until it has been read on the vehicle in front of you, which is what the
@@ -171,10 +208,10 @@ Honest gaps, in the order they matter.
   the desktop shell has only ever been built and run on Windows.
 - **Mode 06 unit scalings unverified.** Pass/fail and margin are exact because
   both sides share the scaling; the units are a best guess and labelled as one.
-  A 2019 F-250 returned zero monitor tests, which is plausible for a diesel and
-  has not been confirmed as correctly-none rather than silently-none.
-- **Nothing knows what fuel the engine burns.** PID `0x51` reports it and is
-  never asked. A gasoline-shaped procedure therefore runs on a diesel and
+  A 2019 F-250 returned 54 on 2026-09-28; earlier visits recorded none, and why
+  is not known.
+- **Fuel type is readable but not used.** PID `0x51` reads `Diesel` on the
+  F-250 (2026-09-28), and nothing asks it before choosing what to measure. A gasoline-shaped procedure therefore runs on a diesel and
   measures nothing: `warm_idle` exists for fuel trims, a diesel has none, and
   until 2026-09-11 it reported success anyway. It now says what it could not
   measure, but a procedure still cannot declare which engines it applies to.
@@ -186,8 +223,7 @@ Honest gaps, in the order they matter.
   code nobody has a description for.
 - **Profile import is folder-only.** Dropping a YAML file in works; importing
   one from a URL with a verification count does not exist.
-- **The second bus is measured, and the code that reaches it is not yet
-  proven.** On 2026-09-11 a 2019 F-250's secondary bus was mapped by hand
+- **The second bus is reached by the app, on one truck.** On 2026-09-11 a 2019 F-250's secondary bus was mapped by hand
   through the adapter: 500 kbit/s on pins 3 and 11, 29 modules answering
   TesterPresent across `700-7FF`, 22 of them holding as-built configuration
   blocks. The app had been seeing two modules and calling that the vehicle.
@@ -198,8 +234,8 @@ Honest gaps, in the order they matter.
   broadcasting, and the range reaches the `7F1` where a real module answered. A
   full scan now sweeps every bus the adapter can reach rather than only the one
   it started on, and puts the adapter back where it found it.
-  **None of it has been run against a vehicle.** The hand measurement says what
-  is there; it does not say the code now finds it.
+  Run on 2026-09-28: the module scan and full scan both found the 29 modules
+  the hand measurement found, at 500 kbit/s. One vehicle, one adapter.
 - **Silence on the second bus stays silence.** An adapter that accepts every
   bit-rate command is not necessarily wired to pins 3 and 11, and nothing on the
   wire distinguishes "this vehicle has nothing there" from "this cable cannot
