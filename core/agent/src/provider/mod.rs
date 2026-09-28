@@ -6,8 +6,10 @@
 //! garage tomorrow" a configuration change rather than a rewrite.
 
 pub mod anthropic;
+pub mod free_models;
 pub mod ollama;
 pub mod openai;
+pub mod openrouter;
 
 use crate::error::AgentError;
 use serde::{Deserialize, Serialize};
