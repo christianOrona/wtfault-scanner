@@ -40,37 +40,39 @@ static UI: include_dir::Dir<'_> = include_dir::include_dir!("$CARGO_MANIFEST_DIR
 /// back when something already holds it.
 const PREFERRED_PORT: u16 = 8787;
 
-/// Where sessions are kept. Unlike `cargo run -p aim-api`, the desktop app
-/// persists by default: someone scanning a truck in a driveway expects the
-/// history to still be there tomorrow.
+#[cfg(target_os = "android")]
+mod android;
+
 /// The one directory this application keeps anything in.
+///
+/// Sessions are kept here. Unlike `cargo run -p aim-api`, the app persists by
+/// default: someone scanning a truck in a driveway expects the history to still
+/// be there tomorrow.
+///
+/// On a desktop this is the `ai-mechanic` project directory, where every
+/// installed build so far has kept its data, so an update finds it. A phone
+/// has no home directory to derive that from; there the app's own private
+/// storage is the only place it may write.
 ///
 /// `None` when it cannot be created, which every caller treats as "carry on
 /// without that": a diagnostic tool that will not open because it could not
 /// make a folder is worse than one running without a log.
-fn data_dir() -> Option<std::path::PathBuf> {
-    let dirs = directories::ProjectDirs::from("", "", "ai-mechanic")?;
-    let dir = dirs.data_dir().to_path_buf();
+fn data_dir(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    #[cfg(desktop)]
+    let dir = {
+        let _ = app;
+        directories::ProjectDirs::from("", "", "ai-mechanic")?.data_dir().to_path_buf()
+    };
+    #[cfg(mobile)]
+    let dir = {
+        use tauri::Manager as _;
+        app.path().app_data_dir().ok()?
+    };
     if let Err(e) = std::fs::create_dir_all(&dir) {
         tracing::warn!(error = %e, path = %dir.display(), "cannot create the data directory");
         return None;
     }
     Some(dir)
-}
-
-fn database_path() -> Option<std::path::PathBuf> {
-    Some(data_dir()?.join("sessions.sqlite"))
-}
-
-/// Where user-supplied vehicle profiles live.
-///
-/// Sits beside the session database so there is one place a person has to know
-/// about. Returned even when it does not exist yet — the loader creates it with
-/// its README, which is what makes the mechanism discoverable by someone poking
-/// around the filesystem rather than only by someone reading documentation.
-fn profile_dir() -> Option<std::path::PathBuf> {
-    let dirs = directories::ProjectDirs::from("", "", "ai-mechanic")?;
-    Some(dirs.data_dir().join("profiles"))
 }
 
 /// Start logging to the console and, when there is somewhere to put it, to a
@@ -107,13 +109,7 @@ fn start_logging(log_dir: Option<&std::path::Path>) {
     tracing_subscriber::registry()
         .with(filter)
         .with(tracing_subscriber::fmt::layer())
-        .with(
-            file.map(|f| {
-                tracing_subscriber::fmt::layer()
-                    .with_ansi(false)
-                    .with_writer(f)
-            }),
-        )
+        .with(file.map(|f| tracing_subscriber::fmt::layer().with_ansi(false).with_writer(f)))
         .init();
 
     // A panic already prints to a stderr nobody can see. This puts it in the
@@ -144,9 +140,7 @@ async fn serve_ui(req: Request) -> Response {
         return (StatusCode::NOT_FOUND, "no such endpoint").into_response();
     }
 
-    let file = UI
-        .get_file(path)
-        .or_else(|| UI.get_file("index.html"));
+    let file = UI.get_file(path).or_else(|| UI.get_file("index.html"));
 
     match file {
         Some(f) => {
@@ -172,6 +166,37 @@ fn bind_loopback() -> std::io::Result<StdTcpListener> {
 }
 
 /// Start the shell.
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    let builder = tauri::Builder::default();
+    // Registered before `setup`, so its links are installed by the time the
+    // core first lists ports.
+    #[cfg(target_os = "android")]
+    let builder = builder.plugin(android::init());
+
+    builder
+        .setup(|app| {
+            start_core(app)?;
+            Ok(())
+        })
+        .build(tauri::generate_context!())
+        .expect("the shell failed to start")
+        .run(|_app, event| {
+            // The core lives in this process, so it goes when the window does,
+            // and the open serial port goes with it. The one thing that has to
+            // happen on the way out is saying so: a run that leaves its marker
+            // behind is read as a crash by the next launch.
+            if let tauri::RunEvent::Exit = event {
+                tracing::info!("shutting down");
+                aim_api::support::end_run();
+            }
+        });
+}
+
+/// Start the diagnostic core and open the window onto it.
+///
+/// Runs inside Tauri's `setup` because that is the first point at which a
+/// phone will say where the app may keep its files.
 ///
 /// # Panics
 ///
@@ -180,9 +205,9 @@ fn bind_loopback() -> std::io::Result<StdTcpListener> {
 /// mode: a diagnostic tool that cannot open its own database would have to
 /// either invent data or show an empty window, and both are worse than a clear
 /// failure at startup.
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
-    let support = data_dir().and_then(|dir| aim_api::support::init(&dir));
+fn start_core(app: &mut tauri::App) -> tauri::Result<()> {
+    let data = data_dir(app.handle());
+    let support = data.as_deref().and_then(aim_api::support::init);
     start_logging(support.map(|s| s.log_dir.as_path()));
 
     // What the last run did, before this one overwrites the record of it. A run
@@ -198,30 +223,32 @@ pub fn run() {
     }
 
     let listener = bind_loopback().expect("cannot bind a loopback socket for the diagnostic core");
-    listener
-        .set_nonblocking(true)
-        .expect("cannot set the listener non-blocking");
-    let addr = listener
-        .local_addr()
-        .expect("the bound listener has no address");
+    listener.set_nonblocking(true).expect("cannot set the listener non-blocking");
+    let addr = listener.local_addr().expect("the bound listener has no address");
     let origin = format!("http://{addr}");
 
-    let db = database_path();
+    let db = data.as_ref().map(|dir| dir.join("sessions.sqlite"));
     let store = match &db {
         Some(path) => SessionStore::open(path).expect("cannot open the session database"),
         None => SessionStore::open_in_memory().expect("cannot open an in-memory session database"),
     };
-    // User profiles are merged over the shipped data every start, so a mapping
-    // somebody measured on their own vehicle takes effect without a rebuild.
-    let decoders = match profile_dir() {
-        Some(dir) => DecoderSet::with_profiles(&dir),
+    // User-supplied vehicle profiles sit beside the session database, so there
+    // is one place a person has to know about. The loader creates the folder
+    // with its README, which is what makes the mechanism discoverable by
+    // someone poking around the filesystem rather than only by someone reading
+    // documentation. They are merged over the shipped data every start, so a
+    // mapping somebody measured on their own vehicle takes effect without a
+    // rebuild.
+    let profiles = data.as_ref().map(|dir| dir.join("profiles"));
+    let decoders = match &profiles {
+        Some(dir) => DecoderSet::with_profiles(dir),
         None => DecoderSet::generic_obd(),
     }
     .expect("cannot load the OBD-II decoder definitions");
 
     let config = ServerConfig {
-        // The desktop app is for a real truck; the simulator stays one click
-        // away in the connect dialog rather than being the default.
+        // The app is for a real truck; the simulator stays one click away in
+        // the connect dialog rather than being the default.
         default_transport: TransportChoice::Serial,
         default_port: None,
         default_scenario: ScenarioId::DpfRegen,
@@ -231,12 +258,11 @@ pub fn run() {
         // Beside the session database, in the user's own profile. Model
         // provider settings hold API keys, so they belong with the user rather
         // than next to the binary.
-        settings_path: db
+        settings_path: data
             .as_ref()
-            .and_then(|p| p.parent())
             .map(|dir| dir.join("providers.json"))
             .unwrap_or_else(|| std::path::PathBuf::from("providers.json")),
-        profiles_dir: profile_dir(),
+        profiles_dir: profiles,
     };
 
     let state = AppState::new(store, decoders, config);
@@ -247,48 +273,33 @@ pub fn run() {
         "starting the diagnostic core in-process"
     );
 
-    // Debug builds load from the Vite dev server, which proxies /api back here,
-    // so the page is same-origin there too and hot reload keeps working.
-    // Release builds load from this server, which serves the embedded UI.
-    let window_url = if cfg!(debug_assertions) {
+    // `tauri dev` loads from the Vite dev server, which proxies /api back here,
+    // so the page is same-origin there too and hot reload keeps working. Every
+    // built app loads from this server, which serves the embedded UI - that
+    // includes a debug APK on a phone, where the dev server is on another
+    // machine entirely.
+    let window_url = if tauri::is_dev() {
         WebviewUrl::default()
     } else {
-        WebviewUrl::External(
-            origin
-                .parse()
-                .expect("the loopback origin is not a valid URL"),
-        )
+        WebviewUrl::External(origin.parse().expect("the loopback origin is not a valid URL"))
     };
 
-    tauri::Builder::default()
-        .setup(move |app| {
-            let router = aim_api::routes::router(state.clone()).fallback(serve_ui);
-            tauri::async_runtime::spawn(async move {
-                let listener = tokio::net::TcpListener::from_std(listener)
-                    .expect("cannot adopt the loopback listener into the async runtime");
-                if let Err(e) = axum::serve(listener, router).await {
-                    tracing::error!(error = %e, "the diagnostic core stopped");
-                }
-            });
+    let router = aim_api::routes::router(state.clone()).fallback(serve_ui);
+    tauri::async_runtime::spawn(async move {
+        let listener = tokio::net::TcpListener::from_std(listener)
+            .expect("cannot adopt the loopback listener into the async runtime");
+        if let Err(e) = axum::serve(listener, router).await {
+            tracing::error!(error = %e, "the diagnostic core stopped");
+        }
+    });
 
-            WebviewWindowBuilder::new(app, "main", window_url)
-                .title("WTFault Scanner")
-                .inner_size(1280.0, 820.0)
-                .min_inner_size(900.0, 600.0)
-                .build()?;
+    let window = WebviewWindowBuilder::new(app, "main", window_url);
+    // On a phone the window is the screen; size and title are desktop
+    // questions.
+    #[cfg(desktop)]
+    let window =
+        window.title("WTFault Scanner").inner_size(1280.0, 820.0).min_inner_size(900.0, 600.0);
+    window.build()?;
 
-            Ok(())
-        })
-        .build(tauri::generate_context!())
-        .expect("the desktop shell failed to start")
-        .run(|_app, event| {
-            // The core lives in this process, so it goes when the window does,
-            // and the open serial port goes with it. The one thing that has to
-            // happen on the way out is saying so: a run that leaves its marker
-            // behind is read as a crash by the next launch.
-            if let tauri::RunEvent::Exit = event {
-                tracing::info!("shutting down");
-                aim_api::support::end_run();
-            }
-        });
+    Ok(())
 }

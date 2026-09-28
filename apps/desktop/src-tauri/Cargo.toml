@@ -20,7 +20,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-aim-api = { path = "../../api" }
+aim-api = { path = "../../api", default-features = false }
 aim-decoders = { path = "../../../core/decoders" }
 aim-session = { path = "../../../core/session" }
 aim-simulator = { path = "../../../simulator" }
@@ -34,11 +34,18 @@ directories = "5"
 include_dir = "0.7"
 mime_guess = "2"
 
-[features]
-# Real serial / Bluetooth-COM support, on by default: the whole point of the
-# desktop build is talking to the adapter in the garage.
-default = ["serial"]
-serial = ["aim-api/serial"]
+# Real serial / Bluetooth-COM support on every desktop: the whole point of the
+# desktop build is talking to the adapter in the garage. Android has no serial
+# ports (the serialport crate has no backend for it), so there the adapter is
+# reached through the platform's Bluetooth API instead - see `android.rs`.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+aim-api = { path = "../../api", features = ["serial"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+aim-transport = { path = "../../../core/transport", default-features = false }
+aim-types = { path = "../../../core/types" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [profile.release]
 opt-level = "s"
