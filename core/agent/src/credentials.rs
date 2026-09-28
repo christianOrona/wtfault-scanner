@@ -83,6 +83,14 @@ impl KeySource {
                  saved passwords. This app asks for it when it needs it and never writes it to \
                  disk itself."
             }
+            // Android keeps every app's files apart, so the same file means
+            // something different there, and the desktop sentence on a phone
+            // would overstate the risk as badly as silence understates it.
+            KeySource::PlainFile if cfg!(target_os = "android") => {
+                "In a plain text file in this app's private storage. Android has no credential \
+                 store this app can use, so the key is not encrypted, but other apps cannot read \
+                 it. Someone with this phone unlocked and a computer's debugging tools could."
+            }
             KeySource::PlainFile => {
                 "In a plain text file in your user profile. No credential store was available on \
                  this machine, so anything running as you can read it. That is worth knowing \
