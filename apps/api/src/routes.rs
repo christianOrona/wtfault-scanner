@@ -672,15 +672,17 @@ async fn obdb_status(State(state): State<AppState>) -> ApiResult<Json<Value>> {
         Err(why) => return Ok(Json(json!({ "repository": null, "why_not": why }))),
         Ok(repo) => repo,
     };
-    let kept = state
-        .config
-        .profiles_dir
-        .as_deref()
-        .and_then(|d| aim_decoders::obdb::cached_signalset(d, &repo))
-        .is_some();
+    // A kept make-level set counts: it is what the fetch falls back to.
+    let make = aim_decoders::obdb::make_repository(&repo);
+    let kept = state.config.profiles_dir.as_deref().and_then(|d| {
+        std::iter::once(repo.clone())
+            .chain(make)
+            .find(|r| aim_decoders::obdb::cached_signalset(d, r).is_some())
+    });
     Ok(Json(json!({
         "repository": repo,
-        "kept": kept,
+        "kept": kept.is_some(),
+        "kept_repository": kept,
         "source": aim_decoders::obdb::repository_url(&repo),
     })))
 }
@@ -712,13 +714,24 @@ async fn fetch_obdb(
         ));
     };
 
+    // The model's own set first, then the make's. OBDb keeps a make-level set
+    // (`Ford`, 280 commands) beside the model ones, and a model's set is often
+    // still empty: Ford-F-250's was on 2026-09-28, while 74 of the make-level
+    // definitions decoded on a 2019 F-250 that same day.
+    let make = aim_decoders::obdb::make_repository(&repo);
+    let tried: Vec<String> = std::iter::once(repo.clone()).chain(make).collect();
+
     if !body.refresh {
-        if let Some(path) = aim_decoders::obdb::cached_signalset(&dir, &repo) {
+        if let Some((kept, path)) = tried
+            .iter()
+            .find_map(|r| aim_decoders::obdb::cached_signalset(&dir, r).map(|p| (r.clone(), p)))
+        {
             return Ok(Json(json!({
                 "from_cache": true,
-                "repository": repo,
+                "repository": kept,
+                "make_level": kept != repo,
                 "path": path.display().to_string(),
-                "source": aim_decoders::obdb::repository_url(&repo),
+                "source": aim_decoders::obdb::repository_url(&kept),
                 "loads_on_next_start": true
             })));
         }
@@ -728,15 +741,72 @@ async fn fetch_obdb(
         .timeout(std::time::Duration::from_secs(20))
         .build()
         .map_err(|e| ApiError::bad_request(format!("could not build an http client: {e}")))?;
+
+    let mut found = None;
+    for candidate in &tried {
+        if let Some((text, commands)) = download_signalset(&client, candidate).await? {
+            found = Some((candidate.clone(), text, commands));
+            break;
+        }
+    }
+    // OBDb has a repository for many models whose signal set is still empty.
+    // Keeping that would look like a vehicle with nothing to offer, so it is
+    // said plainly instead and nothing is kept.
+    let Some((repo_kept, text, commands)) = found else {
+        return Err(ApiError::from(AimError::not_found(format!(
+            "OBDb has no signals recorded for {} yet. Nothing was changed.",
+            tried.join(" or ")
+        ))));
+    };
+    let make_level = repo_kept != repo;
+    let repo = repo_kept;
+
+    // Refuses anything that is not a signal set, with its own error code, before writing.
+    let path = aim_decoders::obdb::cache_signalset(&dir, &repo, &text)?;
+
+    // Recorded here rather than in the service because the fetch itself lives
+    // here. The result is deliberately dropped: a set that was kept must never
+    // be reported as a failure because the note about it did not land. This is
+    // what puts the gain on the scorecard (#56), so the next visit starts
+    // ahead of this one.
+    let (subject, claim) = aim_decoders::obdb::signalset_finding(&repo, commands);
+    let source = aim_decoders::obdb::repository_url(&repo);
+    let _ = state
+        .with_service(move |s| {
+            s.record_finding(
+                &subject,
+                aim_session::FindingOutcome::Observed,
+                &claim,
+                &source,
+                "fetched_from_obdb",
+            )
+        })
+        .await;
+
+    Ok(Json(json!({
+        "from_cache": false,
+        "commands": commands,
+        "repository": repo,
+        "make_level": make_level,
+        "path": path.display().to_string(),
+        "source": aim_decoders::obdb::repository_url(&repo),
+        "loads_on_next_start": true
+    })))
+}
+
+/// One OBDb signal set and how many commands it holds, or `None` when OBDb has
+/// no set for that repository or the set is empty.
+async fn download_signalset(
+    client: &reqwest::Client,
+    repo: &str,
+) -> ApiResult<Option<(String, usize)>> {
     let response =
-        client.get(aim_decoders::obdb::signalset_url(&repo)).send().await.map_err(|e| {
+        client.get(aim_decoders::obdb::signalset_url(repo)).send().await.map_err(|e| {
             ApiError::bad_request(format!("could not reach OBDb: {e}. Nothing was changed."))
         })?;
 
     if response.status() == 404 {
-        return Err(ApiError::from(AimError::not_found(format!(
-            "OBDb has no signal set for {repo} yet. Nothing was changed."
-        ))));
+        return Ok(None);
     }
 
     if !response.status().is_success() {
@@ -764,47 +834,13 @@ async fn fetch_obdb(
         return Err(ApiError::bad_request("OBDb signal set reply is too large"));
     }
 
-    // OBDb has a repository for many models whose signal set is still empty
-    // (Ford-F-250 was, on 2026-09-17). Keeping that would look like a vehicle
-    // with nothing to offer, so it is said plainly instead and nothing is kept.
-    let commands = aim_decoders::signalset::SignalSet::from_json(&text).map(|s| s.commands.len());
-    if commands == Ok(0) {
-        return Err(ApiError::from(AimError::not_found(format!(
-            "OBDb has a page for {repo} but no signals recorded for it yet. Nothing was changed."
-        ))));
+    // Anything that does not parse is passed on, so the keeping step can
+    // refuse it with its own error rather than it passing for an empty set.
+    match aim_decoders::signalset::SignalSet::from_json(&text).map(|s| s.commands.len()) {
+        Ok(0) => Ok(None),
+        Ok(n) => Ok(Some((text, n))),
+        Err(_) => Ok(Some((text, 0))),
     }
-
-    // Refuses anything that is not a signal set, with its own error code, before writing.
-    let path = aim_decoders::obdb::cache_signalset(&dir, &repo, &text)?;
-
-    // Recorded here rather than in the service because the fetch itself lives
-    // here. The result is deliberately dropped: a set that was kept must never
-    // be reported as a failure because the note about it did not land. This is
-    // what puts the gain on the scorecard (#56), so the next visit starts
-    // ahead of this one.
-    let (subject, claim) =
-        aim_decoders::obdb::signalset_finding(&repo, commands.as_ref().copied().unwrap_or(0));
-    let source = aim_decoders::obdb::repository_url(&repo);
-    let _ = state
-        .with_service(move |s| {
-            s.record_finding(
-                &subject,
-                aim_session::FindingOutcome::Observed,
-                &claim,
-                &source,
-                "fetched_from_obdb",
-            )
-        })
-        .await;
-
-    Ok(Json(json!({
-        "from_cache": false,
-        "commands": commands.unwrap_or(0),
-        "repository": repo,
-        "path": path.display().to_string(),
-        "source": aim_decoders::obdb::repository_url(&repo),
-        "loads_on_next_start": true
-    })))
 }
 
 /// Helper to determine the OBDb repository name for the connected vehicle.

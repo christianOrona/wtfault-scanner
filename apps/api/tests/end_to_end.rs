@@ -675,3 +675,31 @@ async fn an_obdb_signal_set_follows_the_vin_lookup_and_is_kept() {
     assert_eq!(fetched["repository"], "Ford-F-250");
     assert_eq!(fetched["loads_on_next_start"], true);
 }
+
+/// With no set for the model, a kept make-level set is what the vehicle gets,
+/// and it is reported as covering the make rather than the model.
+#[tokio::test]
+async fn a_make_level_obdb_set_stands_in_when_the_model_has_none() {
+    const URL: &str =
+        "https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVinValues/1FT7W2BT6KEC00001?format=json";
+    const F250: &str =
+        include_str!("../../../core/decoders/tests/fixtures/vpic/ford-f250-2019.json");
+    const SET: &str = include_str!("../../../vehicle-profiles/catalog/obdb/Ford-F-150.json");
+
+    let h = Harness::start(ScenarioId::Healthy).await;
+    ok(&h.post("/adapter/connect", json!({})).await, "connect");
+    ok(&h.post("/vehicles/identify", json!({})).await, "identify");
+    h.store.store_vpic_reply("1FT7W2BT6KEC00001", URL, F250).unwrap();
+
+    aim_decoders::obdb::cache_signalset(&h._dir.path().join("profiles"), "Ford", SET).unwrap();
+    let status = h.get("/vehicles/obdb").await;
+    assert_eq!(status["repository"], "Ford-F-250");
+    assert_eq!(status["kept"], true);
+    assert_eq!(status["kept_repository"], "Ford");
+
+    let fetched = h.post("/vehicles/obdb", json!({})).await;
+    assert_eq!(fetched["from_cache"], true);
+    assert_eq!(fetched["repository"], "Ford");
+    assert_eq!(fetched["make_level"], true);
+    assert_eq!(fetched["source"], "https://github.com/OBDb/Ford");
+}

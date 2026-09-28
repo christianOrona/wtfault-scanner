@@ -72,12 +72,9 @@ pub fn repository_url(repository: &str) -> String {
 }
 
 /// A name that can only ever be a file in the catalogue folder: letters, digits
-/// and hyphens, in OBDb's `Make-Model` shape. The hyphen also rules out Windows
-/// device names such as `CON`, which no folder may hold a file called.
-///
-/// This function now also accepts make-only repositories (e.g. "Ford") that are
-/// valid if they contain only ASCII letters and digits, are at most 64 characters,
-/// and are not Windows reserved device names.
+/// and hyphens, in OBDb's `Make-Model` shape, or a make alone (`Ford`) for the
+/// make-level sets. Windows device names such as `CON`, which no folder may hold
+/// a file called, are refused by name.
 fn valid_repository(repository: &str) -> bool {
     // Check for Windows reserved device names (case-insensitive)
     let lower_repo = repository.to_lowercase();

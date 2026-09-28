@@ -101,7 +101,12 @@ export function VinLookupPanel({ connected, vin }: { connected: boolean; vin: st
             <div style={{ marginTop: 8 }}>
               {obdbError && <ErrorBanner error={obdbError} />}
               {obdb.kept ? (
-                <div className="faint">OBDb community signals for {obdb.repository} are kept on this computer. A newly fetched set loads the next time the app starts.</div>
+                <div className="faint">
+                  {obdb.kept_repository && obdb.kept_repository !== obdb.repository
+                    ? <>OBDb has no signals for {obdb.repository} yet, so its set for every {obdb.kept_repository} vehicle is kept on this computer. Expect many of them not to apply to this one.</>
+                    : <>OBDb community signals for {obdb.repository} are kept on this computer.</>}
+                  {" "}A newly fetched set loads the next time the app starts.
+                </div>
               ) : (
                 <>
                   <div className="faint">OBDb, a community project, documents the signals many models answer to. Fetching sends only the model name to GitHub.</div>

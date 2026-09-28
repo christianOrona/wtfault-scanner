@@ -980,6 +980,8 @@ export interface ObdbStatus {
   repository: string | null;
   why_not?: string;
   kept?: boolean;
+  /** Which set is kept: the model's, or the make-level one it falls back to. */
+  kept_repository?: string | null;
   source?: string;
 }
 
@@ -989,6 +991,8 @@ export interface ObdbFetch {
   /** How many commands the fetched set holds; absent when a kept copy was used. */
   commands?: number;
   repository: string;
+  /** True when OBDb had nothing for the model and the make's set was used. */
+  make_level?: boolean;
   path: string;
   source: string;
   loads_on_next_start: boolean;
