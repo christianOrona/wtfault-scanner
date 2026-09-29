@@ -5025,6 +5025,25 @@ impl DiagnosticService {
         // Modules are recorded by the address they answered on; a request goes
         // to the matching request address.
         let addr = Self::request_target(&module)?;
+
+        // On the module's own bus. Measured on a 2019 F-250 (2026-09-28): every
+        // second-bus module probed from the primary bus reported no identifiers
+        // at all, after about 110 seconds of silence each.
+        let home = match &addr {
+            RequestTarget::Physical(a) => self.reach_module(a),
+            RequestTarget::Functional => None,
+        };
+        let outcome = self.probe_capabilities_on_its_bus(module_key, &module, &addr);
+        self.restore_bus(home);
+        outcome
+    }
+
+    fn probe_capabilities_on_its_bus(
+        &mut self,
+        module_key: &str,
+        module: &Module,
+        addr: &RequestTarget,
+    ) -> AimResult<Payload> {
         let budget = Duration::from_millis(1500);
         let mut warnings = Vec::new();
 

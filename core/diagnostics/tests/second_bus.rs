@@ -123,6 +123,28 @@ fn a_ford_module_is_named_by_its_part_number() {
     assert!(seat.identity.uds_identification_read, "{:?}", seat.identity);
 }
 
+/// A capability probe of a second-bus module is asked on that bus.
+///
+/// Measured on a 2019 F-250 (2026-09-28): every second-bus module probed from
+/// the primary bus reported no identifiers, after about 110 seconds each.
+#[test]
+fn a_capability_probe_reaches_a_module_on_the_second_bus() {
+    let transport =
+        SimulatedTransport::with_personality(ScenarioId::Healthy, AdapterPersonality::obdlink_mx());
+    let mut service = service_with(transport);
+    assert!(service.scan_all_modules(USER).success);
+
+    let probe = service.probe_module_capabilities("BUS2_72E", USER);
+    assert!(probe.success, "{:?}", probe.error);
+    let data = probe.data.expect("a probe reports what it found");
+    let found: Vec<&str> =
+        data["identifiers"].as_array().unwrap().iter().filter_map(|i| i["did"].as_str()).collect();
+    assert!(found.contains(&"F188"), "identifiers found: {found:?}");
+
+    // And the adapter is back where it was.
+    assert!(service.read_dtcs(Some("ECU_7E8"), USER).success);
+}
+
 #[test]
 fn a_clone_adapter_reports_only_the_primary_bus() {
     let mut service = service_with(SimulatedTransport::new(ScenarioId::Healthy));

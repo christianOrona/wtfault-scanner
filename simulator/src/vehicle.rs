@@ -370,9 +370,12 @@ impl VirtualVehicle {
                     reports_vin: false,
                     uds_faults: None,
                     // Like every Ford module measured on a 2019 F-250: no
-                    // standard name (F197 is refused), a Ford part number under
-                    // F113, NUL-padded to 24 bytes.
-                    config_records: BTreeMap::from([(0xF113u16, pad_nul(b"JC3T-14B531-AA", 24))]),
+                    // standard name (F197 is refused), Ford part numbers under
+                    // F113 and F188, NUL-padded to 24 bytes.
+                    config_records: BTreeMap::from([
+                        (0xF113u16, pad_nul(b"JC3T-14B531-AA", 24)),
+                        (0xF188u16, pad_nul(b"JC3T-14C064-AA", 24)),
+                    ]),
                     config_write: ConfigWriteBehaviour::Accept,
                 },
                 // Module at 74E - Seat module
