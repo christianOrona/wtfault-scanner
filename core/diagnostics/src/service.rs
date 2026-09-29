@@ -5051,7 +5051,7 @@ impl DiagnosticService {
         let mut sessions = Vec::new();
         for (id, name) in [(0x01u8, "default"), (0x03u8, "extended")] {
             let request = aim_protocols::UdsRequest::diagnostic_session_control(id).to_bytes();
-            let granted = match self.adapter.request_pdu(&request, &addr, budget) {
+            let granted = match self.adapter.request_pdu(&request, addr, budget) {
                 Ok(replies) => Self::first_uds_outcome(&replies),
                 Err(e) => UdsOutcome::NoAnswer(e.message),
             };
@@ -5072,7 +5072,7 @@ impl DiagnosticService {
         // is whether `securityAccessDenied` elsewhere is a real lock on this
         // module or a red herring.
         let seed_request = aim_protocols::UdsRequest::security_access_request_seed(0x01).to_bytes();
-        let seed = match self.adapter.request_pdu(&seed_request, &addr, budget) {
+        let seed = match self.adapter.request_pdu(&seed_request, addr, budget) {
             Ok(replies) => Self::first_uds_outcome(&replies),
             Err(e) => UdsOutcome::NoAnswer(e.message),
         };
@@ -5093,7 +5093,7 @@ impl DiagnosticService {
             let mut stopped_at = None;
             for did in start..=end {
                 let request = aim_protocols::UdsRequest::read_data_by_identifier(did).to_bytes();
-                let outcome = match self.adapter.request_pdu(&request, &addr, budget) {
+                let outcome = match self.adapter.request_pdu(&request, addr, budget) {
                     Ok(replies) => {
                         strikes = 0;
                         Self::first_uds_outcome(&replies)
@@ -5159,7 +5159,7 @@ impl DiagnosticService {
         // Leave the module as it was found. An extended session lapses on its
         // own, but waiting for a timeout is not the same as putting it back.
         let restore = aim_protocols::UdsRequest::diagnostic_session_control(0x01).to_bytes();
-        let _ = self.adapter.request_pdu(&restore, &addr, budget);
+        let _ = self.adapter.request_pdu(&restore, addr, budget);
 
         warnings.push(Warning::info(
             "probe_is_read_only",
