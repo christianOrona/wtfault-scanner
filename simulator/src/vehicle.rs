@@ -369,7 +369,10 @@ impl VirtualVehicle {
                     runs_monitors: false,
                     reports_vin: false,
                     uds_faults: None,
-                    config_records: BTreeMap::new(),
+                    // Like every Ford module measured on a 2019 F-250: no
+                    // standard name (F197 is refused), a Ford part number under
+                    // F113, NUL-padded to 24 bytes.
+                    config_records: BTreeMap::from([(0xF113u16, pad_nul(b"JC3T-14B531-AA", 24))]),
                     config_write: ConfigWriteBehaviour::Accept,
                 },
                 // Module at 74E - Seat module
@@ -385,7 +388,8 @@ impl VirtualVehicle {
                     runs_monitors: false,
                     reports_vin: false,
                     uds_faults: None,
-                    config_records: BTreeMap::new(),
+                    // A part number whose base this build does not know.
+                    config_records: BTreeMap::from([(0xF113u16, pad_nul(b"HC3T-19H423-DU", 24))]),
                     config_write: ConfigWriteBehaviour::Accept,
                 },
             ],
@@ -762,6 +766,13 @@ fn pad_ascii(s: &str, n: usize) -> String {
         out.push(' ');
     }
     out
+}
+
+/// Pad an identification record with NULs to a fixed width, as Ford modules do.
+fn pad_nul(text: &[u8], width: usize) -> Vec<u8> {
+    let mut v = text.to_vec();
+    v.resize(width.max(text.len()), 0x00);
+    v
 }
 
 #[cfg(test)]

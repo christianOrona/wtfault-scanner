@@ -22,6 +22,7 @@ pub mod expr;
 pub mod features;
 pub mod import;
 pub mod knowledge;
+pub mod modules;
 pub mod monitors;
 pub mod obdb;
 pub mod pids;
@@ -69,6 +70,9 @@ pub struct DecoderSet {
     pub monitors: MonitorCatalog,
     /// Community signal definitions, by vehicle. Claims, never measurements.
     pub catalog: catalog::SignalCatalog,
+    /// Module types by manufacturer part number, for modules that do not name
+    /// themselves.
+    pub module_names: modules::ModuleNames,
 }
 
 impl DecoderSet {
@@ -82,6 +86,7 @@ impl DecoderSet {
             features: FeatureCatalog::embedded()?,
             profiles: ProfileReport::default(),
             catalog: catalog::SignalCatalog::embedded(),
+            module_names: modules::ModuleNames::ford()?,
         })
     }
 

@@ -1,0 +1,53 @@
+# Ford module types, by the base of the part number a module reports.
+#
+# Ford part numbers read PREFIX-BASE-SUFFIX, e.g. HC3A-12A650-JC. The prefix
+# is the design year and program, the suffix the revision; the base says what
+# the part is, and it stays the same across years and models. Every Ford
+# module on a 2019 F-250 refused the standard name identifiers (F197, F187,
+# F18A, F191) and answered F113, F111 and F188 with part numbers of this shape
+# (measured 2026-09-28, 32 of 35 modules).
+#
+# A base is listed only where two things agree: the base itself, and the
+# address the module answered on in Ford's usual layout. `measured` says what
+# was seen on a real vehicle that fits the name. A base not listed leaves the
+# module named by its address, with its part number beside it; nothing here is
+# guessed at to fill a gap.
+version: 1
+source: "Ford part-number bases, checked against module addresses on a 2019 F-250"
+modules:
+  - base: "12A650"
+    name: "Powertrain control module (PCM)"
+    measured: "7E0 on a 2019 F-250; its OBD name is ECM-EngineControl"
+  - base: "12B565"
+    name: "Transmission control module (TCM)"
+    measured: "7E1 on a 2019 F-250; its OBD name is TCM-TransmisCtrl"
+  - base: "14B476"
+    name: "Body control module (BCM)"
+    measured: "726 on a 2019 F-250; holds the AutoLock and double-honk settings, serves tire pressures"
+  - base: "10849"
+    name: "Instrument panel cluster (IPC)"
+    measured: "720 on a 2019 F-250; serves the odometer the owner read off the dash"
+  - base: "14B531"
+    name: "Driver door module (DDM)"
+    measured: "740 on a 2019 F-250"
+  - base: "14B533"
+    name: "Passenger door module (PDM)"
+    measured: "741 on a 2019 F-250"
+  - base: "2C219"
+    name: "Anti-lock brake module (ABS)"
+    measured: "760 on a 2019 F-250; serves wheel speeds and brake pressure"
+  - base: "14B321"
+    name: "Restraints control module (RCM)"
+    measured: "737 on a 2019 F-250"
+  - base: "9G768"
+    name: "Cruise control module (CCM)"
+    measured: "764 on a 2019 F-250"
+  - base: "3F944"
+    name: "Steering column control module (SCCM)"
+    measured: "724 on a 2019 F-250"
+  - base: "14G371"
+    name: "SYNC module (APIM)"
+    measured: "7D0 on a 2019 F-250"
+  - base: "14G087"
+    name: "Telematics control unit (TCU)"
+    measured: "754 on a 2019 F-250"

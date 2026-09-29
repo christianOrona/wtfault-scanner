@@ -74,6 +74,55 @@ fn a_full_scan_after_a_module_scan_still_finds_the_primary_bus() {
     assert!(primary > 0, "primary-bus modules in the full scan: {}", data["buses"]);
 }
 
+/// A Ford module that refuses the standard name is named by its part number.
+///
+/// Measured on a 2019 F-250 (2026-09-28): 34 of 36 modules stayed "Module at
+/// ..." because every one refused F197, while 32 answered F113 with a Ford part
+/// number whose base says what the module is.
+#[test]
+fn a_ford_module_is_named_by_its_part_number() {
+    let transport =
+        SimulatedTransport::with_personality(ScenarioId::Healthy, AdapterPersonality::obdlink_mx());
+    let mut service = service_with(transport);
+    assert!(service.identify_vehicle(USER).success, "identify");
+
+    assert!(service.scan_all_modules(USER).success);
+    let door = service
+        .store()
+        .modules(service.session_id())
+        .unwrap()
+        .into_iter()
+        .find(|m| m.module_key == "BUS2_72E")
+        .expect("the door module on the second bus");
+    assert_eq!(door.name, "Driver door module (DDM)");
+
+    // Opening the module afterwards keeps what the scan learned. It used to
+    // replace the identity with service 09's answer, which a second-bus
+    // module never gives.
+    assert!(service.get_module_identity("BUS2_72E", USER).success);
+    let door = service
+        .store()
+        .modules(service.session_id())
+        .unwrap()
+        .into_iter()
+        .find(|m| m.module_key == "BUS2_72E")
+        .unwrap();
+    assert_eq!(door.name, "Driver door module (DDM)");
+    assert!(door.identity.uds_identification_read);
+
+    // A base this build does not know keeps the address, and the read is
+    // still recorded as done.
+    let seat = service
+        .store()
+        .modules(service.session_id())
+        .unwrap()
+        .into_iter()
+        .find(|m| m.module_key == "BUS2_74E")
+        .expect("the seat module on the second bus");
+    assert_eq!(seat.name, "Module at 74E");
+    assert!(seat.identity.uds_identification_read, "{:?}", seat.identity);
+}
+
 #[test]
 fn a_clone_adapter_reports_only_the_primary_bus() {
     let mut service = service_with(SimulatedTransport::new(ScenarioId::Healthy));

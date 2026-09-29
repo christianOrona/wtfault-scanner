@@ -794,11 +794,21 @@ impl DiagnosticService {
         target: &RequestTarget,
         timeout: Duration,
     ) {
-        if module.identity.uds_identification_read {
+        // A read that found nothing is asked again: the list below grew after
+        // every module on a 2019 F-250 was marked read with nothing to show.
+        let knows_something = module.identity.system_name.is_some()
+            || module.identity.spare_part_number.is_some()
+            || self.identification.get(&module.module_key).is_some_and(|r| !r.is_empty());
+        if module.identity.uds_identification_read && knows_something {
             return;
         }
 
-        let standard_ids = [0xF197, 0xF187, 0xF18A, 0xF191, 0xF195];
+        // The standard identifiers, then the ones Ford modules actually answer.
+        // Measured on a 2019 F-250 (2026-09-28): every module refused F197,
+        // F187, F18A and F191 (requestOutOfRange), and 32 of 35 answered F188
+        // (the standard ECU software number) and F113 and F111, which sit in
+        // the manufacturer-specific range and carry Ford part numbers.
+        let standard_ids = [0xF197, 0xF187, 0xF18A, 0xF191, 0xF195, 0xF188, 0xF113, 0xF111];
         let mut answered_once = false;
         let mut kept: Vec<(u16, Vec<u8>)> = Vec::new();
 
@@ -877,10 +887,36 @@ impl DiagnosticService {
             }
         }
 
+        let placeholder =
+            module.name.starts_with("Module at ") || module.name.starts_with("OBD module at ");
+
         // Name the module from its system name if it's still using the default name
         if let Some(name) = &module.identity.system_name {
-            if module.name.starts_with("Module at ") {
+            if placeholder {
                 module.name = name.clone();
+            }
+        } else if placeholder && self.is_ford() {
+            // No system name, which is every module on a Ford. Its part number
+            // (F113, else F111) says what it is when the base is one this
+            // build knows; otherwise it keeps its address.
+            let part = [0xF113u16, 0xF111].iter().find_map(|did| {
+                kept.iter()
+                    .find(|(d, _)| d == did)
+                    .and_then(|(_, b)| aim_protocols::identification_text(b))
+            });
+            if let Some(part) = part {
+                if let Some(kind) = self.decoders.module_names.name_for_part(&part) {
+                    module.name = kind.to_string();
+                    module.identity.system_name = Some(kind.to_string());
+                    let module_key = module.module_key.clone();
+                    self.learned(
+                        &format!("module.{module_key}.identity"),
+                        aim_session::FindingOutcome::Observed,
+                        format!("{module_key} reports Ford part number {part}: a {kind}."),
+                        "Read from identifier F113 or F111 and named by the part-number base                          in vehicle-profiles/ford/modules.yaml.",
+                    );
+                    return;
+                }
             }
         }
 
@@ -911,6 +947,14 @@ impl DiagnosticService {
                 "Read from the standard UDS identification identifiers (F197, F187, F18A, F191, F195).",
             );
         }
+    }
+
+    /// Whether the connected vehicle is a Ford, by its VIN or NHTSA's make.
+    fn is_ford(&self) -> bool {
+        self.knowledge_context()
+            .make
+            .as_deref()
+            .is_some_and(|m| aim_decoders::catalog::makes_match("Ford", m))
     }
 
     /// Where to send this module something.
@@ -1696,7 +1740,21 @@ impl DiagnosticService {
                 module.name = name.clone();
             }
         }
-        module.identity = identity.clone();
+        // Only what service 09 answered is replaced. The rest of the identity
+        // came from the scan's UDS read, and replacing it wholesale wiped it:
+        // measured on a 2019 F-250 (2026-09-28), opening a second-bus module,
+        // which never answers service 09, reset it to "never identified".
+        if identity.ecu_name.is_some() {
+            module.identity.ecu_name = identity.ecu_name.clone();
+        }
+        if !identity.calibration_ids.is_empty() {
+            module.identity.calibration_ids = identity.calibration_ids.clone();
+        }
+        if !identity.calibration_verification_numbers.is_empty() {
+            module.identity.calibration_verification_numbers =
+                identity.calibration_verification_numbers.clone();
+        }
+        let identity = module.identity.clone();
         let module = self.store.upsert_module(&module)?;
 
         Ok(Payload {
