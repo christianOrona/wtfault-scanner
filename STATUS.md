@@ -132,6 +132,27 @@ vehicle, and they are recorded against the VIN as established. The rear inner
 pair read 150 psi on a single-rear-wheel truck: a no-sensor value, recorded as
 ruled out.
 
+### Ford modules refused every standard name, and answered Ford's own
+
+Measured 2026-09-28 on the 2019 F-250: all 36 modules refused F197, F187, F18A
+and F191 (`requestOutOfRange`), so 34 stayed "Module at ...". 32 of 35 answered
+F188, F113 and F111 with Ford part numbers; 744, 776 and 7F1 answered none.
+
+**Fixed, in part.** Those are read, and a module is named when its part-number
+base is one of twelve in `vehicle-profiles/ford/modules.yaml`: 12 of 36 named.
+The other bases (19H423 at 7B1, 7H417 at 761, 2C006 at 757 and more) are
+recorded and not guessed at. Two more module paths found not switching buses on
+the way — the capability probe, and the identity view, which also wiped the
+scan's identity — are fixed.
+
+### Diesel exhaust fluid is a legislated PID, not manufacturer data
+
+The truck supports about 40 standard PIDs this build had no decoder for,
+including DPF (7A), NOx reagent (85), aftertreatment status (8B) and DEF sensor
+(9B). DEF level is now decoded from 9B and 85, which agree at 41.2 %. The
+others wait for a documented byte layout; raw engine-off bytes for all of them
+are in the session scratchpad of 2026-09-28.
+
 ### A long UDS fault reply was cut off by a timeout
 
 One `59 02` reply on the 2012 F-250 announced 407 bytes and ended in `timeout`
@@ -217,9 +238,10 @@ Honest gaps, in the order they matter.
   measures nothing: `warm_idle` exists for fuel trims, a diesel has none, and
   until 2026-09-11 it reported success anyway. It now says what it could not
   measure, but a procedure still cannot declare which engines it applies to.
-- **No diesel-specific signals.** DPF load, regeneration state, DEF level and
-  SCR temperatures are all absent. Most are manufacturer-specific rather than
-  legislated, so they belong in profile data rather than the core catalogue.
+- **Few diesel-specific signals.** DEF level is read; DPF pressure,
+  regeneration state and SCR data are carried by legislated PIDs the truck
+  supports (7A, 8B, 85, 83) and are not decoded, for want of a documented
+  byte layout.
 - **No manufacturer-specific decoding.** Everything is the public standard,
   which is why it works across brands and also why a module can answer with a
   code nobody has a description for.

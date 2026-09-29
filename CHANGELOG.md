@@ -42,6 +42,16 @@ with the caveat that everything below 1.0 is allowed to move.
   definition always went to the main bus, so body-module signals such as tire
   pressures and the odometer came back "does not apply". They are now asked on
   the bus their module is on.
+- **Ford modules have names.** Ford modules don't answer the standard
+  "what are you" question, so almost every module was listed by address
+  ("Module at 72E"). The app now reads the part number they do report, and
+  names the module when that part number is a known type: body control,
+  instrument cluster, ABS, door modules and eight more. On a 2019 F-250 that
+  is 12 of 36 modules; the rest keep their address rather than a guess.
+- **Diesel exhaust fluid level.** The DEF tank level is read from the two
+  standard emissions PIDs that report it.
+- Opening a module no longer erases what the scan learned about it, and the
+  capability probe reaches modules on the second bus.
 - **When OBDb has nothing for your model, you get the make's set.** The
   Ford-F-250 set is empty; the Ford set is not. The vehicle card says when the
   kept set covers every vehicle of the make, since many of its signals will not
