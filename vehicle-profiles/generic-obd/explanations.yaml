@@ -181,6 +181,12 @@ signals:
   - id: dpf_temp_bank1_inlet
     easy: "How hot it is at the entrance to the soot filter. Diesels trap soot in a filter and then burn it off by getting very hot on purpose, so a high reading here often just means that burn-off is happening right now."
     technical: "Service 01 PID 7C. DPF temperature, bank 1 inlet. Sustained high inlet temperature at a raised idle indicates active regeneration rather than a fault."
+  - id: def_level
+    easy: "How full the diesel exhaust fluid (DEF, the blue-cap tank) is. Let it run dry and the truck will limit its speed until it is refilled."
+    technical: "Service 01 PID 9B, byte D. DEF tank level, 100/255 % per count."
+  - id: def_level_reagent_system
+    easy: "How full the diesel exhaust fluid tank is, as reported by the emissions system that uses it. Should agree with the tank level reading."
+    technical: "Service 01 PID 85, byte F. NOx reagent (DEF) tank level, 100/255 % per count."
 
   # ---- torque --------------------------------------------------------------
   - id: driver_demand_torque

@@ -587,3 +587,28 @@ pids:
     notes: >
       PID 0x7C is allocated for DPF temperature but this project has not
       validated its byte layout or scaling. Present only as raw evidence.
+
+  # Diesel exhaust fluid, from the two legislated PIDs that carry it. Both give
+  # the tank level as one byte of 100/255 % (SAE J1979, as quoted in the public
+  # PID tables). Measured on a 2019 F-250 diesel on 2026-09-28: 0x9B byte D and
+  # 0x85 byte F both read 0x69, 41.2 %. Only the level is decoded; the other
+  # bytes of both replies are left as raw evidence until their layout is known.
+  - pid: 0x85
+    signal_id: def_level_reagent_system
+    name: "Diesel exhaust fluid level (NOx reagent system)"
+    kind: numeric
+    bytes: 10
+    unit: "%"
+    formula: "F * 100 / 255"
+    range: { min: 0, max: 100 }
+    verification: unverified
+
+  - pid: 0x9B
+    signal_id: def_level
+    name: "Diesel exhaust fluid tank level"
+    kind: numeric
+    bytes: 4
+    unit: "%"
+    formula: "D * 100 / 255"
+    range: { min: 0, max: 100 }
+    verification: unverified
