@@ -470,11 +470,11 @@ vendor wrapper.
       "returns": "One or more decoded values, each carrying the raw bytes it came from."
     }
   ],
-  "enabled": ["adapter_health", "get_module_identity", "identify_vehicle", "list_catalog_signals",
-              "list_vehicle_features", "preview_configuration_change", "probe_module_capabilities",
-              "read_catalog_signal", "read_dtcs", "read_freeze_frame", "read_live_data",
-              "read_monitor_tests", "read_pid", "read_supported_pids", "scan_all_modules",
-              "scan_modules"]
+  "enabled": ["adapter_health", "check_procedure", "get_module_identity", "identify_vehicle",
+              "list_catalog_signals", "list_vehicle_features", "preview_configuration_change",
+              "probe_module_capabilities", "read_catalog_signal", "read_dtcs", "read_freeze_frame",
+              "read_live_data", "read_monitor_tests", "read_pid", "read_supported_pids",
+              "run_procedure", "scan_all_modules", "scan_modules"]
 }
 ```
 
