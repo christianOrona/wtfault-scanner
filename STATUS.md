@@ -13,7 +13,7 @@ Evidence, not intention. Everything here has run against a vehicle.
 
 | | |
 |---|---|
-| Vehicles seen | 3 real (2019 F-250 ×2, 2012 F-250), plus the virtual truck |
+| Vehicles seen | 3 real (2019 F-250 ×2, 2012 F-250), plus two virtual ones: the truck, and a 29-bit petrol Honda |
 | Adapters | FTDI USB at 500000 baud, Bluetooth ELM327 clone at 38400, OBDLink MX+ (STN) |
 | Sessions recorded | 34 |
 | Adapter exchanges logged | ~29,900 |
@@ -210,6 +210,19 @@ removed, not yet against the 2012 truck.
 - **Sessions replay without the vehicle.** A recorded session exports as a
   transcript with the VIN anonymised, and CI replays recorded sessions and fails
   when a replay discovers less than the original did.
+- **A second virtual vehicle that is not a Ford in any way the Ford was
+  convenient.** A 2023 Honda Odyssey: petrol, 29-bit CAN, its engine at
+  `18DAF110` and transmission at `18DAF11E` as measured on the real one, and a
+  freeze-frame answer the Ford never gives. Running every flow on it found
+  five things that were only right on the Ford: procedures that looked for
+  `7E8`, 29-bit replies with no request address, a missing freeze frame read
+  as an adapter failure (and a `0000` one as a frame for P0000), an empty
+  settings list with no reason, and screens that called every vehicle a
+  truck. A simulator is not a car: #39 still needs the real one.
+- **Updates are checked before they are kept.** A downloaded installer must
+  match the SHA-256 its release states, in `SHA256SUMS.txt` and in GitHub's
+  record of the file. That catches a damaged or swapped download; it does not
+  replace signing, which is what would catch a replaced release.
 
 ## What is not built
 
