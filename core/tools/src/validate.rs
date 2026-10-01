@@ -109,6 +109,19 @@ fn check_type(tool: &str, name: &str, spec: &Value, value: &Value) -> AimResult<
         }
     }
 
+    // A closed list of values, for an argument that names one of a fixed set
+    // of things. Rejected here, before dispatch, rather than left to whatever
+    // the service does with a name it does not know.
+    if let (Some(allowed), Some(v)) = (spec.get("enum").and_then(Value::as_array), value.as_str()) {
+        if !allowed.iter().any(|a| a.as_str() == Some(v)) {
+            let names: Vec<&str> = allowed.iter().filter_map(Value::as_str).collect();
+            return Err(reject(
+                tool,
+                format!("argument {name:?} must be one of {}, got {v:?}", names.join(", ")),
+            ));
+        }
+    }
+
     if expected == "integer" {
         if let (Some(v), Some(min)) = (value.as_i64(), spec.get("minimum").and_then(Value::as_i64))
         {

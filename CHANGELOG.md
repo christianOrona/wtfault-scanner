@@ -7,6 +7,11 @@ with the caveat that everything below 1.0 is allowed to move.
 
 ### Added
 
+- **The assistant can walk you through a guided test.** It can check whether
+  the vehicle is in the state a test needs (holding 2500 rpm, warm idle, key
+  on with the engine off), tell you the one thing to do next, and take the
+  measurement once the vehicle, not your word, says the state holds. Tests that
+  do not apply to your engine are not offered.
 - **Security gateways are named.** A vehicle listed as having one (FCA /
   Stellantis from model year 2018) is told so when it is identified: reading
   works, changing configuration is expected to be refused, and access comes

@@ -286,3 +286,34 @@ fn destructive_tools_are_listed_but_never_offered() {
     assert!(!offered.contains(&"clear_dtcs"), "{offered:?}");
     assert!(registry.get("clear_dtcs").is_some(), "it must still be describable");
 }
+
+/// The assistant can walk somebody through a procedure, and the engine decides
+/// which ones: on the diesel simulator, warm idle is not started.
+#[test]
+fn a_procedure_is_checked_through_the_registry_and_the_engine_has_its_say() {
+    let (mut service, _) = connected(ScenarioId::Healthy);
+    assert!(call(&mut service, "scan_modules", json!({})).success);
+
+    let steady = call(&mut service, "check_procedure", json!({ "procedure": "steady_rpm_2500" }));
+    assert!(steady.success, "{:?}", steady.error);
+    assert_eq!(steady.data.as_ref().unwrap()["state"], "waiting");
+
+    let warm = call(&mut service, "check_procedure", json!({ "procedure": "warm_idle" }));
+    assert!(warm.success, "{:?}", warm.error);
+    assert_eq!(warm.data.as_ref().unwrap()["state"], "does_not_apply");
+
+    let run = call(&mut service, "run_procedure", json!({ "procedure": "steady_rpm_2500" }));
+    assert!(run.success, "{:?}", run.error);
+    assert!(run.values.is_empty(), "the simulator idles, so nothing is measured");
+}
+
+/// A procedure the build does not ship is refused before dispatch, by name.
+#[test]
+fn a_procedure_that_does_not_exist_is_refused_before_the_vehicle_is_asked() {
+    let (mut service, _) = connected(ScenarioId::Healthy);
+    let r = call(&mut service, "check_procedure", json!({ "procedure": "drive_at_100" }));
+    assert!(!r.success);
+    let error = r.error.unwrap();
+    assert!(error.message.contains("must be one of"), "{}", error.message);
+    assert!(error.message.contains("warm_idle"), "{}", error.message);
+}

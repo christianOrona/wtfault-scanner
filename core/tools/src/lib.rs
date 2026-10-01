@@ -123,6 +123,36 @@ fn signal_arg() -> Value {
     })
 }
 
+/// The one argument a procedure tool takes: which built-in procedure.
+///
+/// A closed list, taken from the procedures this build ships, so the model
+/// can only name one that exists.
+fn procedure_arg() -> Value {
+    let ids: Vec<String> =
+        aim_diagnostics::Procedure::built_in().into_iter().map(|p| p.id).collect();
+    json!({
+        "type": "object",
+        "properties": {
+            "procedure": {
+                "type": "string",
+                "enum": ids,
+                "description": "Which procedure."
+            }
+        },
+        "required": ["procedure"],
+        "additionalProperties": false
+    })
+}
+
+/// Every built-in procedure in a line, for a model to choose from.
+fn procedure_list() -> String {
+    aim_diagnostics::Procedure::built_in()
+        .into_iter()
+        .map(|p| format!("{} ({}): {}", p.id, p.name, p.purpose))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn module_arg(required: bool) -> Value {
     let mut schema = json!({
         "type": "object",
@@ -400,6 +430,36 @@ impl ToolRegistry {
                 }),
             ),
             ToolSchema::new(
+                "check_procedure",
+                capabilities::READ_LIVE_DATA,
+                PermissionLevel::L0,
+                &format!(
+                    "Check whether the vehicle is in the state a guided procedure needs, by \
+                     reading it: never take the person's word for it. Read-only, and meant to \
+                     be called again as they work towards the state. Returns the next single \
+                     thing to ask of them, which you pass on in your own words, or \
+                     does_not_apply when the engine is the wrong kind, in which case nothing is \
+                     asked of anyone. Nothing here involves driving. The procedures: {}",
+                    procedure_list()
+                ),
+                "The state (waiting, holding, does_not_apply), each condition with the reading \
+                 that settled it, the next step to ask of the person, and the safety notes to \
+                 pass on before they start.",
+                procedure_arg(),
+            ),
+            ToolSchema::new(
+                "run_procedure",
+                capabilities::READ_LIVE_DATA,
+                PermissionLevel::L0,
+                "Take a procedure's measurement, once check_procedure says its conditions hold. \
+                 The conditions are read again before and after, and the result says whether \
+                 they held throughout and whether everything the procedure exists to measure \
+                 was read. Only reads.",
+                "The readings taken under the held conditions, whether the conditions held \
+                 throughout, and what could not be measured and why.",
+                procedure_arg(),
+            ),
+            ToolSchema::new(
                 "adapter_health",
                 capabilities::HEALTH,
                 PermissionLevel::L0,
@@ -631,6 +691,16 @@ pub fn execute(
                 .map(|a| a.iter().filter_map(Value::as_str).map(String::from).collect())
                 .unwrap_or_default();
             service.read_live_data(module.unwrap_or_default(), &signals, initiator)
+        }
+        "check_procedure" => {
+            let procedure =
+                call.arguments.get("procedure").and_then(Value::as_str).unwrap_or_default();
+            service.check_procedure(procedure, initiator)
+        }
+        "run_procedure" => {
+            let procedure =
+                call.arguments.get("procedure").and_then(Value::as_str).unwrap_or_default();
+            service.run_procedure(procedure, initiator)
         }
         "clear_dtcs" => service.clear_dtcs(module, initiator, call.confirmation.as_deref()),
         // A tool that is registered but has no dispatch arm is a bug in this
