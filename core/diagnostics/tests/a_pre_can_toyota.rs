@@ -182,3 +182,35 @@ fn self_test_results_are_not_read_in_the_wrong_layout() {
     assert_eq!(data["layout_not_decoded"], true);
     assert!(monitors.warnings.iter().any(|w| w.code == "monitor_tests_pre_can_layout"));
 }
+
+/// Some vehicles of this age have a CAN body bus beside a pre-CAN engine bus.
+/// With an adapter that reaches a second bus, the K-line is read with the
+/// legislated services and the second bus is still swept: here it is silent,
+/// and the scan says so rather than failing.
+#[test]
+fn a_second_bus_beside_the_k_line_is_still_swept() {
+    let transport = SimulatedTransport::with_vehicle(
+        VirtualVehicle::toyota_2004(ScenarioId::DpfRegen),
+        AdapterPersonality::obdlink_mx(),
+    );
+    let adapter: Box<dyn DiagnosticAdapter> =
+        Box::new(Elm327Adapter::new(Box::new(transport), Elm327Config::fast()));
+    let mut service = DiagnosticService::start(
+        adapter,
+        SessionStore::open_in_memory().unwrap(),
+        Arc::new(DecoderSet::generic_obd().unwrap()),
+        SafetyGate::phase1(),
+        None,
+    )
+    .unwrap();
+    assert!(service.connect(USER).success);
+    assert!(service.capabilities().multiple_can_buses);
+
+    let full = service.scan_all_modules(USER);
+    assert!(full.success, "{:?}", full.error);
+    let data = full.data.unwrap();
+    assert_eq!(data["module_count"], 2);
+    assert_eq!(data["buses"][0]["label"], "K-line (pin 7)");
+    assert!(full.warnings.iter().any(|w| w.code == "full_scan_reaches_emissions_modules_only"));
+    assert!(full.warnings.iter().any(|w| w.code == "second_bus_silent"), "{:?}", full.warnings);
+}

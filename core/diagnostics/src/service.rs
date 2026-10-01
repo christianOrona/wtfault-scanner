@@ -5237,9 +5237,6 @@ impl DiagnosticService {
 
     fn scan_all_inner(&mut self) -> AimResult<Payload> {
         self.require_usable()?;
-        if legacy_wire(self.adapter.protocol()).is_some() {
-            return self.scan_all_legacy();
-        }
         let home = self.adapter.current_bus();
         let mut buses = vec![home];
         if self.adapter.capabilities().multiple_can_buses {
@@ -5273,7 +5270,13 @@ impl DiagnosticService {
             // Not `?`. An error here still has to leave the adapter on the bus
             // it was found on, or a failed scan would silently redirect every
             // request made afterwards.
-            let found = match self.scan_all_on_current_bus() {
+            // A pre-CAN primary bus is read with the legislated services; a
+            // second bus beside it is still CAN, and swept like any other.
+            let legacy =
+                bus == VehicleBus::Primary && legacy_wire(self.adapter.protocol()).is_some();
+            let scanned =
+                if legacy { self.scan_all_legacy() } else { self.scan_all_on_current_bus() };
+            let found = match scanned {
                 Ok(found) => found,
                 Err(e) => {
                     // Silence on a bus we went looking on is a finding, not a failure.
@@ -5382,13 +5385,35 @@ impl DiagnosticService {
     /// end in "no module answered on any diagnostic address" right after two
     /// modules had answered.
     fn scan_all_legacy(&mut self) -> AimResult<Payload> {
-        if self.store.modules(&self.session.id)?.is_empty() {
+        let on_primary = |store: &SessionStore, session: &SessionId| -> AimResult<Vec<Module>> {
+            Ok(store
+                .modules(session)?
+                .into_iter()
+                .filter(|m| VehicleBus::of_module_key(&m.module_key) == VehicleBus::Primary)
+                .collect())
+        };
+        if on_primary(&self.store, &self.session.id)?.is_empty() {
             self.scan_modules_inner()?;
         }
-        let read = self.read_dtcs_inner(None)?;
-        let dtcs =
-            read.data.as_ref().and_then(|d| d["dtcs"].as_array().cloned()).unwrap_or_default();
-        let modules = self.store.modules(&self.session.id)?;
+        let modules = on_primary(&self.store, &self.session.id)?;
+        if modules.is_empty() {
+            return Err(AimError::no_data("no module answered on the primary bus"));
+        }
+        let mut dtcs = Vec::new();
+        let mut warnings: Vec<Warning> = Vec::new();
+        let mut evidence = None;
+        for m in &modules {
+            let read = self.read_dtcs_inner(Some(&m.module_key))?;
+            dtcs.extend(
+                read.data.as_ref().and_then(|d| d["dtcs"].as_array().cloned()).unwrap_or_default(),
+            );
+            for w in read.warnings {
+                if !warnings.iter().any(|seen| seen.code == w.code && seen.message == w.message) {
+                    warnings.push(w);
+                }
+            }
+            evidence = read.evidence.or(evidence);
+        }
         let wire = self.bus_label(VehicleBus::Primary);
 
         let entries: Vec<serde_json::Value> = modules
@@ -5445,7 +5470,6 @@ impl DiagnosticService {
         let fault_count: usize =
             entries.iter().map(|e| e["fault_count"].as_u64().unwrap_or(0) as usize).sum();
 
-        let mut warnings = read.warnings;
         warnings.push(Warning::info(
             "full_scan_reaches_emissions_modules_only",
             format!(
@@ -5472,7 +5496,7 @@ impl DiagnosticService {
                 }],
             })),
             warnings,
-            evidence: read.evidence,
+            evidence,
             ..Default::default()
         })
     }
