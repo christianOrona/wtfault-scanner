@@ -25,6 +25,11 @@ with the caveat that everything below 1.0 is allowed to move.
 
 ### Fixed
 
+- A guided procedure that means nothing on the engine in front of it is no
+  longer started. On a diesel, *Warm idle* (which exists for fuel trims) says
+  it does not apply instead of walking you to a warm engine and measuring
+  nothing, and *Hold 2500 rpm* no longer counts the fuel trims a diesel does
+  not have as missing. The engine type comes from the engine itself.
 - An anonymised session transcript is refused, rather than exported, if any
   trace of the real VIN is left in it, for instance in a reply layout the
   anonymiser does not recognise.

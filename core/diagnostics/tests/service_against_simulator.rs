@@ -1677,6 +1677,53 @@ fn a_procedure_refuses_to_measure_outside_its_own_conditions() {
     assert!(r.values.is_empty(), "nothing was measured");
 }
 
+/// A procedure that means nothing on this engine is not started: nobody is
+/// asked to warm a diesel up for fuel trims it does not have.
+///
+/// The simulated F-250 reports a diesel, as the real one does.
+#[test]
+fn warm_idle_is_not_offered_to_a_diesel() {
+    let (mut service, _) = connected(ScenarioId::Healthy);
+    assert!(service.scan_modules(USER).success);
+
+    let r = service.check_procedure("warm_idle", USER);
+    assert!(r.success, "{:?}", r.error);
+    let data = r.data.as_ref().unwrap();
+    assert_eq!(data["state"], "does_not_apply");
+    assert_eq!(data["fuel_type"], "Diesel");
+    assert_eq!(data["engine"], "diesel");
+    assert!(data.get("conditions").is_none(), "nothing is asked of anybody");
+    assert!(data.get("next_step").is_none(), "{data}");
+    let why = data["does_not_apply_because"].as_str().unwrap();
+    assert!(why.contains("diesel"), "{why}");
+    assert!(r.warnings.iter().any(|w| w.code == "procedure_does_not_apply"));
+
+    // Running it is the same answer, not "conditions not met".
+    let r = service.run_procedure("warm_idle", USER);
+    assert!(r.success, "{:?}", r.error);
+    assert_eq!(r.data.as_ref().unwrap()["state"], "does_not_apply");
+    assert!(r.values.is_empty(), "nothing was measured");
+    let codes: Vec<&str> = r.warnings.iter().map(|w| w.code.as_str()).collect();
+    assert!(!codes.contains(&"conditions_not_met"), "{codes:?}");
+}
+
+/// A procedure that does apply says up front what this engine cannot give it,
+/// so the fuel trims a diesel lacks are never counted as missing.
+#[test]
+fn a_diesel_is_told_which_measurements_it_has_no_part_in() {
+    let (mut service, _) = connected(ScenarioId::Healthy);
+    assert!(service.scan_modules(USER).success);
+
+    let r = service.check_procedure("steady_rpm_2500", USER);
+    let data = r.data.as_ref().unwrap();
+    assert_eq!(data["state"], "waiting");
+    assert_eq!(data["engine"], "diesel");
+    assert_eq!(
+        data["not_on_this_engine"],
+        serde_json::json!(["short_fuel_trim_b1", "long_fuel_trim_b1"])
+    );
+}
+
 /// An unknown procedure is a not-found rather than a silent no-op.
 #[test]
 fn an_unknown_procedure_says_so() {

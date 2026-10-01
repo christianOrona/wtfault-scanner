@@ -144,6 +144,73 @@ impl Precondition {
     }
 }
 
+/// What kind of engine a vehicle has, as far as a measurement cares.
+///
+/// Read from what the engine says it burns (service 01 PID 0x51), never
+/// inferred from the make or the VIN. Some signals exist only on one kind:
+/// fuel trims are a correction around a petrol engine's stoichiometric target,
+/// and a diesel does not run to one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Engine {
+    /// Petrol, alcohol and gas engines: spark ignition, run to a
+    /// stoichiometric mixture, so they report fuel trims.
+    SparkIgnition,
+    /// Compression ignition. Runs lean of stoichiometric, so has no fuel trims.
+    Diesel,
+    /// No combustion engine at all.
+    Electric,
+}
+
+impl Engine {
+    /// The engine a PID 0x51 fuel type describes.
+    ///
+    /// `None` for "Not available", for anything unrecognised, and for the
+    /// fuel types that name both an electric motor and a combustion engine
+    /// without saying which is running: guessing there would be choosing
+    /// which measurements a vehicle gets.
+    pub fn from_fuel_type(fuel_type: &str) -> Option<Engine> {
+        match fuel_type.trim().to_ascii_lowercase().as_str() {
+            "gasoline"
+            | "methanol"
+            | "ethanol"
+            | "lpg"
+            | "cng"
+            | "propane"
+            | "bifuel running gasoline"
+            | "bifuel running methanol"
+            | "bifuel running ethanol"
+            | "bifuel running lpg"
+            | "bifuel running cng"
+            | "bifuel running propane"
+            | "hybrid gasoline"
+            | "hybrid ethanol" => Some(Engine::SparkIgnition),
+            "diesel" | "hybrid diesel" | "bifuel running diesel" => Some(Engine::Diesel),
+            "electric" | "bifuel running electricity" | "hybrid electric" => Some(Engine::Electric),
+            _ => None,
+        }
+    }
+
+    /// How a person would say it.
+    pub fn describe(&self) -> &'static str {
+        match self {
+            Engine::SparkIgnition => "a petrol (spark-ignition) engine",
+            Engine::Diesel => "a diesel",
+            Engine::Electric => "an electric vehicle",
+        }
+    }
+
+    /// Whether this kind of engine can produce `signal` at all.
+    ///
+    /// Only the cases this build knows to be structural are listed. Anything
+    /// else is assumed possible, and the vehicle gets to say otherwise.
+    pub fn has_signal(&self, signal: &str) -> bool {
+        let fuel_trim =
+            signal.starts_with("short_fuel_trim") || signal.starts_with("long_fuel_trim");
+        !(fuel_trim && *self != Engine::SparkIgnition)
+    }
+}
+
 /// A test the app can walk somebody through.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Procedure {
@@ -164,6 +231,13 @@ pub struct Procedure {
     pub hold_seconds: u64,
     /// Anything a person must know before starting.
     pub safety_notes: Vec<String>,
+    /// The engines this procedure means anything on. Empty means any.
+    ///
+    /// Checked against what the engine reports before anybody is asked to do
+    /// anything. `warm_idle` exists for fuel trims, and on a diesel it once
+    /// walked somebody to a warm engine, measured none, and reported success.
+    #[serde(default)]
+    pub engines: Vec<Engine>,
 }
 
 impl Procedure {
@@ -174,6 +248,31 @@ impl Procedure {
     /// is told what it would take rather than led into doing it alone.
     pub fn safe_for_one_person(&self) -> bool {
         self.conditions.iter().all(Precondition::safe_for_one_person)
+    }
+
+    /// Whether this means anything on `engine`.
+    pub fn applies_to(&self, engine: Engine) -> bool {
+        self.engines.is_empty() || self.engines.contains(&engine)
+    }
+
+    /// Why it does not apply to `engine`, when it does not.
+    pub fn why_not_on(&self, engine: Engine) -> Option<String> {
+        (!self.applies_to(engine)).then(|| {
+            let fits: Vec<&str> = self.engines.iter().map(Engine::describe).collect();
+            format!(
+                "This engine reports that it is {}, and this procedure only means something on {}. \
+                 Nothing was asked of you and nothing was measured. {}",
+                engine.describe(),
+                fits.join(" or "),
+                self.purpose
+            )
+        })
+    }
+
+    /// What it measures that `engine` cannot produce. Not a fault, and not
+    /// counted against the measurement being complete.
+    pub fn not_on(&self, engine: Engine) -> Vec<String> {
+        self.measure.iter().filter(|s| !engine.has_signal(s)).cloned().collect()
     }
 
     /// Why it cannot be run alone, when it cannot.
@@ -224,6 +323,9 @@ impl Procedure {
                          rpm produces exhaust faster than a closed garage clears it.",
                     ),
                 ],
+                // Any engine that turns. Its fuel trims only exist on petrol,
+                // and a diesel is measured on the rest.
+                engines: vec![Engine::SparkIgnition, Engine::Diesel],
             },
             Procedure {
                 id: String::from("warm_idle"),
@@ -249,6 +351,8 @@ impl Procedure {
                 safety_notes: vec![String::from(
                     "Handbrake on. Do this outdoors or with extraction.",
                 )],
+                // It exists for fuel trims, which only a petrol engine has.
+                engines: vec![Engine::SparkIgnition],
             },
             Procedure {
                 id: String::from("key_on_engine_off"),
@@ -268,6 +372,7 @@ impl Procedure {
                     "Ignition on, engine not started. The dash will light up and that is \
                      expected.",
                 )],
+                engines: Vec::new(),
             },
         ]
     }
@@ -292,6 +397,8 @@ pub enum ProcedureState {
     Lost,
     /// Refused before it began.
     Refused,
+    /// Means nothing on this engine, so nothing was asked or measured.
+    DoesNotApply,
 }
 
 /// One check of whether the vehicle is where it needs to be.
@@ -362,6 +469,7 @@ mod tests {
             measure: vec![],
             hold_seconds: 10,
             safety_notes: vec![],
+            engines: vec![],
         };
         assert!(!p.safe_for_one_person());
         let why = p.why_not_alone().expect("it says why");
@@ -470,6 +578,83 @@ mod tests {
         let cold = Precondition::CoolantAtMost { max: 30.0 };
         let text = cold.instruction();
         assert!(text.contains("overnight") || text.contains("several hours"), "{text}");
+    }
+
+    /// The fuel types PID 0x51 can report, sorted into engines. Read from the
+    /// strings the decoder produces, so a renamed value fails here.
+    #[test]
+    fn a_fuel_type_names_an_engine_or_admits_it_cannot() {
+        assert_eq!(Engine::from_fuel_type("Diesel"), Some(Engine::Diesel));
+        assert_eq!(Engine::from_fuel_type("Gasoline"), Some(Engine::SparkIgnition));
+        assert_eq!(Engine::from_fuel_type("Hybrid gasoline"), Some(Engine::SparkIgnition));
+        assert_eq!(Engine::from_fuel_type("Bifuel running diesel"), Some(Engine::Diesel));
+        assert_eq!(Engine::from_fuel_type("Electric"), Some(Engine::Electric));
+        assert_eq!(Engine::from_fuel_type("Not available"), None);
+        // Both at once, and nothing says which is running.
+        assert_eq!(Engine::from_fuel_type("Hybrid running electric and combustion engine"), None);
+    }
+
+    /// Every value the shipped decoder can produce for PID 0x51 is either an
+    /// engine or one of the deliberate unknowns. A value added to the profile
+    /// without a decision here fails rather than quietly running everything.
+    #[test]
+    fn every_fuel_type_the_decoder_knows_has_been_decided() {
+        let deliberately_unknown = [
+            "Not available",
+            "Bifuel running electric and combustion engine",
+            "Hybrid running electric and combustion engine",
+            "Hybrid Regenerative",
+        ];
+        let decoders = aim_decoders::DecoderSet::generic_obd().expect("generic decoders load");
+        let mut undecided = Vec::new();
+        for byte in 0..=0xFFu8 {
+            let Ok(values) = decoders.pids.decode(0x01, 0x51, &[byte], aim_types::now()) else {
+                continue;
+            };
+            for value in values {
+                if let aim_types::Value::Text(text) = &value.value {
+                    if !text.starts_with("unmapped value")
+                        && Engine::from_fuel_type(text).is_none()
+                        && !deliberately_unknown.contains(&text.as_str())
+                    {
+                        undecided.push(format!("{byte}: {text}"));
+                    }
+                }
+            }
+        }
+        assert!(undecided.is_empty(), "fuel types with no engine decided: {undecided:?}");
+    }
+
+    /// The case that started this: `warm_idle` on a diesel is not run at all.
+    #[test]
+    fn warm_idle_does_not_apply_to_a_diesel() {
+        let warm_idle = Procedure::by_id("warm_idle").unwrap();
+        assert!(warm_idle.applies_to(Engine::SparkIgnition));
+        assert!(!warm_idle.applies_to(Engine::Diesel));
+        let why = warm_idle.why_not_on(Engine::Diesel).unwrap();
+        assert!(why.contains("diesel"), "{why}");
+        assert!(why.contains("nothing was measured"), "{why}");
+    }
+
+    /// A diesel can still hold 2500 rpm; it is measured on what it has, and
+    /// the fuel trims it cannot produce are named rather than counted missing.
+    #[test]
+    fn a_diesel_holding_2500_is_not_asked_for_fuel_trims() {
+        let steady = Procedure::by_id("steady_rpm_2500").unwrap();
+        assert!(steady.applies_to(Engine::Diesel));
+        assert_eq!(steady.not_on(Engine::Diesel), ["short_fuel_trim_b1", "long_fuel_trim_b1"]);
+        assert!(steady.not_on(Engine::SparkIgnition).is_empty());
+        assert!(!steady.applies_to(Engine::Electric), "nothing to hold at 2500 rpm");
+    }
+
+    /// A procedure with no declaration applies everywhere.
+    #[test]
+    fn key_on_engine_off_applies_to_every_engine() {
+        let p = Procedure::by_id("key_on_engine_off").unwrap();
+        for engine in [Engine::SparkIgnition, Engine::Diesel, Engine::Electric] {
+            assert!(p.applies_to(engine));
+            assert!(p.why_not_on(engine).is_none());
+        }
     }
 }
 

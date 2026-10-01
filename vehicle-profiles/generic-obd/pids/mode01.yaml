@@ -2,7 +2,7 @@
 #
 # Byte names follow the SAE convention: A is the first payload byte after the
 # echoed PID, B the second, and so on.
-version: 3
+version: 4
 source: "SAE J1979 generic OBD-II service 01"
 service: 1
 pids:
@@ -482,6 +482,22 @@ pids:
       6: "CNG"
       7: "Propane"
       8: "Electric"
+      # 9-23 as SAE J1979 lists them; none has been read from a vehicle here.
+      9: "Bifuel running Gasoline"
+      10: "Bifuel running Methanol"
+      11: "Bifuel running Ethanol"
+      12: "Bifuel running LPG"
+      13: "Bifuel running CNG"
+      14: "Bifuel running Propane"
+      15: "Bifuel running Electricity"
+      16: "Bifuel running electric and combustion engine"
+      17: "Hybrid gasoline"
+      18: "Hybrid Ethanol"
+      19: "Hybrid Diesel"
+      20: "Hybrid Electric"
+      21: "Hybrid running electric and combustion engine"
+      22: "Hybrid Regenerative"
+      23: "Bifuel running diesel"
 
   - pid: 0x5A
     signal_id: relative_accelerator_pedal_position
