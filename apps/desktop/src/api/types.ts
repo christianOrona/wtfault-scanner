@@ -878,6 +878,27 @@ export interface ComparisonResponse {
  * `error` is separate from a failed request on purpose: a check that reached
  * GitHub and was refused (rate limit, no network) is a different thing from a
  * check that never ran, and neither should look like "you are up to date". */
+/** One identifier range a capability probe asked, or skipped and why. */
+export interface ProbedRange {
+  from: string;
+  to: string;
+  purpose: string;
+  found: number;
+  stopped_early_at?: string | null;
+  skipped_because?: string;
+}
+
+/** What one module answered to a read-only capability probe. */
+export interface ModuleProbeData {
+  module: string;
+  address: string;
+  sessions: { session: string; sub_function: string; granted: boolean; detail?: string; refused_because?: string }[];
+  security: { implements_security_access: boolean; note?: string; detail?: string; refused_because?: string } | null;
+  identifiers: { did: string; range: string; length: number; bytes: string; text: string | null }[];
+  identifier_count: number;
+  ranges_probed: ProbedRange[];
+}
+
 /** What a background download of the installer is doing. */
 export type DownloadStage = "idle" | "downloading" | "ready" | "failed";
 

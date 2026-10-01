@@ -18,7 +18,7 @@ import type {
   SessionEvent, SessionSummary, SignalsData, ToolResult, ApiError, Dtc, MonitorTestsData,
   VpicHeld, VpicLookup, ObdbStatus, ObdbFetch,
   AgentStatus, InspectResponse, ChatResponse as AgentChatResponse,
-  ProvidersResponse, ProviderView, ProviderKindId, ProbeResult, Speed, ExplanationsResponse, FeaturesData, ChangePlan, ApplyResult, WriteGateResult, ProfilesResponse, ClearResult, ReadinessData, ScanPurpose, Tone, FullScanData, ComparisonResponse, UpdateStatus, DownloadState, VehicleKnowledge, SupportReport, AsBuiltStatus, AsBuiltImport,
+  ProvidersResponse, ProviderView, ProviderKindId, ProbeResult, Speed, ExplanationsResponse, FeaturesData, ChangePlan, ApplyResult, WriteGateResult, ProfilesResponse, ClearResult, ReadinessData, ScanPurpose, Tone, FullScanData, ComparisonResponse, UpdateStatus, DownloadState, ModuleProbeData, VehicleKnowledge, SupportReport, AsBuiltStatus, AsBuiltImport,
 } from "./types";
 
 /**
@@ -201,6 +201,9 @@ export const api = {
   monitorTests: (key: string) =>
     request<ToolResult<MonitorTestsData>>(`/modules/${enc(key)}/monitor-tests`),
   dtcs: (key: string) => request<ToolResult<DtcData>>(`/modules/${enc(key)}/dtcs`),
+  /** Read-only: which sessions, security and identifiers a module answers. */
+  probeModule: (key: string) =>
+    request<ToolResult<ModuleProbeData>>(`/modules/${enc(key)}/capabilities`),
   readiness: () => request<ToolResult<ReadinessData>>("/readiness"),
   scanAllModules: () => post<ToolResult<FullScanData>>("/modules/scan-all"),
   /** The guided tests this build ships. Touches no vehicle. */

@@ -7,6 +7,18 @@ with the caveat that everything below 1.0 is allowed to move.
 
 ### Added
 
+- **See what a module answers.** *Inspect* has a *Probe* button for the
+  selected module: which diagnostic sessions it grants, whether it offers
+  security access, and which standard identifiers it holds, range by range.
+  It only reads. A range it skips says why, for example Ford's configuration
+  range on a car that is not a Ford.
+- **The quick checks work without an AI model.** Readiness, self-test results
+  and the new probe are reads the app does itself; *Inspect* used to hide them
+  until a model was set up.
+- **`docs/AT-THE-CAR.md`**: what is still open that needs a vehicle, as steps.
+  `scripts/dev-core.ps1 -Db <file>` runs the core on a database of its own,
+  for measuring a cold start without touching the real one.
+
 - **A second simulated vehicle.** `aim-api --simulator --vehicle odyssey` is
   a petrol Honda on 29-bit CAN, so a change can be seen against something
   other than the Ford diesel it was built on.

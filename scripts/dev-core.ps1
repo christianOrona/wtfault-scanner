@@ -18,16 +18,23 @@
 #
 #   scripts\dev-core.ps1                 # simulator, port 8788
 #   scripts\dev-core.ps1 -Serial COM4    # a real adapter
+#   scripts\dev-core.ps1 -Serial COM4 -Db $env:TEMP\cold.sqlite
+#                                        # a brand-new install (#54): an empty
+#                                        # database of its own, created if absent
 #
 # The desktop app must not be running: it holds both the serial port and the
 # database. Stop it first.
 param(
     [string]$Serial,
-    [int]$Port = 8788
+    [int]$Port = 8788,
+    # Another database instead of the app's own. The real one is never
+    # touched when this is given, which is how a cold start is measured
+    # without deleting anything measured on the vehicle.
+    [string]$Db
 )
 
 $repo = Split-Path -Parent $PSScriptRoot
-$db = Join-Path $env:APPDATA "ai-mechanic\data\sessions.sqlite"
+$db = if ($Db) { $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Db) } else { Join-Path $env:APPDATA "ai-mechanic\data\sessions.sqlite" }
 $profiles = Join-Path $repo "vehicle-profiles"
 # The same providers.json the desktop app uses. Without this the core looks
 # somewhere else, finds no model configured, and the whole assistant appears

@@ -19,6 +19,7 @@ import { ErrorBanner, Spinner } from "./primitives";
 import { useAgentProgress, type ProgressLine } from "../hooks/useAgentProgress";
 import { reportToText } from "./reportText";
 import { saveFile, scanFilename } from "./exportFile";
+import { ModuleProbeCard } from "./ModuleProbeCard";
 import { MonitorTestsCard } from "./MonitorTestsCard";
 import { ReadinessCard } from "./ReadinessCard";
 import { PaneIntro } from "../explain";
@@ -165,6 +166,9 @@ export function InspectPane({
           </p>
           <button className="primary" onClick={onOpenSettings}>Set one up</button>
         </div>
+        {/* The quick checks are the app's own reads and need no model, so a
+            missing model hides only the inspection, not them. */}
+        {connected && <QuickChecks moduleKey={moduleKey} onEvidence={onEvidence} />}
       </div>
     );
   }
@@ -215,10 +219,7 @@ export function InspectPane({
           that no warning light will mention?". Both are a handful of reads and
           neither needs the model. */}
       {connected && !running && !result && (
-        <>
-          <ReadinessCard moduleKey={moduleKey} onEvidence={onEvidence} />
-          <MonitorTestsCard moduleKey={moduleKey} onEvidence={onEvidence} />
-        </>
+        <QuickChecks moduleKey={moduleKey} onEvidence={onEvidence} />
       )}
 
       {running && <LiveProgress elapsed={elapsed} lines={progress} runId={runId} startedAt={runStartedAt} />}
@@ -272,6 +273,23 @@ export function InspectPane({
  * there was no way to do that at all. Plain text because it has to survive being
  * pasted into a text message or a garage's booking form.
  */
+/** Reads worth having before, or without, a full inspection. */
+function QuickChecks({
+  moduleKey,
+  onEvidence,
+}: {
+  moduleKey: string | null;
+  onEvidence: (ref: number) => void;
+}) {
+  return (
+    <>
+      <ReadinessCard moduleKey={moduleKey} onEvidence={onEvidence} />
+      <MonitorTestsCard moduleKey={moduleKey} onEvidence={onEvidence} />
+      <ModuleProbeCard moduleKey={moduleKey} />
+    </>
+  );
+}
+
 function ShareReport({
   result,
   vin,
