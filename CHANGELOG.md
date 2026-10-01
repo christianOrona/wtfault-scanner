@@ -25,6 +25,10 @@ with the caveat that everything below 1.0 is allowed to move.
 
 ### Fixed
 
+- A module whose fault list stops partway no longer loses all of it. The
+  codes that arrived are shown, with a warning that the list was cut off and
+  how much of it never came, instead of the module being reported as not
+  answering.
 - A guided procedure that means nothing on the engine in front of it is no
   longer started. On a diesel, *Warm idle* (which exists for fuel trims) says
   it does not apply instead of walking you to a warm engine and measuring

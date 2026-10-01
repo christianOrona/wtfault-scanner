@@ -82,6 +82,20 @@ pub struct EcuMessage {
     /// The adapter lines this message was assembled from, kept verbatim for
     /// the flight recorder.
     pub raw_lines: Vec<String>,
+    /// Set when the module announced a longer message than arrived, in which
+    /// case `payload` is what came before it stopped. Only
+    /// [`DiagnosticAdapter::request_pdu_keeping_partial`] ever returns one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cut_off: Option<CutOff>,
+}
+
+/// A segmented message that stopped before its end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CutOff {
+    /// The length the module's first frame announced, in bytes.
+    pub announced: usize,
+    /// How many of them arrived.
+    pub received: usize,
 }
 
 impl EcuMessage {
@@ -195,6 +209,23 @@ pub trait DiagnosticAdapter: Send {
         timeout: std::time::Duration,
     ) -> AimResult<Vec<EcuMessage>>;
 
+    /// [`DiagnosticAdapter::request_pdu`], except that a segmented reply which
+    /// stops partway is returned as far as it got, marked with
+    /// [`EcuMessage::cut_off`], instead of being discarded.
+    ///
+    /// Only for a reader whose records are independent and which says when
+    /// its answer is incomplete: a fault list cut off after twelve codes still
+    /// holds twelve real codes. Never for anything read back to verify a
+    /// write. The default keeps the strict behaviour.
+    fn request_pdu_keeping_partial(
+        &mut self,
+        pdu: &[u8],
+        target: &RequestTarget,
+        timeout: std::time::Duration,
+    ) -> AimResult<Vec<EcuMessage>> {
+        self.request_pdu(pdu, target, timeout)
+    }
+
     /// Send a raw adapter command. Escape hatch for diagnostics and probing;
     /// the safety gate is what decides whether a caller may reach it.
     fn raw_command(&mut self, command: &str) -> AimResult<AdapterResponse>;
@@ -282,6 +313,7 @@ mod tests {
             address: "7E8".into(),
             payload: vec![0x41, 0x0C, 0x1A, 0xF8],
             raw_lines: vec!["7E8 04 41 0C 1A F8".into()],
+            cut_off: None,
         };
         assert_eq!(m.payload_hex(), "410c1af8");
     }

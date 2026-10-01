@@ -3,7 +3,7 @@
 Where the project actually is, updated when something significant changes.
 Not a changelog — see `CHANGELOG.md` for releases — and not a diary.
 
-Last reviewed: **2026-09-28**
+Last reviewed: **2026-10-01**
 
 ---
 
@@ -156,10 +156,15 @@ are in the session scratchpad of 2026-09-28.
 ### A long UDS fault reply was cut off by a timeout
 
 One `59 02` reply on the 2012 F-250 announced 407 bytes and ended in `timeout`
-partway through. The decoder drops the partial tail without saying so, so codes
-past the cut are silently missing.
+partway through. Every code in it was lost, and the module was reported as not
+answering.
 
-**Open.**
+**Fixed, without the vehicle.** Both fault reads keep the whole records that
+arrived and say the list stopped: how many bytes were announced, how many came,
+and that it is not the module's whole fault memory. Only these reads accept a
+partial reply; anything read back to verify a write still refuses one. Tested by
+replaying the simulator's session with the last frame of a three-record list
+removed, not yet against the 2012 truck.
 
 ---
 
