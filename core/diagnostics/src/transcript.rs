@@ -100,6 +100,57 @@ pub fn redact_vin(transcript: &str, vin: &str, replacement: &str) -> String {
     lines.join("\n")
 }
 
+/// Where a real VIN still shows in a transcript meant to have lost it, or
+/// `None` when it shows nowhere this can look.
+///
+/// Checked after [`redact_vin`] and before a transcript leaves the machine it
+/// was recorded on. Deliberately cruder than the redaction: it looks for the
+/// VIN as text, and for its serial number (the part the anonymous VIN zeroes)
+/// in every reply's bytes, both run together and per module, whatever the
+/// framing. A reply layout the redaction does not understand is then a refusal
+/// to export rather than a VIN in a public fixture. It can refuse a clean
+/// transcript whose bytes happen to spell the serial, which is the cheap way
+/// to be wrong.
+pub fn vin_residue(transcript: &str, vin: &str) -> Option<String> {
+    let vin = vin.trim().to_ascii_uppercase();
+    if vin.len() != 17 {
+        return None;
+    }
+    if transcript.to_ascii_uppercase().contains(&vin) {
+        return Some(format!("the VIN {vin} appears as text"));
+    }
+    let serial = &vin.as_bytes()[11..];
+
+    let mut everything = Vec::new();
+    let mut by_address: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+    for line in transcript.lines() {
+        let Some(reply) = line.strip_prefix("< ") else { continue };
+        let mut tokens = reply.split_whitespace().peekable();
+        let address = tokens
+            .peek()
+            .filter(|t| matches!(t.len(), 3 | 8) && t.chars().all(|c| c.is_ascii_hexdigit()))
+            .map(|t| t.to_ascii_uppercase());
+        if address.is_some() {
+            tokens.next();
+        }
+        let bytes: Vec<u8> = tokens
+            .filter(|t| t.len() == 2)
+            .filter_map(|t| u8::from_str_radix(t, 16).ok())
+            .collect();
+        everything.extend_from_slice(&bytes);
+        by_address.entry(address.unwrap_or_default()).or_default().extend_from_slice(&bytes);
+    }
+
+    let spells_serial = |bytes: &[u8]| bytes.windows(serial.len()).any(|w| w == serial);
+    if spells_serial(&everything) {
+        return Some(format!("the serial of {vin} appears in the reply bytes"));
+    }
+    by_address
+        .iter()
+        .find(|(_, bytes)| spells_serial(bytes))
+        .map(|(address, _)| format!("the serial of {vin} appears in the replies from {address}"))
+}
+
 /// One reply line from an adapter with headers on: address, ISO-TP PCI, data.
 struct Frame {
     address: String,
@@ -238,5 +289,25 @@ mod tests {
         let result1 = anonymous_vin(vin).unwrap();
         let result2 = anonymous_vin(&result1).unwrap();
         assert_eq!(result1, result2);
+    }
+
+    #[test]
+    fn a_redacted_transcript_has_no_residue() {
+        let text = "> 0902\n< 7E8 10 14 49 02 01 31 46 54\n< 7E8 21 37 57 32 42 54 36 4B\n< 7E8 22 45 43 30 30 30 30 31\n";
+        assert!(vin_residue(text, VIN).is_some());
+        assert_eq!(vin_residue(&redact_vin(text, VIN, NEW), VIN), None);
+    }
+
+    #[test]
+    fn a_vin_in_a_layout_the_redaction_does_not_parse_is_still_found() {
+        // Headers off, CAN formatting on: the `0:` framing redact_vin leaves alone.
+        let text = "> 0902\n< 014\n< 0: 49 02 01 31 46 54\n< 1: 37 57 32 42 54 36 4B\n< 2: 45 43 30 30 30 30 31\n";
+        assert_eq!(redact_vin(text, VIN, NEW), text);
+        assert!(vin_residue(text, VIN).is_some());
+    }
+
+    #[test]
+    fn a_vin_as_text_is_residue() {
+        assert!(vin_residue("# notes on 1ft7w2bt6kec00001\n", VIN).is_some());
     }
 }

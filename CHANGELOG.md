@@ -25,6 +25,9 @@ with the caveat that everything below 1.0 is allowed to move.
 
 ### Fixed
 
+- An anonymised session transcript is refused, rather than exported, if any
+  trace of the real VIN is left in it, for instance in a reply layout the
+  anonymiser does not recognise.
 - The Android app no longer says the last session ended unexpectedly every
   time it starts: Android closing a backgrounded app is not a crash.
 - The connect dialog says why a port cannot be used — Bluetooth off, permission
