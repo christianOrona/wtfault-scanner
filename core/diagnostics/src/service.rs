@@ -7124,7 +7124,28 @@ impl DiagnosticService {
                 if !VehicleBus::of_module_key(&module.module_key).answers_obd2() {
                     return self.clear_uds_dtcs(&module);
                 }
-                Self::request_target(&module).unwrap_or(RequestTarget::Functional)
+                // One module was confirmed, so one module is asked. Where it
+                // cannot be addressed on its own (the K-line, or an address
+                // whose request counterpart is unknown) the only way to send
+                // the clear is to every module, and that is not what anyone
+                // confirmed. This used to fall back to the broadcast silently.
+                match Self::request_target(&module) {
+                    Ok(target @ RequestTarget::Physical(_)) => target,
+                    _ => {
+                        return Err(AimError::new(
+                            ErrorCode::PreconditionFailed,
+                            format!(
+                                "{k} cannot be asked to clear on its own: on this vehicle a clear \
+                                 sent to it would reach every module. Nothing was cleared. \
+                                 Clearing every module is a separate choice."
+                            ),
+                        )
+                        .with_details(serde_json::json!({
+                            "module": k,
+                            "would_reach_every_module": true,
+                        })));
+                    }
+                }
             }
             None => RequestTarget::Functional,
         };

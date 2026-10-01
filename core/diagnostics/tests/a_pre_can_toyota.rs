@@ -214,3 +214,24 @@ fn a_second_bus_beside_the_k_line_is_still_swept() {
     assert!(full.warnings.iter().any(|w| w.code == "full_scan_reaches_emissions_modules_only"));
     assert!(full.warnings.iter().any(|w| w.code == "second_bus_silent"), "{:?}", full.warnings);
 }
+
+/// On the K-line a clear cannot be sent to one module: it reaches every
+/// module. Asked for one, it is refused and nothing changes; asked for every
+/// module, it is sent.
+#[test]
+fn a_clear_for_one_module_is_not_silently_sent_to_all() {
+    let mut service = toyota(ScenarioId::Parked);
+    assert!(service.scan_modules(USER).success);
+    // Parked is key on, engine off, stopped: the state a clear needs.
+    let _ = service.read_live_data("ECU_10", &["engine_rpm".into(), "vehicle_speed".into()], USER);
+
+    let one = service.clear_dtcs(Some("ECU_10"), USER, Some(USER));
+    assert!(!one.success);
+    let error = one.error.unwrap();
+    assert_eq!(error.code, ErrorCode::PreconditionFailed, "{}", error.message);
+    assert_eq!(error.details.unwrap()["would_reach_every_module"], true);
+
+    let all = service.clear_dtcs(None, USER, Some(USER));
+    assert!(all.success, "{:?}", all.error);
+    assert_eq!(all.data.unwrap()["cleared_by"], serde_json::json!(["10", "18"]));
+}

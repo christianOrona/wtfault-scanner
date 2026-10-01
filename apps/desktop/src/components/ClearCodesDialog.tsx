@@ -41,17 +41,24 @@ export function ClearCodesDialog({
   const [typed, setTyped] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<{ code: string; message: string } | null>(null);
+  // Set when this module cannot be cleared on its own: the reason, and with
+  // it a separate offer to clear every module, which nobody has confirmed yet.
+  const [onlyAll, setOnlyAll] = useState<string | null>(null);
 
   const armed = typed.trim().toUpperCase() === PHRASE;
 
-  async function clear() {
+  async function clear(scope: string | undefined) {
     if (!armed) return;
     setBusy(true);
     setError(null);
     try {
       // The confirmation string is recorded verbatim in the audit trail, so it
       // says who authorised it rather than merely that something did.
-      const r = await api.clearDtcs(`user typed ${PHRASE} in the desktop app`, moduleKey ?? undefined);
+      const r = await api.clearDtcs(`user typed ${PHRASE} in the desktop app`, scope);
+      if (!r.success && r.error?.details?.would_reach_every_module) {
+        setOnlyAll(r.error.message);
+        return;
+      }
       onCleared(r);
       onClose();
     } catch (e) {
@@ -132,7 +139,7 @@ export function ClearCodesDialog({
             autoComplete="off"
             placeholder={PHRASE}
             onChange={(e) => setTyped(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter" && armed) void clear(); }}
+            onKeyDown={(e) => { if (e.key === "Enter" && armed && !onlyAll) void clear(moduleKey ?? undefined); }}
           />
           <span className="faint" style={{ fontSize: 12 }}>
             The engine must be off and the vehicle stationary. The app checks before sending.
@@ -141,11 +148,31 @@ export function ClearCodesDialog({
 
         <ErrorBanner error={error} />
 
+        {onlyAll && (
+          <div className="banner caution">
+            <span className="b-code">only all at once</span>
+            <span>
+              {onlyAll} That would erase every module's codes and self-test results, not only
+              this one's.
+            </span>
+          </div>
+        )}
+
         <div className="row" style={{ justifyContent: "flex-end", marginTop: 4 }}>
           <button onClick={onClose} disabled={busy}>Keep the codes</button>
-          <button className="danger" onClick={() => void clear()} disabled={!armed || busy}>
-            {busy ? <Spinner label="Clearing" /> : `Clear ${moduleKey ? "this module" : "everything"}`}
-          </button>
+          {onlyAll ? (
+            <button className="danger" onClick={() => void clear(undefined)} disabled={!armed || busy}>
+              {busy ? <Spinner label="Clearing" /> : "Clear every module"}
+            </button>
+          ) : (
+            <button
+              className="danger"
+              onClick={() => void clear(moduleKey ?? undefined)}
+              disabled={!armed || busy}
+            >
+              {busy ? <Spinner label="Clearing" /> : `Clear ${moduleKey ? "this module" : "everything"}`}
+            </button>
+          )}
         </div>
       </div>
     </div>

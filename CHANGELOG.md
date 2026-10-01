@@ -67,6 +67,12 @@ with the caveat that everything below 1.0 is allowed to move.
 
 ### Fixed
 
+- **Clearing one module's codes never clears them all by surprise.** Where a
+  module cannot be asked on its own (on older vehicles, or when its address
+  is not known), clearing it used to send the clear to every module. It is now
+  refused, nothing is erased, and the dialog offers *Clear every module* as a
+  separate choice.
+
 - **Self-test results are not misread on older vehicles.** Before CAN,
   vehicles report self-test results in a different layout. Read as the CAN
   layout they would have shown test names and pass/fail verdicts that meant
