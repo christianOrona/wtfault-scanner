@@ -25,6 +25,11 @@ with the caveat that everything below 1.0 is allowed to move.
 
 ### Fixed
 
+- On a vehicle that is not a Ford, Lincoln or Mercury, the capability probe
+  no longer sweeps Ford's configuration range (`DE00`-`DEFF`), 256 requests
+  that could only come back empty. It says it skipped them and why. On a
+  General Motors vehicle, a silent second bus now says that GM's second
+  network is usually on pin 1, which this build does not try.
 - A module whose fault list stops partway no longer loses all of it. The
   codes that arrived are shown, with a warning that the list was cut off and
   how much of it never came, instead of the module being reported as not

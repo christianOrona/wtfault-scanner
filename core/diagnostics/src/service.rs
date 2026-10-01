@@ -164,14 +164,23 @@ const DID_SWEEP_RANGES: [(u16, u16, &str); 4] = [
     // ISO 14229 identification. Who this module is.
     (0xF180, 0xF1FF, "identification"),
     // Where Ford keeps configuration blocks. The one mapping this project
-    // ships as a worked example is at 0xDE01.
-    (0xDE00, 0xDEFF, "configuration (manufacturer)"),
+    // ships as a worked example is at 0xDE01. Not swept on a vehicle known to
+    // be another make: see `FORD_CONFIGURATION`.
+    (0xDE00, 0xDEFF, "configuration (Ford)"),
     // System supplier specific. Commonly holds calibration and option bytes.
     (0xFD00, 0xFDFF, "system supplier"),
     // The low end of the manufacturer range, sampled rather than swept: a full
     // pass here is 40,000 identifiers and hours of somebody's evening.
     (0x0100, 0x01FF, "manufacturer (sampled)"),
 ];
+
+/// The range in [`DID_SWEEP_RANGES`] that is Ford's rather than a standard's.
+///
+/// On another make it is 256 requests for identifiers that mean something
+/// else or nothing, and an empty result that reads as "no configuration".
+/// Skipped there and said so; swept when the make is not known, because then
+/// nothing says it is not a Ford.
+const FORD_CONFIGURATION: u16 = 0xDE00;
 
 /// The second way of asking a module whether it is there.
 ///
@@ -2564,6 +2573,24 @@ fn make_has_as_built(make: &str) -> bool {
     ["Ford", "Lincoln", "Mercury"]
         .iter()
         .any(|marque| aim_decoders::catalog::makes_match(marque, make))
+}
+
+/// What a silent second bus means on a make whose second network is not
+/// where the search looks, when that is known.
+///
+/// The search tries CAN on pins 3 and 11, which is where Ford, Mazda and Volvo
+/// put it. Many General Motors vehicles carry theirs on single-wire CAN at pin
+/// 1 instead, which this build does not try, so silence there is the expected
+/// answer rather than a finding about the vehicle.
+fn second_bus_note_for_make(make: &str) -> Option<&'static str> {
+    ["General Motors", "Chevrolet", "GMC", "Buick", "Cadillac"]
+        .iter()
+        .any(|marque| aim_decoders::catalog::makes_match(marque, make))
+        .then_some(
+            " Many General Motors vehicles carry their second network on single-wire CAN at \
+             pin 1, which this build does not try, so on this vehicle silence here is expected \
+             and says nothing about what is on it.",
+        )
 }
 
 /// Refuse a known non-Ford vehicle before import, while leaving an
@@ -5019,12 +5046,16 @@ impl DiagnosticService {
                 Err(e) => {
                     // Silence on a bus we went looking on is a finding, not a failure.
                     if nth > 0 && e.code == ErrorCode::NoData {
+                        let make = self.identity().settled("make").map(str::to_string);
+                        let for_this_make =
+                            make.as_deref().and_then(second_bus_note_for_make).unwrap_or_default();
                         all_warnings.push(Warning::info(
                             "second_bus_silent",
                             format!(
                                 "Nothing answered on the {} bus. That can mean the vehicle has no \
                                  modules there, or that this adapter's connector is not wired to \
-                                 the pins that bus uses — the two are indistinguishable from here.",
+                                 the pins that bus uses — the two are indistinguishable from \
+                                 here.{for_this_make}",
                                 bus.label()
                             ),
                         ));
@@ -5200,9 +5231,29 @@ impl DiagnosticService {
         });
 
         // 3. Every range worth asking about.
+        let make = self.identity().settled("make").map(str::to_string);
         let mut identifiers = Vec::new();
         let mut ranges_probed = Vec::new();
         for (start, end, purpose) in DID_SWEEP_RANGES {
+            if let Some(make) = make.as_deref().filter(|m| !make_has_as_built(m)) {
+                if start == FORD_CONFIGURATION {
+                    let why = format!(
+                        "{start:04X}-{end:04X} is where Ford keeps configuration, and this \
+                         vehicle is a {make}, so it was not asked. That says nothing about \
+                         whether this module has configuration; only that it is not kept where \
+                         Ford keeps it."
+                    );
+                    ranges_probed.push(serde_json::json!({
+                        "from": format!("{start:04X}"),
+                        "to": format!("{end:04X}"),
+                        "purpose": purpose,
+                        "found": 0,
+                        "skipped_because": why,
+                    }));
+                    warnings.push(Warning::info("ford_range_not_swept", why));
+                    continue;
+                }
+            }
             let mut strikes = 0usize;
             let mut found_here = 0usize;
             let mut stopped_at = None;
@@ -6736,5 +6787,14 @@ mod tests {
             .expect("a known non-Ford make must be refused");
         assert!(reason.contains("Mazda"));
         assert!(reason.contains("0xDE00"));
+    }
+
+    #[test]
+    fn a_silent_second_bus_on_a_gm_says_where_its_network_actually_is() {
+        let note = second_bus_note_for_make("General Motors (US)").expect("a GM is recognised");
+        assert!(note.contains("pin 1"), "{note}");
+        assert!(second_bus_note_for_make("CHEVROLET").is_some());
+        assert_eq!(second_bus_note_for_make("Ford Motor Company (US, truck)"), None);
+        assert_eq!(second_bus_note_for_make("Honda (Japan)"), None);
     }
 }
