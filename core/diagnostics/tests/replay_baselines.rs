@@ -1,7 +1,9 @@
 //! Regression tests for issue #59: recorded vehicle sessions replay through the current core in CI.
 //!
-//! Fixtures are regenerated with `cargo test -p aim-diagnostics --test replay_baselines -- --ignored`.
-//! A baseline is only ever raised deliberately.
+//! The simulator's fixtures are regenerated with
+//! `cargo test -p aim-diagnostics --test replay_baselines -- --ignored record_the_simulator_sessions`.
+//! A real session is exported by `cargo run -p aim-diagnostics --example export_replay`, and its
+//! baseline recorded by `record_missing_baselines`. A baseline is only ever raised deliberately.
 
 use aim_adapter::{DiagnosticAdapter, Elm327Adapter, Elm327Config};
 use aim_decoders::DecoderSet;
@@ -11,6 +13,7 @@ use aim_session::SessionStore;
 use aim_simulator::{ReplayMode, ReplayTransport, ScenarioId, SimulatedTransport, Transcript};
 use aim_transport::Transport;
 use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 const USER: &str = "user:test";
@@ -61,11 +64,35 @@ fn discover(service: &DiagnosticService) -> Discovery {
 }
 
 fn replay(text: &str) -> Discovery {
+    replay_with_vin(text).0
+}
+
+/// What a replay discovers, and the VIN it settled on.
+fn replay_with_vin(text: &str) -> (Discovery, Option<String>) {
     let transcript = Transcript::parse(text).unwrap();
     let transport = ReplayTransport::new(transcript, ReplayMode::Lookup, "replay");
     let mut service = service_on(Box::new(transport));
     first_visit(&mut service);
-    discover(&service)
+    let vin = service.identity().settled("vin").map(str::to_string);
+    (discover(&service), vin)
+}
+
+fn transcripts() -> Vec<PathBuf> {
+    let mut transcripts = fs::read_dir(REPLAYS)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.extension().and_then(|extension| extension.to_str()) == Some("transcript")
+        })
+        .collect::<Vec<_>>();
+    transcripts.sort();
+    transcripts
+}
+
+/// Recorded from a real vehicle rather than the simulator, and so only
+/// committed with its VIN anonymised.
+fn is_real(transcript: &Path) -> bool {
+    !transcript.file_name().and_then(|name| name.to_str()).unwrap_or("").starts_with("simulator-")
 }
 
 #[test]
@@ -97,16 +124,25 @@ fn record_the_simulator_sessions() {
     }
 }
 
+/// Write a baseline for every transcript that has none, from what the current
+/// core discovers replaying it. Existing baselines are left alone.
+#[test]
+#[ignore]
+fn record_missing_baselines() {
+    for transcript in transcripts() {
+        let baseline_path = transcript.with_extension("baseline.json");
+        if baseline_path.is_file() {
+            continue;
+        }
+        let discovery = replay(&fs::read_to_string(&transcript).unwrap());
+        fs::write(&baseline_path, serde_json::to_string_pretty(&discovery).unwrap()).unwrap();
+        println!("{}: {discovery:?}", baseline_path.display());
+    }
+}
+
 #[test]
 fn no_recorded_vehicle_discovers_less_than_its_baseline() {
-    let mut transcripts = fs::read_dir(REPLAYS)
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .filter(|path| {
-            path.extension().and_then(|extension| extension.to_str()) == Some("transcript")
-        })
-        .collect::<Vec<_>>();
-    transcripts.sort();
+    let transcripts = transcripts();
 
     assert!(!transcripts.is_empty(), "no replay transcripts found in {REPLAYS}");
 
@@ -125,7 +161,18 @@ fn no_recorded_vehicle_discovers_less_than_its_baseline() {
         let transcript_text = fs::read_to_string(&transcript).unwrap();
         let baseline: Discovery =
             serde_json::from_slice(&fs::read(&baseline_path).unwrap()).unwrap();
-        let actual = replay(&transcript_text);
+        let (actual, vin) = replay_with_vin(&transcript_text);
+
+        // `export_replay` refuses to write a real VIN; this catches a
+        // transcript that reached the repository some other way.
+        if is_real(&transcript) {
+            if let Some(vin) = vin.filter(|vin| !vin.ends_with("000000")) {
+                failures.push(format!(
+                    "{}: settles on VIN {vin}, which is not anonymised; export it with export_replay",
+                    transcript.display()
+                ));
+            }
+        }
 
         if actual.identity_settled < baseline.identity_settled {
             failures.push(format!(

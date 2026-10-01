@@ -1177,6 +1177,13 @@ async fn session_transcript(
                         &vin,
                         &aim_diagnostics::transcript::anonymous_vin(&vin)?,
                     );
+                    // A reply layout the redaction does not parse would
+                    // otherwise hand over the real VIN labelled as redacted.
+                    if let Some(residue) = aim_diagnostics::transcript::vin_residue(&text, &vin) {
+                        return Err(ApiError::internal(format!(
+                            "the transcript was not exported: {residue} after anonymising"
+                        )));
+                    }
                 }
             }
         }
