@@ -35,6 +35,10 @@ pub const SIMULATED_VIN: &str = "1FT7W2BT6KEC00001";
 /// a valid check digit and a zeroed serial.
 pub const SIMULATED_HONDA_VIN: &str = "5FNRL6H72PB000001";
 
+/// The VIN the simulated pre-CAN Toyota reports: a 2004, with a correct check
+/// digit and a made-up serial.
+pub const SIMULATED_TOYOTA_VIN: &str = "JTDBR32E240000001";
+
 /// How the simulated vehicle tells the time.
 #[derive(Debug, Clone)]
 pub enum TimeSource {
@@ -222,6 +226,12 @@ pub struct VirtualVehicle {
     /// uses. On such a vehicle each module's `response_id` is its one-byte
     /// address: it is asked at `18DA{addr}F1` and answers from `18DAF1{addr}`.
     pub extended: bool,
+    /// ISO 9141-2 on the K-line (protocol 3), as most pre-2008 Asian and
+    /// European vehicles use. There is no CAN and no UDS: modules answer only
+    /// the legislated services, only to the functional header `686AF1`, from
+    /// a one-byte source address (`10` for the engine), in frames the adapter
+    /// prints with a header and a checksum.
+    pub k_line: bool,
     /// What the engine burns, as PID 0x51 encodes it.
     pub fuel_type: u8,
 }
@@ -424,6 +434,7 @@ impl VirtualVehicle {
             // engine-off state asks for it.
             engine_stopped: false,
             extended: false,
+            k_line: false,
             fuel_type: 0x04,
         }
     }
@@ -484,12 +495,74 @@ impl VirtualVehicle {
             dtcs_cleared: false,
             engine_stopped: false,
             extended: true,
+            k_line: false,
+            fuel_type: 0x01,
+        }
+    }
+
+    /// A 2004 Toyota on ISO 9141-2: no CAN, no UDS, no PID 0x51.
+    ///
+    /// Shaped after what a vehicle of that age offers: an engine module at
+    /// source address `10` answering the legislated services, and an automatic
+    /// transmission module at `18` that reports little beyond its codes.
+    pub fn toyota_2004(scenario: ScenarioId) -> VirtualVehicle {
+        let engine = VirtualEcu {
+            response_id: 0x10,
+            label: String::from("Engine control module"),
+            ecu_name: None,
+            calibration_ids: vec![pad_ascii("34715100", 16)],
+            cvns: Vec::new(),
+            supported_service01: vec![
+                0x01, 0x03, 0x04, 0x05, 0x06, 0x07, 0x0C, 0x0D, 0x0E, 0x0F, 0x10, 0x11, 0x13, 0x1C,
+                0x20, 0x21,
+            ],
+            supported_service09: vec![0x02, 0x04],
+            reports_dtcs: true,
+            runs_monitors: false,
+            reports_vin: true,
+            uds_faults: None,
+            config_records: BTreeMap::new(),
+            config_write: ConfigWriteBehaviour::Refuse,
+            no_frame_as_zero_code: true,
+        };
+        let transmission = VirtualEcu {
+            response_id: 0x18,
+            label: String::from("Transmission control module"),
+            ecu_name: None,
+            calibration_ids: Vec::new(),
+            cvns: Vec::new(),
+            supported_service01: vec![0x01],
+            supported_service09: Vec::new(),
+            reports_dtcs: true,
+            runs_monitors: false,
+            reports_vin: false,
+            uds_faults: None,
+            config_records: BTreeMap::new(),
+            config_write: ConfigWriteBehaviour::Refuse,
+            no_frame_as_zero_code: false,
+        };
+        VirtualVehicle {
+            vin: String::from(SIMULATED_TOYOTA_VIN),
+            scenario: Scenario::new(scenario),
+            ecus: vec![engine, transmission],
+            secondary_ecus: Vec::new(),
+            time: TimeSource::deterministic(),
+            dtcs_cleared: false,
+            engine_stopped: false,
+            extended: false,
+            k_line: true,
             fuel_type: 0x01,
         }
     }
 
     /// Whether `target_id` addresses `ecu` on this vehicle.
     fn addresses(&self, target_id: u32, ecu: &VirtualEcu) -> bool {
+        if self.k_line {
+            // Only the functional header: a scan tool on the K-line does not
+            // address one module, and the modules answer as one. Three bytes:
+            // a priority set for 29-bit CAN means nothing on the K-line.
+            return target_id & 0x00FF_FFFF == 0x0068_6AF1;
+        }
         if self.extended {
             // Functional `18DB33F1`, or physical `18DA{addr}F1`.
             target_id == 0x18DB_33F1
@@ -501,6 +574,9 @@ impl VirtualVehicle {
 
     /// The identifier `ecu` answers from on this vehicle.
     fn reply_id(&self, ecu: &VirtualEcu) -> u32 {
+        if self.k_line {
+            return u32::from(ecu.response_id as u8);
+        }
         if self.extended {
             0x18DA_F100 | u32::from(ecu.response_id as u8)
         } else {

@@ -80,8 +80,8 @@ struct Args {
     #[arg(long, value_name = "TRANSCRIPT", conflicts_with = "serial")]
     replay: Option<String>,
 
-    /// Which vehicle the simulator is: f250 (the default) or odyssey, a petrol
-    /// Honda on 29-bit CAN.
+    /// Which vehicle the simulator is: f250 (the default), odyssey (a petrol
+    /// Honda on 29-bit CAN), or toyota (a 2004 on the K-line, before CAN).
     #[arg(long, default_value = "f250")]
     vehicle: String,
 
@@ -162,8 +162,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap_or_else(default_settings_path),
         profiles_dir: args.profiles.as_ref().map(std::path::PathBuf::from),
         replay: args.replay.as_ref().map(std::path::PathBuf::from),
-        simulated_vehicle: aim_api::state::SimulatedVehicle::parse(&args.vehicle)
-            .ok_or_else(|| format!("unknown vehicle {:?}; known: f250, odyssey", args.vehicle))?,
+        simulated_vehicle: aim_api::state::SimulatedVehicle::parse(&args.vehicle).ok_or_else(
+            || format!("unknown vehicle {:?}; known: f250, odyssey, toyota", args.vehicle),
+        )?,
     };
 
     tracing::info!(

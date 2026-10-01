@@ -7,6 +7,9 @@ with the caveat that everything below 1.0 is allowed to move.
 
 ### Added
 
+- **A third simulated vehicle, from before CAN.** `aim-api --simulator
+  --vehicle toyota` is a 2004 Toyota on the K-line (ISO 9141-2).
+
 - **See what a module answers.** *Inspect* has a *Probe* button for the
   selected module: which diagnostic sessions it grants, whether it offers
   security access, and which standard identifiers it holds, range by range.
@@ -63,6 +66,14 @@ with the caveat that everything below 1.0 is allowed to move.
   squeezing, and wide tables scroll inside their own box.
 
 ### Fixed
+
+- **Older vehicles get honest answers, not CAN ones.** On a pre-CAN vehicle
+  (K-line or J1850), the full scan said "no module answered" right after two
+  had. It now reads the fault codes of the modules that do answer, and says
+  that is everything such a bus can reach. It also says it is not known
+  whether a code is failing right now, rather than showing zero. The module
+  probes say the bus does not carry them, and the bus is named as what it is
+  (for example "K-line (pin 7)"), not as CAN at 500 kbit/s.
 
 - **Older vehicles (before CAN, roughly pre-2008) are read correctly.** On
   J1850, ISO 9141 and KWP, every reply's checksum byte was being read as

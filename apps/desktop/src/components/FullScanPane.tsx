@@ -58,6 +58,9 @@ export function FullScanPane({ connected }: { connected: boolean }) {
   const unread = modules.filter((m) => m.note);
   const read = modules.length - unread.length;
   const failingNow = modules.flatMap((m) => m.faults.filter((f) => f.failing_now));
+  // Faults whose module's protocol does not say whether they are failing now.
+  // "Nothing is failing" may only be said when every fault was asked.
+  const notReported = modules.flatMap((m) => m.faults.filter((f) => f.failing_now === null));
 
   return (
     <div className="pane">
@@ -144,8 +147,18 @@ export function FullScanPane({ connected }: { connected: boolean }) {
             />
             <Stat
               label="Failing right now"
-              value={read === 0 ? "unknown" : String(failingNow.length)}
-              tone={failingNow.length ? "var(--serious)" : read === 0 ? undefined : "var(--ok)"}
+              value={
+                read === 0 || (notReported.length > 0 && failingNow.length === 0)
+                  ? "unknown"
+                  : String(failingNow.length)
+              }
+              tone={
+                failingNow.length
+                  ? "var(--serious)"
+                  : read === 0 || notReported.length
+                    ? undefined
+                    : "var(--ok)"
+              }
             />
             {!easy && <Stat label="Addresses probed" value={String(data.addresses_probed)} />}
           </div>
@@ -191,6 +204,17 @@ export function FullScanPane({ connected }: { connected: boolean }) {
                     </strong>
                     <div style={{ marginTop: 6 }}>
                       These are not history — the module reports them as failing at this moment.
+                    </div>
+                  </>
+                ) : notReported.length > 0 ? (
+                  <>
+                    <strong>
+                      {data.fault_count} fault{data.fault_count === 1 ? " is" : "s are"} stored.
+                    </strong>
+                    <div style={{ marginTop: 6 }}>
+                      Whether any is failing right now is not something this vehicle reports, so
+                      it is not known. A fault that is still present usually keeps the warning
+                      lamp on.
                     </div>
                   </>
                 ) : (

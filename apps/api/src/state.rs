@@ -94,6 +94,8 @@ pub enum SimulatedVehicle {
     F250,
     /// A 2023 Honda Odyssey, petrol, on 29-bit CAN.
     Odyssey,
+    /// A 2004 Toyota, petrol, on the K-line (ISO 9141-2): no CAN at all.
+    Toyota2004,
 }
 
 impl SimulatedVehicle {
@@ -102,6 +104,7 @@ impl SimulatedVehicle {
         match s.trim().to_ascii_lowercase().as_str() {
             "f250" | "f-250" | "ford" => Some(SimulatedVehicle::F250),
             "odyssey" | "honda" => Some(SimulatedVehicle::Odyssey),
+            "toyota" | "kline" | "k-line" => Some(SimulatedVehicle::Toyota2004),
             _ => None,
         }
     }
@@ -394,8 +397,13 @@ fn build_adapter(
                     })?;
             Ok(Box::new(Elm327Adapter::new(Box::new(transport), Elm327Config::fast())))
         }
-        TransportChoice::Simulator if config.simulated_vehicle == SimulatedVehicle::Odyssey => {
-            let vehicle = aim_simulator::VirtualVehicle::honda_odyssey(scenario);
+        TransportChoice::Simulator if config.simulated_vehicle != SimulatedVehicle::F250 => {
+            let vehicle = match config.simulated_vehicle {
+                SimulatedVehicle::Toyota2004 => {
+                    aim_simulator::VirtualVehicle::toyota_2004(scenario)
+                }
+                _ => aim_simulator::VirtualVehicle::honda_odyssey(scenario),
+            };
             let transport = SimulatedTransport::with_vehicle(vehicle, config.personality.build())
                 .with_latency(config.simulator_latency);
             Ok(Box::new(Elm327Adapter::new(Box::new(transport), Elm327Config::fast())))

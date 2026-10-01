@@ -13,7 +13,7 @@ Evidence, not intention. Everything here has run against a vehicle.
 
 | | |
 |---|---|
-| Vehicles seen | 3 real (2019 F-250 ×2, 2012 F-250), plus two virtual ones: the truck, and a 29-bit petrol Honda |
+| Vehicles seen | 3 real (2019 F-250 ×2, 2012 F-250), plus three virtual ones: the truck, a 29-bit petrol Honda, and a 2004 Toyota on the K-line |
 | Adapters | FTDI USB at 500000 baud, Bluetooth ELM327 clone at 38400, OBDLink MX+ (STN) |
 | Sessions recorded | 34 |
 | Adapter exchanges logged | ~29,900 |
@@ -219,6 +219,13 @@ removed, not yet against the 2012 truck.
   as an adapter failure (and a `0000` one as a frame for P0000), an empty
   settings list with no reason, and screens that called every vehicle a
   truck. A simulator is not a car: #39 still needs the real one.
+- **A third, from before CAN.** A 2004 Toyota on ISO 9141-2. It found that
+  every pre-CAN reply had its checksum read as data, and multi-frame replies
+  joined wrongly (the VIN and fault lists came out garbled). It also found
+  that the full scan and the module probes asked CAN questions down a
+  K-line and reported the silence as the vehicle's. The frame format now
+  follows the ELM327's documented output; no pre-CAN vehicle has been
+  connected.
 - **Updates are checked before they are kept.** A downloaded installer must
   match the SHA-256 its release states, in `SHA256SUMS.txt` and in GitHub's
   record of the file. That catches a damaged or swapped download; it does not

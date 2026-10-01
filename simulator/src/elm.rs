@@ -393,11 +393,23 @@ impl ElmEmulator {
         // is found on its own width.
         let wants_29_bit = matches!(self.protocol, Some(7 | 9));
         let wants_11_bit = matches!(self.protocol, Some(6 | 8));
-        if (self.vehicle.extended && wants_11_bit) || (!self.vehicle.extended && wants_29_bit) {
+        // And a K-line vehicle answers no CAN protocol, nor a CAN vehicle a
+        // K-line or J1850 one.
+        let wants_can = matches!(self.protocol, Some(6..=9));
+        let wants_legacy = matches!(self.protocol, Some(1..=5));
+        if (self.vehicle.k_line && wants_can)
+            || (!self.vehicle.k_line && wants_legacy)
+            || (!self.vehicle.k_line && self.vehicle.extended && wants_11_bit)
+            || (!self.vehicle.k_line && !self.vehicle.extended && wants_29_bit)
+        {
             lines.push(String::from("NO DATA"));
             return lines;
         }
-        let header = if searching && self.vehicle.extended && self.header == 0x7DF {
+        // Until a header is set, the adapter uses the protocol's own default,
+        // which on the K-line is the functional `68 6A F1`.
+        let header = if self.vehicle.k_line && (searching || self.header == 0x7DF) {
+            0x0068_6AF1
+        } else if searching && self.vehicle.extended && self.header == 0x7DF {
             0x18DB_33F1
         } else {
             self.header
@@ -428,9 +440,29 @@ impl ElmEmulator {
 
         // The first successful exchange is what establishes the protocol.
         if self.protocol.is_none() {
-            let found = if self.vehicle.extended { 7 } else { 6 };
+            let found = if self.vehicle.k_line {
+                3
+            } else if self.vehicle.extended {
+                7
+            } else {
+                6
+            };
             self.protocol =
                 Some(if self.requested_protocol == 0 { found } else { self.requested_protocol });
+        }
+
+        if self.vehicle.k_line {
+            for reply in replies {
+                for frame in k_line_frames(&reply.payload) {
+                    // Priority 48, target 6B (the tester), then the source.
+                    let mut bytes = vec![0x48, 0x6B, reply.response_id as u8];
+                    bytes.extend_from_slice(&frame);
+                    let checksum = bytes.iter().fold(0u8, |a, b| a.wrapping_add(*b));
+                    bytes.push(checksum);
+                    lines.push(self.format_bytes(&bytes));
+                }
+            }
+            return lines;
         }
 
         for reply in replies {
@@ -445,6 +477,14 @@ impl ElmEmulator {
             }
         }
         lines
+    }
+
+    /// A K-line frame as printed: with headers off, the header and checksum
+    /// are not shown.
+    fn format_bytes(&self, bytes: &[u8]) -> String {
+        let shown = if self.headers { bytes } else { &bytes[3..bytes.len() - 1] };
+        let sep = if self.spaces { " " } else { "" };
+        shown.iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(sep)
     }
 
     fn format_frame(&self, id: &CanId, data: &[u8]) -> String {
@@ -473,6 +513,55 @@ impl ElmEmulator {
         }
         s
     }
+}
+
+/// A reply as the frames a K-line module sends, each without its header.
+///
+/// The simulator's modules answer in the CAN form, and SAE J1979 gives the
+/// pre-CAN one:
+/// - fault codes three to a frame, the service byte repeated, no count byte;
+/// - vehicle information that carries a count of data items on CAN (a VIN,
+///   calibration IDs) in numbered frames of four bytes, the VIN padded to 20;
+/// - anything else in one frame.
+fn k_line_frames(payload: &[u8]) -> Vec<Vec<u8>> {
+    let service = payload[0];
+    if matches!(service, 0x43 | 0x47 | 0x4A) {
+        let codes = payload.get(2..).unwrap_or(&[]);
+        let mut frames: Vec<Vec<u8>> = codes
+            .chunks(6)
+            .map(|c| {
+                let mut f = vec![service];
+                f.extend_from_slice(c);
+                f.resize(7, 0x00);
+                f
+            })
+            .collect();
+        if frames.is_empty() {
+            frames.push(vec![service, 0, 0, 0, 0, 0, 0]);
+        }
+        return frames;
+    }
+    if service == 0x49 && payload.len() > 3 && matches!(payload[1], 0x02 | 0x04 | 0x06 | 0x0A) {
+        let pid = payload[1];
+        // Past the count of data items, which the pre-CAN form does not send.
+        let mut data = payload[3..].to_vec();
+        if pid == 0x02 {
+            let mut padded = vec![0x00; 20usize.saturating_sub(data.len())];
+            padded.extend_from_slice(&data);
+            data = padded;
+        }
+        return data
+            .chunks(4)
+            .enumerate()
+            .map(|(i, c)| {
+                let mut f = vec![0x49, pid, (i + 1) as u8];
+                f.extend_from_slice(c);
+                f.resize(7, 0x00);
+                f
+            })
+            .collect();
+    }
+    vec![payload.to_vec()]
 }
 
 /// Split a payload into the ISO-TP frames an adapter would print.
@@ -514,6 +603,44 @@ mod tests {
 
     fn emu(id: ScenarioId) -> ElmEmulator {
         ElmEmulator::new(VirtualVehicle::f250_2019(id), AdapterPersonality::genuine_v1_5())
+    }
+
+    /// A K-line vehicle is found by the search as protocol 3, and prints each
+    /// frame with its three header bytes and a checksum that is the sum of the
+    /// bytes before it. A VIN comes as five numbered frames.
+    #[test]
+    fn a_k_line_vehicle_prints_framed_checksummed_replies() {
+        let mut e = ElmEmulator::new(
+            VirtualVehicle::toyota_2004(ScenarioId::Healthy),
+            AdapterPersonality::genuine_v1_5(),
+        );
+        for cmd in ["ATZ", "ATE0", "ATL0", "ATS1", "ATH1", "ATSP0"] {
+            e.handle_line(cmd);
+        }
+        let bytes = |line: &str| -> Vec<u8> {
+            line.split_whitespace().map(|b| u8::from_str_radix(b, 16).unwrap()).collect()
+        };
+        let checks = |b: &[u8]| {
+            let (body, ck) = b.split_at(b.len() - 1);
+            body.iter().fold(0u8, |a, x| a.wrapping_add(*x)) == ck[0]
+        };
+
+        let out = e.handle_line("0100");
+        let frames: Vec<&str> =
+            out.split(['\r', '\n']).filter(|l| l.starts_with("48 6B")).collect();
+        assert_eq!(frames.len(), 2, "{out:?}");
+        let engine = bytes(frames[0]);
+        assert_eq!(&engine[..5], &[0x48, 0x6B, 0x10, 0x41, 0x00]);
+        assert_eq!(engine.len(), 3 + 6 + 1);
+        assert!(checks(&engine), "{engine:02X?}");
+        assert!(e.handle_line("ATDPN").contains('3'));
+
+        let vin = e.handle_line("0902");
+        let vin: Vec<Vec<u8>> =
+            vin.split(['\r', '\n']).filter(|l| l.starts_with("48 6B 10")).map(bytes).collect();
+        assert_eq!(vin.len(), 5);
+        assert!(vin.iter().all(|f| checks(f) && f[3] == 0x49 && f[4] == 0x02));
+        assert_eq!(vin.iter().map(|f| f[5]).collect::<Vec<_>>(), [1, 2, 3, 4, 5]);
     }
 
     /// Run the handshake the real adapter runs, returning the emulator ready

@@ -38,5 +38,5 @@ pub use state::VehicleState;
 pub use transport::{SharedEmulator, SimulatedTransport};
 pub use vehicle::{
     ConfigWriteBehaviour, EcuReply, TimeSource, VirtualEcu, VirtualVehicle, SIMULATED_HONDA_VIN,
-    SIMULATED_VIN,
+    SIMULATED_TOYOTA_VIN, SIMULATED_VIN,
 };

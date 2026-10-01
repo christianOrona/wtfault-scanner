@@ -268,6 +268,9 @@ codes:
   - id: clear_not_confirmed
     easy: "A computer agreed to erase its codes but had not finished when the app stopped waiting. Read the codes again to see whether they are gone."
     technical: "The module answered 7F 04 78 or 7F 14 78 (response pending) and no final answer arrived before the adapter's timeout."
+  - id: full_scan_reaches_emissions_modules_only
+    easy: "This car is older than the kind of network the full scan uses. The only computers a scan tool can ask on it are the engine and gearbox ones, so their fault codes are what you see. The rest of the car's computers speak the maker's own language."
+    technical: "The vehicle negotiated a pre-CAN protocol (J1850, ISO 9141-2 or ISO 14230-4). The UDS address sweep is CAN-only, so the full scan reads services 03, 07 and 0A from the modules the OBD scan found instead. Those services do not report whether a code is failing now."
   - id: no_features_for_this_vehicle
     easy: "This app does not know any settings for this car yet. That is a gap in what the app knows, not something wrong with the car, and it does not mean the car has no settings."
     technical: "The feature catalogue has no definition whose applicability matches this vehicle's make, year or VIN. The modules were not asked; an empty list here is the catalogue's coverage, not a measurement."

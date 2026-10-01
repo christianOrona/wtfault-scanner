@@ -805,9 +805,10 @@ export interface UdsFault {
   is_generic: boolean | null;
   status: number;
   status_summary: string;
-  failing_now: boolean;
+  /** Null where the protocol does not report it (pre-CAN): unknown, not no. */
+  failing_now: boolean | null;
   confirmed: boolean;
-  warning_lamp: boolean;
+  warning_lamp: boolean | null;
 }
 
 export interface ScannedModule {

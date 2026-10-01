@@ -212,6 +212,20 @@ fn in_legislated_range(request_addr: &str) -> serde_json::Value {
     }
 }
 
+/// The wire a pre-CAN protocol runs on, by its connector pins.
+///
+/// `None` for CAN, and for a protocol not yet known: the label for those is the
+/// bus's own.
+fn legacy_wire(protocol: aim_types::ObdProtocol) -> Option<&'static str> {
+    use aim_types::ObdProtocol::*;
+    match protocol {
+        J1850Pwm => Some("J1850 PWM bus (pins 2 and 10)"),
+        J1850Vpw => Some("J1850 VPW bus (pin 2)"),
+        Iso9141_2 | Iso14230KwpSlow | Iso14230KwpFast => Some("K-line (pin 7)"),
+        _ => None,
+    }
+}
+
 const FREEZE_FRAME_PIDS: [u8; 14] =
     [0x03, 0x04, 0x05, 0x0B, 0x0C, 0x0D, 0x0F, 0x10, 0x11, 0x1F, 0x21, 0x2F, 0x33, 0x42];
 
@@ -1063,6 +1077,47 @@ impl DiagnosticService {
         })
     }
 
+    /// The primary bus as it actually is: on a pre-CAN vehicle, a K-line or
+    /// J1850 wire rather than CAN on pins 6 and 14.
+    fn bus_label(&self, bus: VehicleBus) -> String {
+        match (bus, legacy_wire(self.adapter.protocol())) {
+            (VehicleBus::Primary, Some(wire)) => wire.to_string(),
+            _ => bus.label().to_string(),
+        }
+    }
+
+    /// The primary bus's CAN bit rate, which a pre-CAN bus does not have.
+    fn bus_kbits(&self, bus: VehicleBus) -> Option<u32> {
+        match (bus, legacy_wire(self.adapter.protocol())) {
+            (VehicleBus::Primary, Some(_)) => None,
+            (VehicleBus::Primary, None) => bus.kbits(),
+            (VehicleBus::Secondary, _) => self.adapter.secondary_bus_kbits(),
+        }
+    }
+
+    /// Refuse, with the reason, what needs UDS on a vehicle whose diagnostic
+    /// bus carries only the legislated OBD-II services.
+    ///
+    /// Asked anyway, these went to CAN addresses that cannot exist on a K-line
+    /// or J1850 wire, and the silence came back as "the address this module
+    /// listens on is not known, run a full scan" or "no module answered":
+    /// conclusions about the vehicle drawn from asking down the wrong wire.
+    fn require_can(&self, what: &str) -> AimResult<()> {
+        let protocol = self.adapter.protocol();
+        match legacy_wire(protocol) {
+            None => Ok(()),
+            Some(wire) => Err(AimError::new(
+                ErrorCode::CapabilityMissing,
+                format!(
+                    "{what} uses UDS, which this vehicle does not offer on its diagnostic bus: \
+                     it answers on {} over the {wire}, which carries only the legislated OBD-II \
+                     services. That says nothing else about the module.",
+                    protocol.label()
+                ),
+            )),
+        }
+    }
+
     fn require_usable(&self) -> AimResult<()> {
         if self.adapter.state().is_usable() {
             Ok(())
@@ -1441,7 +1496,7 @@ impl DiagnosticService {
                 if let Err(e) = self.adapter.select_bus(bus) {
                     reports.push(serde_json::json!({
                         "bus": bus,
-                        "label": bus.label(),
+                        "label": self.bus_label(bus),
                         "reached": false,
                         "modules": 0,
                         "note": format!("the adapter would not switch to this bus: {e}"),
@@ -1465,21 +1520,21 @@ impl DiagnosticService {
             }
             reports.push(serde_json::json!({
                 "bus": bus,
-                "label": bus.label(),
+                "label": self.bus_label(bus),
                 "reached": true,
                 "modules": found.len(),
                 // What the bus actually runs at, where that had to be found
                 // out. The primary bus states its own; the secondary one is
                 // whatever answered, and recording it is how the next scan of
-                // this vehicle skips the search.
-                "kbits": bus.kbits().or_else(|| self.adapter.secondary_bus_kbits()),
+                // this vehicle skips the search. A pre-CAN bus has no CAN rate.
+                "kbits": self.bus_kbits(bus),
                 "note": if found.is_empty() {
                     // Deliberately not a conclusion about the vehicle.
                     Some(format!(
                         "nothing answered on the {}. That can mean the vehicle has no modules \
                          there, or that this adapter's connector is not wired to the pins that \
                          bus uses — the two are indistinguishable from here.",
-                        bus.label()
+                        self.bus_label(bus)
                     ))
                 } else {
                     None
@@ -3700,6 +3755,7 @@ impl DiagnosticService {
         dids: &[u16],
         label: Option<String>,
     ) -> AimResult<Payload> {
+        self.require_can("Capturing configuration")?;
         // On the module's own bus. Third path to need this and the third to
         // have been written without it — see the note on `reach_module`. A
         // capture asked on the wrong bus returns nothing and reports it as a
@@ -5152,6 +5208,9 @@ impl DiagnosticService {
 
     fn scan_all_inner(&mut self) -> AimResult<Payload> {
         self.require_usable()?;
+        if legacy_wire(self.adapter.protocol()).is_some() {
+            return self.scan_all_legacy();
+        }
         let home = self.adapter.current_bus();
         let mut buses = vec![home];
         if self.adapter.capabilities().multiple_can_buses {
@@ -5230,7 +5289,7 @@ impl DiagnosticService {
 
             buses_summary.push(serde_json::json!({
                 "bus": bus.key_prefix(),
-                "label": bus.label(),
+                "label": self.bus_label(bus),
                 "modules": data["module_count"].as_u64().unwrap_or(0) as usize,
                 "reached": true,
             }));
@@ -5285,6 +5344,110 @@ impl DiagnosticService {
         })
     }
 
+    /// The full scan on a pre-CAN vehicle: the legislated fault lists of the
+    /// modules that answer, which on such a bus is every module that can be
+    /// asked.
+    ///
+    /// The sweep is CAN: it asks every CAN address with UDS. On a K-line or
+    /// J1850 vehicle each of those requests goes nowhere, and the scan used to
+    /// end in "no module answered on any diagnostic address" right after two
+    /// modules had answered.
+    fn scan_all_legacy(&mut self) -> AimResult<Payload> {
+        if self.store.modules(&self.session.id)?.is_empty() {
+            self.scan_modules_inner()?;
+        }
+        let read = self.read_dtcs_inner(None)?;
+        let dtcs =
+            read.data.as_ref().and_then(|d| d["dtcs"].as_array().cloned()).unwrap_or_default();
+        let modules = self.store.modules(&self.session.id)?;
+        let wire = self.bus_label(VehicleBus::Primary);
+
+        let entries: Vec<serde_json::Value> = modules
+            .iter()
+            .map(|m| {
+                // In the full scan's shape, from what the legislated services
+                // say. They report stored, pending and permanent, and nothing
+                // about whether a fault is failing right now or has asked for
+                // the lamp, so neither is claimed.
+                // One entry per code: a code that is both confirmed and
+                // permanent is one fault reported by two services, not two.
+                let mut by_code: Vec<(&serde_json::Value, Vec<&str>)> = Vec::new();
+                for d in dtcs.iter().filter(|d| d["module"] == m.module_key.as_str()) {
+                    let status = d["status"].as_str().unwrap_or_default();
+                    match by_code.iter_mut().find(|(seen, _)| seen["code"] == d["code"]) {
+                        Some((_, statuses)) => statuses.push(status),
+                        None => by_code.push((d, vec![status])),
+                    }
+                }
+                let faults: Vec<serde_json::Value> = by_code
+                    .into_iter()
+                    .map(|(d, statuses)| {
+                        serde_json::json!({
+                            "code": d["code"],
+                            "base_code": d["code"],
+                            "description": d["description"],
+                            "structural_summary": d["structural_summary"],
+                            "is_generic": d["is_generic"],
+                            "status": 0,
+                            "status_summary": format!(
+                                "{}; whether it is failing right now is not reported on this \
+                                 protocol",
+                                statuses.join(", ")
+                            ),
+                            // Not reported, which is not "no".
+                            "failing_now": null,
+                            "confirmed": statuses.contains(&"confirmed"),
+                            "warning_lamp": null,
+                        })
+                    })
+                    .collect();
+                serde_json::json!({
+                    "request_address": null,
+                    "address": m.address,
+                    "name": m.name,
+                    "in_legislated_range": true,
+                    "fault_count": faults.len(),
+                    "faults": faults,
+                    "note": null,
+                    "cut_off": null,
+                })
+            })
+            .collect();
+        let fault_count: usize =
+            entries.iter().map(|e| e["fault_count"].as_u64().unwrap_or(0) as usize).sum();
+
+        let mut warnings = read.warnings;
+        warnings.push(Warning::info(
+            "full_scan_reaches_emissions_modules_only",
+            format!(
+                "This vehicle answers on {} over the {wire}, not CAN. Every module on it that a \
+                 scan tool can ask is an emissions module, so the full scan read their stored, \
+                 pending and permanent codes. Body and chassis modules on vehicles of this age \
+                 talk in their manufacturer's own protocols, which this app does not speak.",
+                self.adapter.protocol().label()
+            ),
+        ));
+        Ok(Payload {
+            data: Some(serde_json::json!({
+                "modules": entries,
+                "module_count": modules.len(),
+                "fault_count": fault_count,
+                "addresses_probed": 0,
+                "addresses_swept_blind": 0,
+                "addresses_already_on_record": 0,
+                "buses": [{
+                    "bus": VehicleBus::Primary.key_prefix(),
+                    "label": wire,
+                    "modules": modules.len(),
+                    "reached": true,
+                }],
+            })),
+            warnings,
+            evidence: read.evidence,
+            ..Default::default()
+        })
+    }
+
     /// Turn a `0x19 0x02` reply into described faults.
     ///
     /// Returns the note separately so a module that answered something other
@@ -5322,6 +5485,7 @@ impl DiagnosticService {
     /// a stalled module in somebody's driveway.
     fn probe_capabilities_inner(&mut self, module_key: &str) -> AimResult<Payload> {
         self.require_usable()?;
+        self.require_can("A capability probe")?;
         let module = self.module_by_key(module_key)?;
         // Modules are recorded by the address they answered on; a request goes
         // to the matching request address.
@@ -5808,6 +5972,7 @@ impl DiagnosticService {
 
     fn probe_write_gate_inner(&mut self, module_key: &str) -> AimResult<Payload> {
         self.require_usable()?;
+        self.require_can("A write-gate probe")?;
         let module = self.module_by_key(module_key)?;
         let addr = Self::request_target(&module)?;
         let budget = Duration::from_millis(1500);
