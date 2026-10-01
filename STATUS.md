@@ -277,6 +277,12 @@ Honest gaps, in the order they matter.
   regeneration state and SCR data are carried by legislated PIDs the truck
   supports (7A, 8B, 85, 83) and are not decoded, for want of a documented
   byte layout.
+- **Pre-CAN vehicles are read from the documentation, not from a car.** J1850
+  and K-line replies follow the ELM327's documented frame format and are
+  tested against a simulated 2004 Toyota; no such vehicle has been connected.
+  On them the full scan reaches the emissions modules only, self-test results
+  (whose pre-CAN layout differs) are not decoded, and nothing that needs UDS
+  is offered.
 - **No manufacturer-specific decoding.** Everything is the public standard,
   which is why it works across brands and also why a module can answer with a
   code nobody has a description for.
