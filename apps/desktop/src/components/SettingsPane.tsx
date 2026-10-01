@@ -171,7 +171,8 @@ export function SettingsPane({
           <strong>No model is set up yet.</strong>
           <p className="muted" style={{ marginBottom: 0 }}>
             Without one, the app reads the vehicle but cannot explain it. Add
-            <strong> Ollama</strong> to use a machine on your own network, or
+            <strong> Ollama</strong> to use a machine on your own network,
+            <strong> OpenRouter</strong> to use its free models with a free key, or
             <strong> Anthropic</strong> for the strongest reasoning.
           </p>
         </div>
