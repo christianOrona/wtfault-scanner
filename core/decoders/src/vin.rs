@@ -125,12 +125,48 @@ fn manufacturer_for(wmi: &str) -> Option<&'static str> {
         "1C3" | "1C4" | "1C6" | "2C3" | "3C4" => "Stellantis / FCA US",
         "5YJ" => "Tesla",
         "JHM" | "JHL" => "Honda (Japan)",
+        "1HG" | "5FN" => "Honda (US)",
+        "2HG" => "Honda (Canada)",
+        "JM1" | "JM3" => "Mazda (Japan)",
+        "3MZ" => "Mazda (Mexico)",
         "JTD" | "JTE" | "JTM" => "Toyota (Japan)",
         "WBA" | "WBS" => "BMW (Germany)",
         "WDB" | "WDD" => "Mercedes-Benz (Germany)",
         "WVW" | "WV1" | "WV2" => "Volkswagen (Germany)",
         _ => return None,
     })
+}
+
+/// The brands a manufacturer in the table above sells under.
+///
+/// A VIN names the manufacturer; NHTSA vPIC and people name the brand. A 2020
+/// Jeep is "Stellantis / FCA US" by its VIN and "JEEP" by vPIC, and those are
+/// one answer, not two. Empty for a description this table does not hold.
+pub fn brands_of(manufacturer: &str) -> &'static [&'static str] {
+    let starts = |prefix: &str| manufacturer.starts_with(prefix);
+    if starts("Ford Motor Company") {
+        &["Ford", "Lincoln", "Mercury"]
+    } else if starts("General Motors") {
+        &["Chevrolet", "GMC", "Buick", "Cadillac"]
+    } else if starts("Stellantis / FCA US") {
+        &["Chrysler", "Dodge", "Jeep", "Ram", "Fiat"]
+    } else if starts("Honda") {
+        &["Honda", "Acura"]
+    } else if starts("Toyota") {
+        &["Toyota", "Lexus", "Scion"]
+    } else if starts("Mazda") {
+        &["Mazda"]
+    } else if starts("Tesla") {
+        &["Tesla"]
+    } else if starts("BMW") {
+        &["BMW"]
+    } else if starts("Mercedes-Benz") {
+        &["Mercedes-Benz"]
+    } else if starts("Volkswagen") {
+        &["Volkswagen"]
+    } else {
+        &[]
+    }
 }
 
 fn region_for(first: char) -> Option<&'static str> {
@@ -226,6 +262,31 @@ mod tests {
         assert!(validate("1FT7W2BT9KEC0000I").is_err(), "I is excluded by ISO 3779");
         assert!(validate("1FT7W2BT9KEC0000O").is_err());
         assert!(validate("1FT7W2BT9KEC0000Q").is_err());
+    }
+
+    /// The owner's other two vehicles: a Mazda 3 and a Honda Odyssey, the
+    /// Odyssey built in Alabama.
+    #[test]
+    fn mazda_and_north_american_honda_wmis_are_known() {
+        assert_eq!(manufacturer_for("JM1"), Some("Mazda (Japan)"));
+        assert_eq!(manufacturer_for("3MZ"), Some("Mazda (Mexico)"));
+        assert_eq!(manufacturer_for("5FN"), Some("Honda (US)"));
+    }
+
+    /// Every manufacturer in the table has its brands, so a vPIC answer in
+    /// brand form can be checked against it.
+    #[test]
+    fn every_listed_manufacturer_has_brands() {
+        let wmis = [
+            "1FT", "1FA", "2FM", "3FA", "1G1", "1C4", "5YJ", "JHM", "1HG", "2HG", "JM1", "3MZ",
+            "JTD", "WBA", "WDB", "WVW",
+        ];
+        for wmi in wmis {
+            let m = manufacturer_for(wmi).unwrap();
+            assert!(!brands_of(m).is_empty(), "{wmi}: {m} has no brands");
+        }
+        assert!(brands_of("Stellantis / FCA US").contains(&"Jeep"));
+        assert!(brands_of("somebody else").is_empty());
     }
 
     #[test]

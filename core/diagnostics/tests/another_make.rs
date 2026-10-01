@@ -132,11 +132,11 @@ fn a_ford_is_not_told_about_a_gateway_it_is_not_listed_as_having() {
     assert!(!probe.warnings.iter().any(|w| w.code.starts_with("gateway_")));
 }
 
-/// vPIC names the brand, the VIN names the manufacturer, and on a Jeep the two
-/// do not agree word for word, so the make is contested. The gateway is still
-/// named: both candidates are makes it is fitted to.
+/// vPIC names the brand, the VIN names the manufacturer. "JEEP" is a brand of
+/// "Stellantis / FCA US", so the make settles, keeps vPIC's word as evidence,
+/// and the gateway is named.
 #[test]
-fn a_jeep_whose_make_vpic_contests_is_still_told_about_its_gateway() {
+fn a_jeep_named_by_brand_and_by_manufacturer_settles_and_is_told_about_its_gateway() {
     let vin = jeep_vin();
     let mut service = visit(&vin);
     assert!(service.identify_vehicle(USER).success);
@@ -155,12 +155,9 @@ fn a_jeep_whose_make_vpic_contests_is_still_told_about_its_gateway() {
         .unwrap();
 
     let identity = service.identity();
-    assert_eq!(
-        identity.settled("make"),
-        None,
-        "the make is contested: {:?}",
-        identity.candidates("make")
-    );
+    assert_eq!(identity.settled("make"), Some("Stellantis / FCA US"));
+    let evidence = &identity.field("make").unwrap().candidates[0].evidence;
+    assert!(evidence.iter().any(|e| e.value == "JEEP"), "{evidence:?}");
 
     let probe = service.probe_write_gate("ECU_7E8", USER, Some(USER));
     assert!(probe.success, "{:?}", probe.error);

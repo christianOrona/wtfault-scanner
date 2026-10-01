@@ -103,3 +103,27 @@ fn a_lookup_is_not_measured_off_the_vehicle() {
     assert!(!EvidenceSource::Vpic.measured());
     assert_eq!(EvidenceSource::Vpic.as_str(), "nhtsa_vpic");
 }
+
+/// A brand and its manufacturer are one make: vPIC's "JEEP" agrees with the
+/// VIN's "Stellantis / FCA US" rather than contesting it.
+#[test]
+fn a_brand_of_the_vins_manufacturer_agrees_with_it() {
+    let mut jeep = truck();
+    jeep.vin = Some(String::from("1C4RJFBG5LC000000"));
+    jeep.make = Some(String::from("Stellantis / FCA US"));
+    let mut id = VehicleIdentity::assemble(Some(&jeep), &[]);
+    let decode = VpicDecode { make: Some(String::from("JEEP")), ..f250() };
+    id.record_vpic(&decode);
+
+    assert_eq!(id.settled("make"), Some("Stellantis / FCA US"));
+    assert!(id.contested().iter().all(|f| f.field != "make"), "{:?}", id.contested());
+}
+
+/// And a brand of somebody else still disagrees, visibly.
+#[test]
+fn a_brand_of_another_manufacturer_still_contests() {
+    let mut id = VehicleIdentity::assemble(Some(&truck()), &[]);
+    let decode = VpicDecode { make: Some(String::from("JEEP")), ..f250() };
+    id.record_vpic(&decode);
+    assert_eq!(id.settled("make"), None);
+}

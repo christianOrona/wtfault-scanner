@@ -36,6 +36,9 @@ with the caveat that everything below 1.0 is allowed to move.
 
 ### Fixed
 
+- A vehicle named by its brand in the online VIN lookup ("JEEP") and by its
+  manufacturer in the VIN ("Stellantis / FCA US") is no longer shown with two
+  disagreeing makes. Mazda and North American Honda VINs are now recognised.
 - Comparing two scans no longer calls a fault *gone* when the later scan only
   got part of that module's fault list. It is shown as *not received*: whether
   it is still stored is not known.

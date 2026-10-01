@@ -401,10 +401,17 @@ impl VehicleIdentity {
         if let Some(make) = decode.make.as_deref().filter(|m| !m.trim().is_empty()) {
             let evidence = Evidence::new("make", make, EvidenceSource::Vpic).noting(&note);
             // "FORD" and "Ford Motor Company (US, truck)" are one make said at two
-            // levels of detail. Anything else is a disagreement and stays visible.
+            // levels of detail, and so are "JEEP" and "Stellantis / FCA US": a
+            // brand of the manufacturer the VIN names. Anything else is a
+            // disagreement and stays visible.
             let lower = make.to_lowercase();
             let agreeing = self.fields.iter_mut().find(|f| f.field == "make").and_then(|f| {
-                f.candidates.iter_mut().find(|c| c.value.to_lowercase().starts_with(&lower))
+                f.candidates.iter_mut().find(|c| {
+                    c.value.to_lowercase().starts_with(&lower)
+                        || aim_decoders::vin::brands_of(&c.value)
+                            .iter()
+                            .any(|brand| aim_decoders::catalog::makes_match(brand, make))
+                })
             });
             match agreeing {
                 Some(candidate) => {
