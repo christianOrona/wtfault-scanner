@@ -1064,3 +1064,67 @@ export interface AdapterFitness {
   silence_is_evidence: boolean;
   advice: string[];
 }
+
+// ------------------------------------------------------------ guided tests
+
+export type EngineKind = "spark_ignition" | "diesel" | "electric";
+
+/** A procedure as `/procedures` lists it. */
+export interface ProcedureInfo {
+  id: string;
+  name: string;
+  purpose: string;
+  hold_seconds: number;
+  safety_notes: string[];
+  measures: string[];
+  instructions: string[];
+  can_run_alone: boolean;
+  why_not_alone: string | null;
+  /** Empty means any engine. */
+  applies_to: EngineKind[];
+}
+
+export interface ProcedureCondition {
+  condition: { kind: string; [k: string]: unknown };
+  instruction: string;
+  signal: string | null;
+  value: number | null;
+  met: boolean;
+  unmeasurable: string | null;
+}
+
+export type ProcedureStateName = "waiting" | "holding" | "measured" | "lost" | "refused" | "does_not_apply";
+
+/** What a check of a procedure's conditions found. */
+export interface ProcedureCheck {
+  procedure: string;
+  name: string;
+  purpose: string;
+  state: ProcedureStateName;
+  conditions?: ProcedureCondition[];
+  all_met?: boolean;
+  next_step?: string;
+  hold_seconds?: number;
+  safety_notes?: string[];
+  measures?: string[];
+  fuel_type?: string | null;
+  engine?: EngineKind | null;
+  not_on_this_engine?: string[];
+  does_not_apply_because?: string;
+  refused_because?: string;
+}
+
+/** What a procedure run measured. */
+export interface ProcedureMeasurement {
+  procedure: string;
+  name: string;
+  state: ProcedureStateName;
+  held_throughout?: boolean;
+  declared?: string[];
+  not_on_this_engine?: string[];
+  unavailable?: string[];
+  complete?: boolean;
+  fuel_type?: string | null;
+  does_not_apply_because?: string;
+  conditions?: ProcedureCondition[];
+}

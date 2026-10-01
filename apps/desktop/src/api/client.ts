@@ -10,6 +10,7 @@
 // a diagnostic outcome with evidence attached, and it comes back as a value.
 
 import type {
+  ProcedureCheck, ProcedureInfo, ProcedureMeasurement,
   AdapterStatus, CapabilitiesResponse, ConnectData, DtcData, FreezeFrameData,
   Health, IdentifyData, Measurement, ModuleIdentity, ModuleRecord, PortsResponse,
   SessionEvent, SessionSummary, SignalsData, ToolResult, ApiError, Dtc, MonitorTestsData,
@@ -194,6 +195,13 @@ export const api = {
   dtcs: (key: string) => request<ToolResult<DtcData>>(`/modules/${enc(key)}/dtcs`),
   readiness: () => request<ToolResult<ReadinessData>>("/readiness"),
   scanAllModules: () => post<ToolResult<FullScanData>>("/modules/scan-all"),
+  /** The guided tests this build ships. Touches no vehicle. */
+  procedures: () => request<{ procedures: ProcedureInfo[] }>("/procedures"),
+  /** Read whether the vehicle is in the state a test needs. Read-only. */
+  checkProcedure: (id: string) => request<ToolResult<ProcedureCheck>>(`/procedures/${enc(id)}`),
+  /** Take the test's readings, once its conditions hold. Read-only. */
+  runProcedure: (id: string) =>
+    post<ToolResult<ProcedureMeasurement>>(`/procedures/${enc(id)}/run`),
   compareSessions: (before: string, after: string) =>
     request<ComparisonResponse>(`/sessions/${enc(before)}/compare/${enc(after)}`),
   clearDtcs: (confirmation: string, module?: string) =>

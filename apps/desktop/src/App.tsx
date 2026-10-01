@@ -15,6 +15,7 @@ import { AskPane } from "./components/AskPane";
 import { SettingsPane } from "./components/SettingsPane";
 import { FeaturesPane } from "./components/FeaturesPane";
 import { FullScanPane } from "./components/FullScanPane";
+import { GuidedTestsPane } from "./components/GuidedTestsPane";
 import { Splash, type BootStep } from "./components/Splash";
 import { ProblemBanner } from "./components/ProblemReport";
 import { UpdateBanner } from "./components/UpdateBanner";
@@ -24,7 +25,7 @@ import { useFlightRecorder } from "./hooks/useFlightRecorder";
 import { Explain, ExplainToggle, useExplain } from "./explain";
 
 type Tab =
-  | "inspect" | "ask" | "codes" | "fullscan" | "live" | "features"
+  | "inspect" | "ask" | "codes" | "fullscan" | "live" | "tests" | "features"
   | "adapter" | "recorder" | "sessions" | "settings";
 
 /**
@@ -43,6 +44,7 @@ const TABS: { id: Tab; label: string; hint: string }[] = [
   { id: "codes", label: "Codes", hint: "Fault codes the car has stored, and what each one means." },
   { id: "fullscan", label: "Full scan", hint: "Ask every computer in the car for its faults, not just the emissions ones." },
   { id: "live", label: "Live data", hint: "Watch the car sensors move while the engine runs." },
+  { id: "tests", label: "Guided tests", hint: "Put the car in a state, like warm idle or 2500 rpm, and measure it there." },
   { id: "features", label: "Settings on the car", hint: "Things this car can be configured to do, and how far this app can go." },
   { id: "adapter", label: "Adapter", hint: "The box plugged into the car: what it is and how it is doing." },
   { id: "recorder", label: "Flight recorder", hint: "Every question asked and every answer given, in order. The proof." },
@@ -564,6 +566,7 @@ export default function App() {
               {tab === "settings" && <SettingsPane onChanged={refreshAgent} health={health} />}
               {tab === "codes" && <CodesPane moduleKey={selectedModule} onEvidence={showEvidence} />}
               {tab === "fullscan" && <FullScanPane connected={connected} />}
+              {tab === "tests" && <GuidedTestsPane connected={connected} onEvidence={showEvidence} />}
               {tab === "features" && <FeaturesPane connected={connected} />}
               {tab === "adapter" && <AdapterPane adapter={adapter} />}
               {tab === "recorder" && (

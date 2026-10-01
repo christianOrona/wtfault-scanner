@@ -7,6 +7,11 @@ with the caveat that everything below 1.0 is allowed to move.
 
 ### Added
 
+- **A Guided tests tab.** Pick a test such as *Hold 2500 rpm* or *Warm idle*;
+  it reads the car to see whether it is in the state the test needs, tells you
+  the one thing to do next, can keep checking while you do it, and measures
+  only once the car says the state holds. A test that does not apply to your
+  engine says so and asks nothing.
 - **The assistant can walk you through a guided test.** It can check whether
   the vehicle is in the state a test needs (holding 2500 rpm, warm idle, key
   on with the engine off), tell you the one thing to do next, and take the
