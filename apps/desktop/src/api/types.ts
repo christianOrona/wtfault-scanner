@@ -812,6 +812,11 @@ export interface ScannedModule {
   fault_count: number;
   /** Why this module produced no faults, when that needs explaining. */
   note: string | null;
+  /**
+   * Set when the module's fault list stopped partway. `faults` holds what
+   * arrived; this says how much did not.
+   */
+  cut_off?: string | null;
 }
 
 export interface FullScanData {
