@@ -128,7 +128,7 @@ export function UpdateBanner({ coreUp }: { coreUp: boolean }) {
       });
   }, []);
 
-  if (dismissed || !status?.update_available || !status.latest) return null;
+  if (!status?.update_available || !status.latest) return null;
 
   const ready = download?.stage === "ready";
   const percent =
@@ -138,6 +138,28 @@ export function UpdateBanner({ coreUp }: { coreUp: boolean }) {
   // A download that failed is worth saying out loud: without this the banner
   // would sit on a spinner forever and look like a slow network.
   const downloadError = download?.stage === "failed" ? download.error : null;
+
+  // "Not now" puts the offer away, not an update somebody already fetched.
+  // Once the bytes are on disk, or on their way, the one thing left to say is
+  // that a restart finishes it, so that stays: one line, no notes, nothing to
+  // dismiss, and nothing that moves to catch the eye.
+  if (dismissed) {
+    if (!(ready || downloading || installing || quitting)) return null;
+    return (
+      <div className="update-bar update-bar-quiet">
+        <span className="faint" style={{ flex: 1, minWidth: 0 }}>
+          {ready || installing || quitting
+            ? `${status.latest} is downloaded. Restart when you are ready to finish installing it.`
+            : `Downloading ${status.latest}${percent != null ? ` (${percent}%)` : ""}…`}
+        </span>
+        {(ready || installing || quitting) && (
+          <button className="mini" onClick={install} disabled={installing}>
+            {quitting ? "Restarting…" : installing ? "Installing…" : "Install and restart"}
+          </button>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="update-bar">

@@ -52,6 +52,10 @@ with the caveat that everything below 1.0 is allowed to move.
 
 ### Fixed
 
+- **"Not now" no longer hides an update you already downloaded.** The banner
+  shrinks to one quiet line saying a restart will finish installing it, with
+  the install button, instead of disappearing until the next launch.
+
 - **Clearing codes no longer reports a refusal as a clear.** A module that
   answered "no" to clearing (for example, "conditions not correct") was listed
   among the modules that cleared, and the screen said the codes were erased.

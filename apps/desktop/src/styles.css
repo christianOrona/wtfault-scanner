@@ -766,6 +766,13 @@ a.mini.button:hover { border-color: var(--accent-dim); background: #1c222c; }
   background: var(--accent-dim);
   border-bottom: 1px solid var(--accent);
 }
+/* After "Not now", with an update already downloaded: still there, quieter. */
+.update-bar-quiet {
+  padding: 4px 16px;
+  background: transparent;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+}
 /* What changed, as a short list of claims.
  *
  * This was a <pre> of the raw markdown, which put asterisks, headings and
