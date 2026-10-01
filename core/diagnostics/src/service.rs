@@ -2209,6 +2209,21 @@ impl DiagnosticService {
                  relevant list.",
             ));
         }
+        // An empty list on an identified vehicle is the catalogue having
+        // nothing for it, which is not the vehicle having no settings. Said,
+        // so an empty screen is not read as a finding about the vehicle.
+        if vin.is_some() && features.is_empty() {
+            let vehicle = context.make.as_deref().unwrap_or("this vehicle");
+            warnings.push(Warning::info(
+                "no_features_for_this_vehicle",
+                format!(
+                    "None of the {} settings this build knows about is recorded for {vehicle}. \
+                     That is a gap in the catalogue, not a finding about the vehicle: its \
+                     modules may well have settings, at addresses nobody has recorded here yet.",
+                    self.decoders.features.len()
+                ),
+            ));
+        }
         if candidates > 0 {
             warnings.push(Warning::caution(
                 "mappings_from_a_similar_vehicle",

@@ -151,3 +151,20 @@ fn a_causing_code_of_zero_means_no_freeze_frame() {
     assert!(frame.values.is_empty());
     assert!(frame.warnings.iter().any(|w| w.code == "no_freeze_frame_stored"));
 }
+
+/// The feature catalogue has nothing for a Honda. An empty list is said to be
+/// the catalogue's gap rather than left to read as the vehicle having nothing.
+#[test]
+fn an_empty_feature_list_says_it_is_the_catalogue_that_is_empty() {
+    let mut service = honda();
+    assert!(service.identify_vehicle(USER).success);
+    let features = service.list_features(USER);
+    assert!(features.success, "{:?}", features.error);
+    assert_eq!(features.data.as_ref().unwrap()["features"].as_array().unwrap().len(), 0);
+    let note = features
+        .warnings
+        .iter()
+        .find(|w| w.code == "no_features_for_this_vehicle")
+        .expect("the empty list is explained");
+    assert!(note.message.contains("Honda"), "{}", note.message);
+}

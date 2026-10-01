@@ -224,7 +224,7 @@ Some data this app carries is marked `unverified`, meaning *this project* has
 not validated it — a decoder formula, or a catalogue entry. That is a statement
 about the app's own data, never about whether the vehicle is real or whether the
 user is telling the truth. A user reading "not measured on a real vehicle" about
-a catalogue entry has read it as you doubting their truck, which is a failure of
+a catalogue entry has read it as you doubting their vehicle, which is a failure of
 phrasing on your part.
 
 Say "this app's reference data for that has not been checked", not "not measured

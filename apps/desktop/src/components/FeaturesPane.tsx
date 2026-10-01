@@ -95,7 +95,7 @@ export function FeaturesPane({ connected }: { connected: boolean }) {
           <strong>Vehicle settings</strong>
           {result?.data && (
             <span className="faint">
-              {features.length} known for trucks like yours
+              {features.length} known for vehicles like yours
             </span>
           )}
           {/* The answer, at the top, in a line. This screen used to open with
@@ -140,7 +140,7 @@ export function FeaturesPane({ connected }: { connected: boolean }) {
         <span className="b-code">read this first</span>
         <div style={{ minWidth: 0 }}>
           <div className="row" style={{ gap: 10, justifyContent: "space-between" }}>
-            <strong>A reference list, not a scan of your truck.</strong>
+            <strong>A reference list, not a scan of your vehicle.</strong>
             <button className="mini" onClick={() => setWhy((w) => !w)}>
               {why ? "Less" : "Why?"}
             </button>
@@ -266,7 +266,7 @@ function FeatureCard({
                   Read it and this app will tell you what it thinks the setting currently is.
                   Check that against what your vehicle actually shows. If they agree, that is
                   evidence measured on <em>your</em> vehicle; if they do not, this mapping is
-                  not for your truck. Reading writes nothing. Whether it can be changed here is
+                  not for your vehicle. Reading writes nothing. Whether it can be changed here is
                   decided by the checks in the preview — a comfort setting may be offered as an
                   experiment, and is called one.
                 </div>

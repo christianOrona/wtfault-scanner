@@ -52,6 +52,10 @@ with the caveat that everything below 1.0 is allowed to move.
 
 ### Fixed
 
+- On a vehicle the settings catalogue has nothing for, the settings screen
+  says the catalogue is what is empty, not the vehicle. It also no longer
+  calls every vehicle a truck.
+
 - **Reading a freeze frame on a healthy car says none is stored.** It used to
   fail with "adapter answered 020200 with no_data", as if the adapter had
   broken. A module that answers with a causing code of 0000, which also means
