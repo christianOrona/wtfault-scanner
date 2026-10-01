@@ -1683,6 +1683,44 @@ impl DiagnosticAdapter for Elm327Adapter {
         Ok(self.assemble(lines).unwrap_or_default())
     }
 
+    fn request_pdu_keeping_partial(
+        &mut self,
+        pdu: &[u8],
+        target: &RequestTarget,
+        timeout: std::time::Duration,
+    ) -> AimResult<Vec<EcuMessage>> {
+        let reassembles = self.headers_enabled
+            && (self.protocol.is_can() || self.protocol == ObdProtocol::Unknown);
+        if !reassembles {
+            return self.request_pdu(pdu, target, timeout);
+        }
+        self.ensure_usable()?;
+        self.set_header(target)?;
+        let command = self.request_line(pdu)?;
+        let reply = self.send_with_recovery(&command, timeout)?;
+
+        // A long reply that runs out of time is classed a timeout, and its
+        // lines are what the module sent before it stopped. Measured on a
+        // 2012 F-250: a fault list announcing 407 bytes ended partway, and
+        // every code in it was reported as the module not answering.
+        //
+        // The last of them is left out: the adapter may have been partway
+        // through printing it when time ran out, and a frame missing its tail
+        // looks exactly like a short one. Losing a few bytes that did arrive
+        // is the price of not reading any that did not.
+        let lines = match reply.class {
+            ResponseClass::Timeout => {
+                reply.lines.split_last().map(|(_, whole)| whole).unwrap_or_default()
+            }
+            _ => match reply.ok_lines() {
+                Ok(lines) => lines,
+                Err(_) => return Ok(Vec::new()),
+            },
+        };
+        Ok(assemble_can_keeping_partial(lines, self.spaces_enabled, self.protocol)
+            .unwrap_or_default())
+    }
+
     fn raw_command(&mut self, command: &str) -> AimResult<AdapterResponse> {
         self.send_with_recovery(command, self.config.request_timeout)
     }
@@ -1878,6 +1916,15 @@ fn split_header_line(
         let header = parts[..header_tokens].concat();
         let mut data = Vec::new();
         for p in &parts[header_tokens..] {
+            // An adapter prints every byte as two digits. A shorter token is
+            // a line that stopped partway through being printed, and reading
+            // `2` of `21` as 0x02 would be inventing a byte.
+            if p.len() != 2 {
+                return Err(AimError::new(
+                    ErrorCode::ProtocolMalformedResponse,
+                    format!("invalid byte {p:?} in adapter line {trimmed:?}"),
+                ));
+            }
             data.push(u8::from_str_radix(p, 16).map_err(|e| {
                 AimError::new(
                     ErrorCode::ProtocolMalformedResponse,
@@ -1934,6 +1981,27 @@ pub fn assemble_can(
     spaces: bool,
     protocol: ObdProtocol,
 ) -> AimResult<Vec<EcuMessage>> {
+    assemble_can_with(lines, spaces, protocol, false)
+}
+
+/// [`assemble_can`], except that a stream which stopped partway is returned
+/// as far as it got, marked with [`crate::CutOff`], rather than failing the
+/// whole reply. A line the adapter was still printing when time ran out is
+/// skipped rather than read.
+pub fn assemble_can_keeping_partial(
+    lines: &[String],
+    spaces: bool,
+    protocol: ObdProtocol,
+) -> AimResult<Vec<EcuMessage>> {
+    assemble_can_with(lines, spaces, protocol, true)
+}
+
+fn assemble_can_with(
+    lines: &[String],
+    spaces: bool,
+    protocol: ObdProtocol,
+    keep_partial: bool,
+) -> AimResult<Vec<EcuMessage>> {
     // BTreeMap keeps output ordered by address, so a multi-module scan is
     // deterministic and its golden transcripts are stable.
     let mut receivers: BTreeMap<String, IsoTpReceiver> = BTreeMap::new();
@@ -1941,7 +2009,11 @@ pub fn assemble_can(
     let mut done: BTreeMap<String, Vec<u8>> = BTreeMap::new();
 
     for line in lines {
-        let (header, data) = split_header_line(line, spaces, protocol)?;
+        let (header, data) = match split_header_line(line, spaces, protocol) {
+            Ok(parsed) => parsed,
+            Err(_) if keep_partial => continue,
+            Err(e) => return Err(e),
+        };
         // Validate the header is a real CAN id; this rejects stray text that
         // slipped past classification instead of treating it as a frame.
         let id = CanId::parse_hex(&header)?;
@@ -1965,8 +2037,17 @@ pub fn assemble_can(
 
     // A module that started a segmented message and never finished it is a
     // truncated read, not a message. Report it rather than returning a partial
-    // payload that would decode into a plausible-looking lie.
+    // payload that would decode into a plausible-looking lie - unless the
+    // caller asked for what arrived, in which case it is marked as cut off.
+    let mut cut: BTreeMap<String, (Vec<u8>, crate::CutOff)> = BTreeMap::new();
     for (address, rx) in &receivers {
+        if keep_partial && !done.contains_key(address) {
+            if let Some((received, announced)) = rx.partial() {
+                let cut_off = crate::CutOff { announced, received: received.len() };
+                cut.insert(address.clone(), (received.to_vec(), cut_off));
+            }
+            continue;
+        }
         if rx.in_progress() && !done.contains_key(address) {
             return Err(AimError::new(
                 ErrorCode::IsoTpError,
@@ -1979,14 +2060,19 @@ pub fn assemble_can(
         }
     }
 
-    Ok(done
-        .into_iter()
-        .map(|(address, payload)| EcuMessage {
+    let complete = done.into_iter().map(|(address, payload)| (address, (payload, None)));
+    let partial = cut.into_iter().map(|(address, (payload, c))| (address, (payload, Some(c))));
+    let mut messages: Vec<EcuMessage> = complete
+        .chain(partial)
+        .map(|(address, (payload, cut_off))| EcuMessage {
             raw_lines: raw.get(&address).cloned().unwrap_or_default(),
             address,
             payload,
+            cut_off,
         })
-        .collect())
+        .collect();
+    messages.sort_by(|a, b| a.address.cmp(&b.address));
+    Ok(messages)
 }
 
 /// Reassemble non-CAN (J1850 / ISO 9141 / KWP) responses.
@@ -2012,7 +2098,12 @@ pub fn assemble_non_can(lines: &[String]) -> Vec<EcuMessage> {
                 prev.payload.extend_from_slice(&payload);
                 prev.raw_lines.push(line.clone());
             }
-            _ => out.push(EcuMessage { address, payload, raw_lines: vec![line.clone()] }),
+            _ => out.push(EcuMessage {
+                address,
+                payload,
+                raw_lines: vec![line.clone()],
+                cut_off: None,
+            }),
         }
     }
     out
@@ -2061,7 +2152,12 @@ pub fn assemble_headerless(lines: &[String]) -> AimResult<Vec<EcuMessage>> {
     if payload.is_empty() {
         return Ok(Vec::new());
     }
-    Ok(vec![EcuMessage { address: String::from("unknown"), payload, raw_lines: used }])
+    Ok(vec![EcuMessage {
+        address: String::from("unknown"),
+        payload,
+        raw_lines: used,
+        cut_off: None,
+    }])
 }
 
 /// Release the port even when nobody called `disconnect`.
@@ -2196,6 +2292,55 @@ mod tests {
             ObdProtocol::Iso15765Can11_500,
         )
         .unwrap_err();
+        assert_eq!(err.code, ErrorCode::IsoTpError);
+    }
+
+    /// Asked for, a stream that stopped is returned as far as it got, marked
+    /// with what was announced and what arrived, beside whatever finished.
+    #[test]
+    fn a_cut_off_stream_is_kept_when_asked_for_and_marked_as_cut_off() {
+        let msgs = assemble_can_keeping_partial(
+            &lines(&[
+                "768 10 0F 59 02 FF 40 35 00",
+                "7E8 03 59 02 FF 00 00 00 00",
+                "768 21 09 C1 21 87 08 9C 09",
+            ]),
+            true,
+            ObdProtocol::Iso15765Can11_500,
+        )
+        .unwrap();
+        assert_eq!(msgs.len(), 2);
+
+        assert_eq!(msgs[0].address, "768");
+        assert_eq!(msgs[0].cut_off, Some(crate::CutOff { announced: 15, received: 13 }));
+        assert_eq!(
+            msgs[0].payload,
+            [0x59, 0x02, 0xFF, 0x40, 0x35, 0x00, 0x09, 0xC1, 0x21, 0x87, 0x08, 0x9C, 0x09]
+        );
+
+        assert_eq!(msgs[1].address, "7E8");
+        assert_eq!(msgs[1].cut_off, None, "a finished message is not marked");
+    }
+
+    /// When time runs out the adapter may be partway through printing a
+    /// line. That line is skipped, not read, and not a reason to lose the rest.
+    #[test]
+    fn a_line_cut_off_mid_print_is_skipped_when_keeping_what_arrived() {
+        let msgs = assemble_can_keeping_partial(
+            &lines(&["768 10 0F 59 02 FF 40 35 00", "768 21 09 C1 2"]),
+            true,
+            ObdProtocol::Iso15765Can11_500,
+        )
+        .unwrap();
+        assert_eq!(msgs[0].cut_off, Some(crate::CutOff { announced: 15, received: 6 }));
+    }
+
+    /// Without being asked, the same stream is still an error. Everything
+    /// that reads back a written value goes this way.
+    #[test]
+    fn a_cut_off_stream_is_still_an_error_by_default() {
+        let cut = lines(&["768 10 0F 59 02 FF 40 35 00", "768 21 09 C1 21 87 08 9C 09"]);
+        let err = assemble_can(&cut, true, ObdProtocol::Iso15765Can11_500).unwrap_err();
         assert_eq!(err.code, ErrorCode::IsoTpError);
     }
 

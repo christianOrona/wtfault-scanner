@@ -265,6 +265,9 @@ struct DtcReadOutcome {
     note: Option<String>,
     /// The refusal, classified, when the module gave a reason.
     refusal: Option<aim_protocols::RefusalKind>,
+    /// Set when the module's list stopped before its end. What is in `dtcs`
+    /// arrived; the rest did not.
+    cut_off: Option<String>,
 }
 
 impl DtcReadOutcome {
@@ -275,8 +278,40 @@ impl DtcReadOutcome {
             not_faults: 0,
             note: Some(note),
             refusal,
+            cut_off: None,
         }
     }
+}
+
+/// One module's fault memory, read with UDS 0x19.
+struct UdsFaultRead {
+    /// The records with a fault bit set.
+    reports: Vec<DtcReport>,
+    /// Records whose status bits describe no fault.
+    not_faults: usize,
+    /// The flight-recorder event holding the reply.
+    evidence: Option<i64>,
+    /// Set when the list stopped partway: `reports` arrived, and this says
+    /// how much did not.
+    cut_off: Option<String>,
+}
+
+/// What to say about a fault list a module began and did not finish.
+///
+/// A UDS 0x19 0x02 reply is `59 02 <availability>` and then four bytes per
+/// record, so the lengths say how many records there were and how many came.
+fn cut_off_note(module_key: &str, cut: aim_adapter::CutOff, faults: usize) -> String {
+    let records = |bytes: usize| bytes.saturating_sub(3) / 4;
+    let (announced, received) = (records(cut.announced), records(cut.received));
+    format!(
+        "{module_key} began a fault list of {} bytes (about {announced} records) and stopped \
+         after {}. The {received} records that arrived were read, {faults} of them faults; the \
+         other {} never arrived, so this is not its whole fault memory. Reading the module \
+         again may get the rest.",
+        cut.announced,
+        cut.received,
+        announced.saturating_sub(received)
+    )
 }
 
 /// What one operation produced, before it is wrapped in the §7 envelope.
@@ -4164,8 +4199,11 @@ impl DiagnosticService {
             // the question was.
             if !VehicleBus::of_module_key(&module.module_key).answers_obd2() {
                 match self.uds_dtcs_for(module) {
-                    Ok((mut found, not_faults, ev)) => {
+                    Ok(UdsFaultRead { reports: mut found, not_faults, evidence: ev, cut_off }) => {
                         warnings.extend(Self::not_faults_warning(&module.module_key, not_faults));
+                        if let Some(cut_off) = cut_off {
+                            warnings.push(Warning::caution("fault_list_cut_off", cut_off));
+                        }
                         if evidence.is_none() {
                             evidence = ev;
                         }
@@ -4285,8 +4323,11 @@ impl DiagnosticService {
             // Not one OBD-II fault service answered. That is a module in the
             // wrong language, not a module with nothing to say.
             match self.uds_dtcs_for(module) {
-                Ok((mut found, not_faults, ev)) => {
+                Ok(UdsFaultRead { reports: mut found, not_faults, evidence: ev, cut_off }) => {
                     warnings.extend(Self::not_faults_warning(&module.module_key, not_faults));
+                    if let Some(cut_off) = cut_off {
+                        warnings.push(Warning::caution("fault_list_cut_off", cut_off));
+                    }
                     if evidence.is_none() {
                         evidence = ev;
                     }
@@ -4786,14 +4827,24 @@ impl DiagnosticService {
 
         for (request_addr, response_addr) in &found {
             let target = RequestTarget::Physical(request_addr.clone());
-            let reply = self.adapter.request_pdu(&dtc_request, &target, budget.read);
+            let reply =
+                self.adapter.request_pdu_keeping_partial(&dtc_request, &target, budget.read);
 
             let outcome = match reply {
                 Ok(messages) => match messages.into_iter().find(|m| &m.address == response_addr) {
-                    Some(m) => self.decode_uds_dtcs(
-                        &m.payload,
-                        &format!("{}_{}", self.adapter.current_bus().key_prefix(), response_addr),
-                    ),
+                    Some(m) => {
+                        let key = format!(
+                            "{}_{}",
+                            self.adapter.current_bus().key_prefix(),
+                            response_addr
+                        );
+                        let mut outcome = self.decode_uds_dtcs(&m.payload, &key);
+                        if let Some(cut) = m.cut_off {
+                            self.saw_truncated_response = true;
+                            outcome.cut_off = Some(cut_off_note(&key, cut, outcome.dtcs.len()));
+                        }
+                        outcome
+                    }
                     None => DtcReadOutcome::refused(
                         String::from("did not answer the fault request"),
                         None,
@@ -4801,7 +4852,10 @@ impl DiagnosticService {
                 },
                 Err(e) => DtcReadOutcome::refused(e.message.clone(), None),
             };
-            let DtcReadOutcome { dtcs, reports, not_faults, note, refusal } = outcome;
+            let DtcReadOutcome { dtcs, reports, not_faults, note, refusal, cut_off } = outcome;
+            if let Some(cut_off) = &cut_off {
+                warnings.push(Warning::caution("fault_list_cut_off", cut_off.clone()));
+            }
             not_faults_total += not_faults;
             if note.is_some() {
                 refused += 1;
@@ -4875,6 +4929,7 @@ impl DiagnosticService {
                 "faults": dtcs,
                 "fault_count": fault_count,
                 "note": note,
+                "cut_off": cut_off,
             }));
         }
 
@@ -6071,14 +6126,15 @@ impl DiagnosticService {
     /// service 0x19 with a status mask of 0xFF asks for every code whatever its
     /// status bits, and is a public standard that works identically across
     /// manufacturers.
-    fn uds_dtcs_for(&mut self, module: &Module) -> AimResult<(Vec<DtcReport>, usize, Option<i64>)> {
+    fn uds_dtcs_for(&mut self, module: &Module) -> AimResult<UdsFaultRead> {
         let addr = Self::request_target(module)?;
         let home = match &addr {
             RequestTarget::Physical(a) => self.reach_module(a),
             RequestTarget::Functional => None,
         };
         let request = aim_protocols::UdsRequest::read_dtc_by_status_mask(0xFF).to_bytes();
-        let replies = self.adapter.request_pdu(&request, &addr, Duration::from_millis(2500));
+        let replies =
+            self.adapter.request_pdu_keeping_partial(&request, &addr, Duration::from_millis(2500));
         self.restore_bus(home);
 
         let messages = replies?;
@@ -6101,13 +6157,17 @@ impl DiagnosticService {
 
         let all = aim_protocols::decode_dtc_by_status_mask(body);
         let not_faults = all.iter().filter(|d| !d.is_fault()).count();
-        let reports = all
+        let reports: Vec<DtcReport> = all
             .iter()
             .filter(|d| d.is_fault())
             .map(|d| self.uds_dtc_report(d, &module.module_key))
             .collect();
+        let cut_off = message.cut_off.map(|cut| {
+            self.saw_truncated_response = true;
+            cut_off_note(&module.module_key, cut, reports.len())
+        });
 
-        Ok((reports, not_faults, evidence))
+        Ok(UdsFaultRead { reports, not_faults, evidence, cut_off })
     }
 
     /// One UDS fault as the same report type service 03 produces.
@@ -6250,6 +6310,7 @@ impl DiagnosticService {
             reports: dtcs.iter().map(|d| self.uds_dtc_report(d, module_key)).collect(),
             note: None,
             refusal: None,
+            cut_off: None,
         }
     }
 

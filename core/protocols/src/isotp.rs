@@ -278,6 +278,16 @@ impl IsoTpReceiver {
         self.active
     }
 
+    /// What has arrived of a message still in progress, and the length its
+    /// first frame announced. `None` when nothing is in progress.
+    ///
+    /// For a reader that would rather show what a module managed to send than
+    /// nothing at all, and that says so. Never a substitute for a complete
+    /// message.
+    pub fn partial(&self) -> Option<(&[u8], usize)> {
+        self.active.then_some((self.buffer.as_slice(), self.expected_length))
+    }
+
     /// Abandon any partial message.
     pub fn reset(&mut self) {
         self.buffer.clear();
