@@ -20,7 +20,7 @@
 
 import { useState } from "react";
 import { api, describeError } from "../api/client";
-import type { Dtc, ToolResult } from "../api/types";
+import type { ClearResult, Dtc, ToolResult } from "../api/types";
 import { ErrorBanner, Spinner } from "./primitives";
 
 const PHRASE = "CLEAR";
@@ -36,7 +36,7 @@ export function ClearCodesDialog({
   /** What is about to be destroyed, so it can be listed. */
   codes: Dtc[];
   onClose: () => void;
-  onCleared: (result: ToolResult<unknown>) => void;
+  onCleared: (result: ToolResult<ClearResult>) => void;
 }) {
   const [typed, setTyped] = useState("");
   const [busy, setBusy] = useState(false);

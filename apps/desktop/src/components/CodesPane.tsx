@@ -9,7 +9,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { api, describeError } from "../api/client";
-import type { Dtc, DtcData, FreezeFrameData, ToolResult } from "../api/types";
+import type { ClearResult, Dtc, DtcData, FreezeFrameData, ToolResult } from "../api/types";
 import { VehicleMap } from "./VehicleMap";
 import { ErrorBanner, FailedResult, Spinner, Value, Warnings } from "./primitives";
 import { PaneIntro, useExplain } from "../explain";
@@ -66,7 +66,7 @@ export function CodesPane({
 
   const { easy } = useExplain();
   const [clearing, setClearing] = useState(false);
-  const [cleared, setCleared] = useState<ToolResult<unknown> | null>(null);
+  const [cleared, setCleared] = useState<ToolResult<ClearResult> | null>(null);
   if (!moduleKey) return <div className="empty">Select a module.</div>;
 
   const dtcs = result?.data?.dtcs ?? [];
@@ -120,22 +120,35 @@ export function CodesPane({
         </div>
       </div>
 
-      {cleared && (
-        <div className={`banner ${cleared.success ? "info" : "serious"}`}>
-          <span className="b-code">{cleared.success ? "cleared" : "not cleared"}</span>
-          <div>
-            {cleared.success ? (
-              <>
-                The vehicle has erased its stored codes. Its self-tests have reset and will take
-                50 to 100 miles of driving to finish again — until then it will not pass an
-                emissions test. Everything read before this is still in Sessions.
-              </>
-            ) : (
-              <>{cleared.error?.message ?? "The vehicle refused."}</>
-            )}
+      {cleared && (() => {
+        // Only a module that said its codes are gone counts as cleared. One
+        // that accepted and had not finished is not, yet.
+        const erased = !!cleared.success && !!cleared.data?.cleared_by.length;
+        const label = !cleared.success ? "not cleared" : erased ? "cleared" : "not confirmed";
+        return (
+          <div className={`banner ${!cleared.success ? "serious" : erased ? "info" : "caution"}`}>
+            <span className="b-code">{label}</span>
+            <div>
+              {!cleared.success ? (
+                <>{cleared.error?.message ?? "The vehicle refused."}</>
+              ) : erased ? (
+                <>
+                  {cleared.data!.cleared_by.join(", ")} erased {cleared.data!.cleared_by.length === 1 ? "its" : "their"}{" "}
+                  stored codes. The self-tests have reset and will take 50 to 100 miles of driving
+                  to finish again — until then the vehicle will not pass an emissions test.
+                  Everything read before this is still in Sessions.
+                </>
+              ) : (
+                <>
+                  The request was accepted, but no module said it had finished. Read the codes
+                  again to see whether they are gone.
+                </>
+              )}
+              <Warnings warnings={cleared.warnings} />
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {clearing && (
         <ClearCodesDialog

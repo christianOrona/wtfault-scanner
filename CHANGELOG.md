@@ -52,6 +52,13 @@ with the caveat that everything below 1.0 is allowed to move.
 
 ### Fixed
 
+- **Clearing codes no longer reports a refusal as a clear.** A module that
+  answered "no" to clearing (for example, "conditions not correct") was listed
+  among the modules that cleared, and the screen said the codes were erased.
+  Now only a module that says its codes are gone counts. One that refuses is
+  named with its reason, and its codes are said to still be stored. One that
+  accepted but had not finished is marked "not confirmed".
+
 - On a vehicle the settings catalogue has nothing for, the settings screen
   says the catalogue is what is empty, not the vehicle. It also no longer
   calls every vehicle a truck.

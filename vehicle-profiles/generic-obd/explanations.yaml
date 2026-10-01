@@ -262,6 +262,12 @@ codes:
   - id: modules_without_fault_memory
     easy: "Some of the car's computers answered but would not hand over a list of faults. That is common: not every computer keeps one in a way a scan tool can ask for. The ones that did answer are shown."
     technical: "A subset of modules answered the discovery probe but not UDS 0x19 0x02. Their fault memory is unknown, not empty."
+  - id: clear_partly_refused
+    easy: "Some of the car's computers would not erase their codes, so those codes are still saved. The message says which ones and why; often it is a condition such as the engine running."
+    technical: "At least one module answered service 04 with a negative response (7F 04 xx). Only modules that answered 0x44 are listed as cleared."
+  - id: clear_not_confirmed
+    easy: "A computer agreed to erase its codes but had not finished when the app stopped waiting. Read the codes again to see whether they are gone."
+    technical: "The module answered 7F 04 78 or 7F 14 78 (response pending) and no final answer arrived before the adapter's timeout."
   - id: no_features_for_this_vehicle
     easy: "This app does not know any settings for this car yet. That is a gap in what the app knows, not something wrong with the car, and it does not mean the car has no settings."
     technical: "The feature catalogue has no definition whose applicability matches this vehicle's make, year or VIN. The modules were not asked; an empty list here is the catalogue's coverage, not a measurement."

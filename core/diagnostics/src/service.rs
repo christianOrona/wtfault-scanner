@@ -6430,10 +6430,38 @@ impl DiagnosticService {
         let evidence = self.recorder.last_response_event();
 
         let outcome = Self::first_uds_outcome(&replies?);
+        // Accepted, and not finished when the adapter stopped listening. Not
+        // a refusal, and not yet a clear either.
+        if let UdsOutcome::Refused(nrc) = &outcome {
+            if nrc.is_response_pending() {
+                return Ok(Payload {
+                    data: Some(serde_json::json!({
+                        "cleared_by": [],
+                        "refused_by": [],
+                        "unconfirmed": [module.address.clone()],
+                        "service": "uds_0x14",
+                    })),
+                    warnings: vec![Warning::caution(
+                        "clear_not_confirmed",
+                        format!(
+                            "{} accepted the request and was still working on it when the \
+                             adapter stopped listening. Read the codes again to see whether they \
+                             are gone.",
+                            module.module_key
+                        ),
+                    )],
+                    evidence,
+                    module: Some(module.module_key.clone()),
+                    ..Default::default()
+                });
+            }
+        }
         if outcome.is_positive() {
             return Ok(Payload {
                 data: Some(serde_json::json!({
                     "cleared_by": [module.address.clone()],
+                    "refused_by": [],
+                    "unconfirmed": [],
                     "service": "uds_0x14",
                 })),
                 warnings: vec![Warning::info(
@@ -6893,14 +6921,127 @@ impl DiagnosticService {
             }
             Err(e) => return Err(e),
         };
+        let evidence = self.recorder.last_response_event();
+        let answers = ClearAnswers::of(&messages);
+
+        // One module asked, and it says it has no such service: it is cleared
+        // the way its codes were read, as one that answers nothing would be.
+        if let (Some(k), [(_, nrc)], true, true) = (
+            module_key,
+            answers.refused.as_slice(),
+            answers.cleared.is_empty(),
+            answers.pending.is_empty(),
+        ) {
+            if nrc.refusal() == aim_protocols::RefusalKind::NotPresent {
+                let module = self.module_by_key(k)?;
+                return self.clear_uds_dtcs(&module);
+            }
+        }
+
+        // Every module that answered said no. Nothing was erased, and saying
+        // "cleared" here is how a refusal reads as a repair.
+        if answers.cleared.is_empty() && answers.pending.is_empty() {
+            let message = if answers.refused.is_empty() {
+                String::from(
+                    "no module answered the request to clear codes in a way that could be read",
+                )
+            } else {
+                format!("nothing was cleared: {}", answers.refusals())
+            };
+            return Err(AimError::new(ErrorCode::NegativeResponse, message).with_details(
+                serde_json::json!({
+                    "refused_by": answers.refused_json(),
+                }),
+            ));
+        }
+
+        let mut warnings = Vec::new();
+        if !answers.refused.is_empty() {
+            warnings.push(Warning::caution(
+                "clear_partly_refused",
+                format!(
+                    "Not every module cleared its codes: {}. Those codes are still stored.",
+                    answers.refusals()
+                ),
+            ));
+        }
+        if !answers.pending.is_empty() {
+            warnings.push(Warning::caution(
+                "clear_not_confirmed",
+                format!(
+                    "{} accepted the request and was still working on it when the adapter \
+                     stopped listening. Read the codes again to see whether they are gone.",
+                    answers.pending.join(", ")
+                ),
+            ));
+        }
         Ok(Payload {
             data: Some(serde_json::json!({
-                "cleared_by": messages.iter().map(|m| &m.address).collect::<Vec<_>>(),
+                "cleared_by": answers.cleared,
+                "refused_by": answers.refused_json(),
+                "unconfirmed": answers.pending,
             })),
-            evidence: self.recorder.last_response_event(),
+            warnings,
+            evidence,
             module: module_key.map(|k| k.to_string()),
             ..Default::default()
         })
+    }
+}
+
+/// What each module said to a service 04 clear.
+///
+/// The answers have to be read: a module that refuses answers too, with
+/// `7F 04 <reason>`, and listing every answer as a clear reports a refusal as
+/// a repair. `7F 04 78` is neither: the module accepted the request and had
+/// not finished when the adapter stopped listening.
+#[derive(Debug, Default)]
+struct ClearAnswers {
+    cleared: Vec<String>,
+    refused: Vec<(String, aim_protocols::NegativeResponseCode)>,
+    pending: Vec<String>,
+}
+
+impl ClearAnswers {
+    fn of(messages: &[EcuMessage]) -> ClearAnswers {
+        let mut answers = ClearAnswers::default();
+        for m in messages {
+            match ObdResponse::parse(&m.payload, false) {
+                Ok(ObdResponse::Positive { service: 0x04, .. }) => {
+                    answers.cleared.push(m.address.clone())
+                }
+                Ok(ObdResponse::Negative { service: 0x04, nrc }) if nrc.is_response_pending() => {
+                    answers.pending.push(m.address.clone())
+                }
+                Ok(ObdResponse::Negative { service: 0x04, nrc }) => {
+                    answers.refused.push((m.address.clone(), nrc))
+                }
+                // A stray reply to something else is not an answer to this.
+                _ => {}
+            }
+        }
+        answers
+    }
+
+    fn refusals(&self) -> String {
+        self.refused
+            .iter()
+            .map(|(address, nrc)| format!("{address} refused ({})", nrc.description()))
+            .collect::<Vec<_>>()
+            .join("; ")
+    }
+
+    fn refused_json(&self) -> serde_json::Value {
+        self.refused
+            .iter()
+            .map(|(address, nrc)| {
+                serde_json::json!({
+                    "address": address,
+                    "reason": nrc.description(),
+                    "refused_because": nrc.refusal().code(),
+                })
+            })
+            .collect()
     }
 }
 
@@ -6908,6 +7049,34 @@ impl DiagnosticService {
 mod tests {
     use super::*;
     use aim_safety::CapabilityRegistry;
+
+    fn answer(address: &str, payload: &[u8]) -> EcuMessage {
+        EcuMessage {
+            address: address.into(),
+            payload: payload.to_vec(),
+            raw_lines: Vec::new(),
+            cut_off: None,
+        }
+    }
+
+    /// A refusal is an answer too. Listed as a clear, it reads as a repair.
+    #[test]
+    fn a_module_that_refuses_a_clear_is_not_listed_as_cleared() {
+        let answers = ClearAnswers::of(&[
+            answer("7E8", &[0x44]),
+            answer("7E9", &[0x7F, 0x04, 0x22]),
+            answer("7EA", &[0x7F, 0x04, 0x78]),
+            // A stray reply to something else.
+            answer("7EB", &[0x41, 0x0C, 0x1A, 0xF8]),
+        ]);
+        assert_eq!(answers.cleared, ["7E8"]);
+        assert_eq!(answers.refused.len(), 1);
+        assert_eq!(answers.refused[0].0, "7E9");
+        assert_eq!(answers.pending, ["7EA"]);
+        let said = answers.refusals();
+        assert!(said.starts_with("7E9 refused ("), "{said}");
+        assert_eq!(answers.refused_json()[0]["address"], "7E9");
+    }
 
     /// A full scan must ask in the addressing the vehicle answers in.
     ///

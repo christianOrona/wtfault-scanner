@@ -770,7 +770,12 @@ export interface ProfilesResponse {
 }
 
 export interface ClearResult {
+  /** Modules that answered that their codes are erased. */
   cleared_by: string[];
+  /** Modules that answered no, and why. Their codes are still stored. */
+  refused_by: { address: string; reason: string; refused_because: string }[];
+  /** Modules that accepted and had not finished when the adapter stopped listening. */
+  unconfirmed: string[];
 }
 
 /** Readiness as reported by one module. */

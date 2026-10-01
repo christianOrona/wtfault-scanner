@@ -253,10 +253,11 @@ export function AdapterFitness({
             from once you ask for anything longer.
           </p>
           <p style={{ marginBottom: 0 }}>
-            Names worth researching for a Ford truck, from general reputation rather than any
-            testing here: OBDLink EX (wired) and OBDLink MX+ (wireless), both built on a
-            purpose-made interpreter chip with network switching. The community around Ford
-            diagnostics has settled on these; verify that for yourself before spending money.
+            Names worth researching, from general reputation rather than any testing here:
+            OBDLink EX (wired) and OBDLink MX+ (wireless), both built on a purpose-made
+            interpreter chip with network switching. They are widely recommended in diagnostics
+            communities, Ford's especially; verify that for your own vehicle before spending
+            money.
           </p>
         </div>
       </details>
