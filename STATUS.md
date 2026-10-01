@@ -297,9 +297,10 @@ Honest gaps, in the order they matter.
   machine without one the key stays in the settings file in plain text, and the
   Settings screen says so against that key rather than leaving anyone to assume
   otherwise.
-- **Nothing the app writes has ever been reported to anybody.** It keeps a log
-  and can assemble a problem report; moving one anywhere is still a person
-  copying text.
+- **Problem reports can be sent, but nowhere receives them yet.** Send posts
+  the report to an address compiled into the build, with identifiers withheld
+  by default, and the endpoint that receives it is in `apps/report-endpoint`.
+  No release has been given an address, because no endpoint is running.
 
 ## Permanently out of scope
 

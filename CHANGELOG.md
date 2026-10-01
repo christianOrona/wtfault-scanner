@@ -7,6 +7,11 @@ with the caveat that everything below 1.0 is allowed to move.
 
 ### Added
 
+- **Send a problem report.** In a build given a report address, the problem
+  report has a **Send** button that posts exactly the text on screen. VINs and
+  your user name are left out of it by default, and the screen says what was
+  taken out. If it cannot be sent, copy and save work as before. The
+  receiving endpoint is in `apps/report-endpoint`; see `docs/REPORTS.md`.
 - **A Guided tests tab.** Pick a test such as *Hold 2500 rpm* or *Warm idle*;
   it reads the car to see whether it is in the state the test needs, tells you
   the one thing to do next, can keep checking while you do it, and measures

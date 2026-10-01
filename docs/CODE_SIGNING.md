@@ -139,12 +139,21 @@ them has to be inferred.
   again.
 - **To an address the person enters** when importing a vehicle profile from a
   URL: a request for that file, over HTTPS, with nothing attached.
+- **A problem report, when the person presses Send**: the report text exactly
+  as it is shown on screen, the application's version and the operating
+  system, posted over HTTPS to the report address the build was given. By
+  default VINs are reduced to manufacturer and model year, and the person's
+  user name and home folder are taken out of file paths; the screen says what
+  was taken out, and the person can turn that off. Nothing is sent
+  automatically, and a build with no report address has no Send button. The
+  endpoint keeps the text, version, platform and time of arrival as one file,
+  and not the address it came from. See `docs/REPORTS.md`.
 
 ### What it never sends
 
-- No analytics, telemetry, crash reports or usage statistics, to anybody.
-- Problem reports are assembled on the computer and shown to the person, who
-  decides whether to copy or save them. The application does not send them.
+- No analytics, telemetry, automatic crash reports or usage statistics, to
+  anybody.
+- A problem report leaves only when the person presses Send, as above.
 - Vehicle as-built files, session history and recorded findings stay on the
   computer.
 

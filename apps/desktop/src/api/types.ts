@@ -935,6 +935,18 @@ export interface SupportReport {
   has_log: boolean;
   /** The whole report as plain text. */
   text: string;
+  /** Where Send posts it, when this build has an address. */
+  send_to: string | null;
+  /** What was taken out of `text`, when identifiers were withheld. */
+  withheld: string[];
+}
+
+/** What became of a Send. A failure is an answer, not an error. */
+export interface SendOutcome {
+  sent: boolean;
+  to: string | null;
+  reference: string | null;
+  reason: string | null;
 }
 
 export interface UpdateStatus {

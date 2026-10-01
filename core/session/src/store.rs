@@ -503,6 +503,21 @@ impl SessionStore {
         get_vehicle(&conn, id)
     }
 
+    /// Every VIN this database has recorded, for withholding them from text
+    /// that is about to leave the machine.
+    pub fn known_vins(&self) -> AimResult<Vec<String>> {
+        let conn = self.lock()?;
+        let mut stmt = conn
+            .prepare("SELECT DISTINCT vin FROM vehicles WHERE vin IS NOT NULL AND vin != ''")
+            .map_err(storage)?;
+        let rows = stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .map_err(storage)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(storage)?;
+        Ok(rows)
+    }
+
     /// Load the vehicle recorded with this VIN, if any.
     ///
     /// VINs are stored as the vehicle reports them, which is upper case, so the

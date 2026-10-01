@@ -20,10 +20,13 @@
 //!
 //! # What leaves the machine
 //!
-//! Nothing. The report is assembled here, shown to the person, and copied or
-//! saved by them. Logs carry VINs, fault codes and file paths that include a
-//! person's own name, so sending one anywhere is a separate decision with its
-//! own consent, and this module does not make it.
+//! Nothing, unless the person presses Send (#50). The report is assembled
+//! here and shown to them; they can copy it, save it, or send it to the
+//! address this build was given. Logs carry VINs, fault codes and file paths
+//! that include a person's own name, so identifiers can be withheld from the
+//! report before it is shown, and what is sent is exactly the text on screen.
+//! A build with no address offers no Send at all, and a send that fails
+//! changes nothing else.
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -220,6 +223,182 @@ pub struct SupportReport {
     /// rather than in the interface so that what is saved to a file and what is
     /// copied to a clipboard cannot drift apart.
     pub text: String,
+    /// Where Send would post it, when this build has an address.
+    pub send_to: Option<String>,
+    /// What was taken out of `text`, when identifiers were withheld.
+    pub withheld: Vec<String>,
+}
+
+/// Where Send posts a report, when this build has somewhere.
+///
+/// Set when the project builds a release (`AIM_REPORT_ENDPOINT` at compile
+/// time), or overridden at run time by the same variable, which is how a
+/// self-hosted endpoint or a test points the app elsewhere. HTTPS only, except
+/// to this machine.
+pub fn report_endpoint() -> Option<String> {
+    let configured = std::env::var("AIM_REPORT_ENDPOINT")
+        .ok()
+        .or_else(|| option_env!("AIM_REPORT_ENDPOINT").map(String::from))?;
+    let url = configured.trim().trim_end_matches('/').to_string();
+    let local = url.starts_with("http://127.0.0.1") || url.starts_with("http://localhost");
+    (url.starts_with("https://") || local).then_some(url)
+}
+
+/// The text with identifiers taken out, and a description of what was.
+///
+/// - Every VIN this app has recorded, and anything else shaped like a VIN with
+///   a valid check digit, becomes its anonymous form: manufacturer and model
+///   year kept, serial zeroed.
+/// - The home folder and the user name in file paths become `<home>` and
+///   `<user>`.
+///
+/// Fault codes and module addresses stay: they are what a report is for, and
+/// they describe a model of vehicle rather than a person.
+pub fn withhold_identifiers(text: &str, known_vins: &[String]) -> (String, Vec<String>) {
+    let mut out = text.to_string();
+    let mut vins_withheld = 0usize;
+
+    let mut vins: Vec<String> = known_vins.iter().map(|v| v.trim().to_ascii_uppercase()).collect();
+    for token in text.split(|c: char| !c.is_ascii_alphanumeric()) {
+        let upper = token.to_ascii_uppercase();
+        let valid = upper.len() == 17
+            && aim_decoders::vin::check_digit(&upper)
+                .is_ok_and(|d| upper.chars().nth(8) == Some(d));
+        if valid && !vins.contains(&upper) {
+            vins.push(upper);
+        }
+    }
+    for vin in vins.iter().filter(|v| v.len() == 17) {
+        let anonymous = aim_diagnostics::transcript::anonymous_vin(vin)
+            .unwrap_or_else(|_| String::from("[VIN withheld]"));
+        if anonymous == *vin {
+            continue;
+        }
+        let replaced = replace_ignoring_case(&out, vin, &anonymous);
+        if replaced != out {
+            vins_withheld += 1;
+            out = replaced;
+        }
+    }
+
+    let mut withheld = Vec::new();
+    if vins_withheld > 0 {
+        withheld.push(format!(
+            "{vins_withheld} VIN{} (manufacturer and year kept, serial zeroed)",
+            if vins_withheld == 1 { "" } else { "s" }
+        ));
+    }
+
+    let home = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).ok();
+    let user = std::env::var("USERNAME").or_else(|_| std::env::var("USER")).ok();
+    let before = out.clone();
+    if let Some(home) = home.filter(|h| h.len() > 3) {
+        out = replace_ignoring_case(&out, &home, "<home>");
+        out = replace_ignoring_case(&out, &home.replace('\\', "/"), "<home>");
+    }
+    if let Some(user) = user.filter(|u| u.len() >= 2) {
+        for (prefix, separator) in [("\\Users\\", ""), ("/Users/", ""), ("/home/", "")] {
+            out = replace_ignoring_case(
+                &out,
+                &format!("{prefix}{user}{separator}"),
+                &format!("{prefix}<user>{separator}"),
+            );
+        }
+    }
+    if out != before {
+        withheld.push(String::from("your home folder and user name in file paths"));
+    }
+
+    (out, withheld)
+}
+
+/// `haystack` with every case-insensitive occurrence of `needle` replaced.
+fn replace_ignoring_case(haystack: &str, needle: &str, with: &str) -> String {
+    if needle.is_empty() {
+        return haystack.to_string();
+    }
+    let lower_hay = haystack.to_ascii_lowercase();
+    let lower_needle = needle.to_ascii_lowercase();
+    let mut out = String::with_capacity(haystack.len());
+    let mut from = 0;
+    while let Some(at) = lower_hay[from..].find(&lower_needle) {
+        let start = from + at;
+        out.push_str(&haystack[from..start]);
+        out.push_str(with);
+        from = start + needle.len();
+    }
+    out.push_str(&haystack[from..]);
+    out
+}
+
+/// What became of a Send.
+#[derive(Debug, Clone, Serialize)]
+pub struct SendOutcome {
+    /// Whether the endpoint kept it.
+    pub sent: bool,
+    /// Where it was sent, or would have been.
+    pub to: Option<String>,
+    /// The reference the endpoint gave, to quote later.
+    pub reference: Option<String>,
+    /// Why it was not sent, when it was not. Never an error: a report that
+    /// cannot be sent can still be copied or saved.
+    pub reason: Option<String>,
+}
+
+/// The most text Send will post, matching what the endpoint accepts.
+pub const MAX_SEND_BYTES: usize = 256 * 1024;
+
+/// Post a report's text, exactly as shown, with the version and platform.
+pub async fn send(text: &str) -> SendOutcome {
+    let Some(to) = report_endpoint() else {
+        return SendOutcome {
+            sent: false,
+            to: None,
+            reference: None,
+            reason: Some(String::from(
+                "this build has no address to send reports to; copy or save it instead",
+            )),
+        };
+    };
+    let failed = |reason: String| SendOutcome {
+        sent: false,
+        to: Some(to.clone()),
+        reference: None,
+        reason: Some(reason),
+    };
+    if text.trim().is_empty() || text.len() > MAX_SEND_BYTES {
+        return failed(format!("a report must be between 1 and {MAX_SEND_BYTES} bytes"));
+    }
+
+    let body = serde_json::json!({
+        "version": crate::update::current_version(),
+        "platform": format!("{} {}", std::env::consts::OS, std::env::consts::ARCH),
+        "text": text,
+    });
+    let client =
+        match reqwest::Client::builder().timeout(std::time::Duration::from_secs(20)).build() {
+            Ok(c) => c,
+            Err(e) => return failed(format!("could not prepare the request: {e}")),
+        };
+    let response = match client.post(format!("{to}/v1/reports")).json(&body).send().await {
+        Ok(r) => r,
+        Err(e) => return failed(format!("could not reach {to}: {e}")),
+    };
+    let status = response.status();
+    let receipt: serde_json::Value = response.json().await.unwrap_or(serde_json::Value::Null);
+    let accepted = receipt["accepted"].as_bool().unwrap_or(false);
+    if status.is_success() && accepted {
+        SendOutcome {
+            sent: true,
+            to: Some(to.clone()),
+            reference: receipt["reference"].as_str().map(String::from),
+            reason: None,
+        }
+    } else {
+        let reason =
+            receipt["reason"].as_str().map(String::from).unwrap_or_else(|| status.to_string());
+        failed(format!("{to} did not keep it: {reason}"))
+    }
 }
 
 /// Assemble a report from what this machine knows.
@@ -267,6 +446,8 @@ pub fn report() -> SupportReport {
         log_file: log_file.map(|p| p.display().to_string()),
         has_log: !tail.is_empty(),
         text,
+        send_to: report_endpoint(),
+        withheld: Vec::new(),
     }
 }
 
@@ -340,6 +521,49 @@ mod tests {
         std::fs::write(&new, "new").expect("write");
 
         assert_eq!(newest_log(dir.path()), Some(new));
+    }
+
+    #[test]
+    fn a_known_vin_and_a_vin_shaped_one_are_both_withheld() {
+        let text = "connected 1FT7W2BT6KEC00001, later 1HGCM82633A004352 answered";
+        let (out, withheld) = withhold_identifiers(text, &[String::from("1FT7W2BT6KEC00001")]);
+        assert!(!out.contains("1FT7W2BT6KEC00001"), "{out}");
+        assert!(!out.contains("1HGCM82633A004352"), "check digit valid, so a VIN: {out}");
+        assert!(out.contains("1FT7W2BT"), "the manufacturer is kept: {out}");
+        assert_eq!(withheld.len(), 1, "{withheld:?}");
+        assert!(withheld[0].starts_with("2 VINs"), "{withheld:?}");
+    }
+
+    #[test]
+    fn a_seventeen_character_word_that_is_not_a_vin_stays() {
+        let text = "module 1FT7W2BT0KEC00001 is not a VIN: its check digit is wrong";
+        let (out, withheld) = withhold_identifiers(text, &[]);
+        assert_eq!(out, text);
+        assert!(withheld.is_empty());
+    }
+
+    #[test]
+    fn a_user_name_in_a_path_is_withheld_without_case_mattering() {
+        let user = std::env::var("USERNAME").or_else(|_| std::env::var("USER")).ok();
+        let Some(user) = user.filter(|u| u.len() >= 2) else { return };
+        let text = format!("log at C:\\Users\\{}\\AppData and /home/{user}/x", user.to_uppercase());
+        let (out, withheld) = withhold_identifiers(&text, &[]);
+        assert!(!out.to_lowercase().contains(&format!("users\\{}", user.to_lowercase())), "{out}");
+        assert!(!out.contains(&format!("/home/{user}/")), "{out}");
+        assert!(!withheld.is_empty());
+    }
+
+    #[test]
+    fn an_endpoint_must_be_https_unless_it_is_this_machine() {
+        // Read through the same function the app uses; the variable is set
+        // and cleared within this test only.
+        std::env::set_var("AIM_REPORT_ENDPOINT", "http://example.com");
+        assert_eq!(report_endpoint(), None);
+        std::env::set_var("AIM_REPORT_ENDPOINT", "https://reports.example.com/");
+        assert_eq!(report_endpoint().as_deref(), Some("https://reports.example.com"));
+        std::env::set_var("AIM_REPORT_ENDPOINT", "http://127.0.0.1:8790");
+        assert_eq!(report_endpoint().as_deref(), Some("http://127.0.0.1:8790"));
+        std::env::remove_var("AIM_REPORT_ENDPOINT");
     }
 
     #[test]

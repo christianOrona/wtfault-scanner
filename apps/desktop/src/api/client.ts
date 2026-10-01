@@ -10,6 +10,7 @@
 // a diagnostic outcome with evidence attached, and it comes back as a value.
 
 import type {
+  SendOutcome,
   ProcedureCheck, ProcedureInfo, ProcedureMeasurement,
   AdapterStatus, CapabilitiesResponse, ConnectData, DtcData, FreezeFrameData,
   Health, IdentifyData, Measurement, ModuleIdentity, ModuleRecord, PortsResponse,
@@ -140,7 +141,11 @@ export const api = {
     request<VehicleKnowledge>(vin ? `/vehicles/knowledge?vin=${enc(vin)}` : "/vehicles/knowledge"),
   /** What this machine knows about how the app is running, and how the last run
    *  ended. Reads local state; sends nothing anywhere. */
-  supportReport: () => request<SupportReport>("/support/report"),
+  /** The problem report. With `withhold`, VINs and the user's name are taken out. */
+  supportReport: (withhold = false) =>
+    request<SupportReport>(`/support/report${withhold ? "?withhold=true" : ""}`),
+  /** Send the report text, exactly as shown, to the address this build has. */
+  supportSend: (text: string) => post<SendOutcome>("/support/send", { text }),
   /** Open the log folder in the desktop's own file manager. */
   supportReveal: () => post<{ opened: string }>("/support/reveal", {}),
   exportFile: (body: { filename: string; content: string }) =>

@@ -1,0 +1,28 @@
+[package]
+name = "aim-report-endpoint"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Receives problem reports the desktop app sends, and keeps them as files."
+
+[lib]
+name = "aim_report_endpoint"
+path = "src/lib.rs"
+
+[[bin]]
+name = "aim-report-endpoint"
+path = "src/main.rs"
+
+[dependencies]
+axum = "0.8.7"
+clap = { version = "4.5.53", features = ["derive"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+tokio = { version = "1.49.0", features = ["macros", "rt-multi-thread", "net", "time", "sync", "fs"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
+
+[dev-dependencies]
+tempfile = "3.24.0"
+tower = { version = "0.5", features = ["util"] }

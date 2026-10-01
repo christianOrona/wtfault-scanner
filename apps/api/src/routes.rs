@@ -92,6 +92,7 @@ pub fn router(state: AppState) -> Router {
         // ---- reporting a problem ----
         .route("/api/v1/support/report", get(support_report))
         .route("/api/v1/support/reveal", post(support_reveal))
+        .route("/api/v1/support/send", post(support_send))
         .route("/api/v1/modules/{key}/freeze-frame", get(freeze_frame))
         .route("/api/v1/modules/{key}/tests/{test_id}/run", post(run_module_test))
         // ---- sessions ----
@@ -1541,8 +1542,43 @@ async fn compare_to_factory(State(state): State<AppState>) -> ApiResult<Json<Too
 ///
 /// A read: it assembles what this machine already knows and sends nothing
 /// anywhere. What happens to the text afterwards is the person's decision.
-async fn support_report() -> Json<Value> {
-    Json(serde_json::to_value(crate::support::report()).unwrap_or(Value::Null))
+async fn support_report(
+    State(state): State<AppState>,
+    Query(q): Query<SupportReportQuery>,
+) -> Json<Value> {
+    let mut report = crate::support::report();
+    if q.withhold {
+        let vins = state.store.known_vins().unwrap_or_default();
+        let (text, withheld) = crate::support::withhold_identifiers(&report.text, &vins);
+        report.text = text;
+        report.withheld = withheld;
+    }
+    Json(serde_json::to_value(report).unwrap_or(Value::Null))
+}
+
+/// How a problem report is assembled.
+#[derive(Debug, Deserialize)]
+struct SupportReportQuery {
+    /// Take identifiers out of the text before it is shown. Off unless asked,
+    /// so a copy saved for the person's own use keeps everything.
+    #[serde(default)]
+    withhold: bool,
+}
+
+/// What Send posts: the text exactly as the person saw it.
+#[derive(Debug, Deserialize)]
+struct SupportSendBody {
+    text: String,
+}
+
+/// Send a problem report to the address this build was given (#50).
+///
+/// Posts the text it is handed, which is the text on screen, so what leaves
+/// is what was read. A failure is an answer, never an error: the report can
+/// still be copied or saved.
+async fn support_send(Json(body): Json<SupportSendBody>) -> Json<Value> {
+    let outcome = crate::support::send(&body.text).await;
+    Json(serde_json::to_value(outcome).unwrap_or(Value::Null))
 }
 
 /// Open the log folder in the desktop's own file manager.

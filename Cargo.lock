@@ -50,6 +50,7 @@ dependencies = [
  "aim-decoders",
  "aim-diagnostics",
  "aim-protocols",
+ "aim-report-endpoint",
  "aim-safety",
  "aim-session",
  "aim-simulator",
@@ -109,6 +110,21 @@ dependencies = [
  "aim-types",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "aim-report-endpoint"
+version = "0.5.0"
+dependencies = [
+ "axum",
+ "clap",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

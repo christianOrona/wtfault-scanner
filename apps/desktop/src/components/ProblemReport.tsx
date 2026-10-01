@@ -5,10 +5,11 @@
 // for and nothing to fill in: the report is already written, and the three
 // buttons are copy it, save it, and show me the folder.
 //
-// Nothing is sent anywhere. A log carries VINs, fault codes and file paths with
-// somebody's own name in them, so it travels only when a person decides to move
-// it themselves. Sending one to a service the project runs is a real feature and
-// a separate decision, and it is not made here.
+// Nothing is sent unless the person presses Send, and Send only exists in a
+// build that was given somewhere to send to (#50). A log carries VINs, fault
+// codes and file paths with somebody's own name in them, so identifiers are
+// withheld by default: the text on screen is the text that is copied, saved or
+// sent, and the box above it says what was taken out.
 //
 // The banner is the other half. A run that freezes or is killed cannot report
 // itself while it is happening — the only moment that failure can be noticed is
@@ -38,10 +39,54 @@ type Said = { kind: "idle" } | { kind: "done"; message: string } | { kind: "fail
  */
 export function ProblemReportPanel({ report }: { report: SupportReport }) {
   const [said, setSaid] = useState<Said>({ kind: "idle" });
+  const [withhold, setWithhold] = useState(true);
+  const [shown, setShown] = useState<SupportReport>(report);
+  const [sending, setSending] = useState(false);
+  const [sentTo, setSentTo] = useState<string | null>(null);
+
+  // The text is assembled by the core either way, so what is shown, copied,
+  // saved and sent is one string rather than four.
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .supportReport(withhold)
+      .then((r) => {
+        if (!cancelled) setShown(r);
+      })
+      .catch(() => {
+        if (!cancelled) setShown(report);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [withhold, report]);
+
+  const send = useCallback(async () => {
+    setSending(true);
+    try {
+      const outcome = await api.supportSend(shown.text);
+      if (outcome.sent) setSentTo(outcome.to);
+      setSaid(
+        outcome.sent
+          ? {
+              kind: "done",
+              message: `Sent${outcome.reference ? `, reference ${outcome.reference}` : ""}. Thank you.`,
+            }
+          : { kind: "failed", message: `Not sent: ${outcome.reason ?? "unknown reason"}. You can still copy or save it.` },
+      );
+    } catch (e) {
+      setSaid({
+        kind: "failed",
+        message: `Not sent: ${e instanceof Error ? e.message : "the app could not try"}. You can still copy or save it.`,
+      });
+    } finally {
+      setSending(false);
+    }
+  }, [shown.text]);
 
   const copy = useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(report.text);
+      await navigator.clipboard.writeText(shown.text);
       setSaid({ kind: "done", message: "Copied. Paste it wherever you need it." });
     } catch {
       // A webview is not a browser and the clipboard can simply be unavailable.
@@ -52,11 +97,11 @@ export function ProblemReportPanel({ report }: { report: SupportReport }) {
         message: "Could not reach the clipboard. Select the text below and copy it.",
       });
     }
-  }, [report.text]);
+  }, [shown.text]);
 
   const save = useCallback(async () => {
     try {
-      const saved = await api.exportFile({ filename: reportFilename(), content: report.text });
+      const saved = await api.exportFile({ filename: reportFilename(), content: shown.text });
       setSaid({ kind: "done", message: `Saved to ${saved.path}` });
     } catch (e) {
       setSaid({
@@ -64,7 +109,7 @@ export function ProblemReportPanel({ report }: { report: SupportReport }) {
         message: e instanceof Error ? e.message : "could not save the report",
       });
     }
-  }, [report.text]);
+  }, [shown.text]);
 
   const reveal = useCallback(async () => {
     try {
@@ -94,8 +139,25 @@ export function ProblemReportPanel({ report }: { report: SupportReport }) {
         )}
       </div>
 
+      <label className="row" style={{ gap: 6, fontSize: 12 }}>
+        <input type="checkbox" checked={withhold} onChange={(e) => setWithhold(e.target.checked)} />
+        Leave out what identifies you or your vehicle
+      </label>
+      {withhold && (
+        <div className="faint" style={{ fontSize: 11 }}>
+          {shown.withheld.length > 0
+            ? `Taken out: ${shown.withheld.join("; ")}.`
+            : "Nothing identifying was found in this report."}
+        </div>
+      )}
+
       <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
-        <button className="primary" onClick={copy}>
+        {shown.send_to && (
+          <button className="primary" onClick={() => void send()} disabled={sending}>
+            {sending ? "Sending…" : `Send to ${new URL(shown.send_to).host}`}
+          </button>
+        )}
+        <button className={shown.send_to ? undefined : "primary"} onClick={copy}>
           Copy report
         </button>
         <button onClick={save}>Save to a file</button>
@@ -110,11 +172,14 @@ export function ProblemReportPanel({ report }: { report: SupportReport }) {
 
       {/* Monospace here is right rather than lazy: this is log output, and the
           column alignment is part of reading it. */}
-      <pre className="report-text">{report.text}</pre>
+      <pre className="report-text">{shown.text}</pre>
 
       <p className="faint" style={{ fontSize: 11, margin: 0 }}>
-        Nothing above has been sent anywhere. It is assembled on this machine and
-        goes no further unless you send it.
+        {sentTo
+          ? `This text was sent to ${sentTo}. Nothing else was.`
+          : shown.send_to
+          ? `Nothing above has been sent anywhere. Send posts exactly this text, with the app's version and your operating system, to ${shown.send_to}, and nothing else.`
+          : "Nothing above has been sent anywhere. It is assembled on this machine and goes no further unless you send it."}
       </p>
     </div>
   );
