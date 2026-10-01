@@ -86,6 +86,11 @@ the laptop.
 
 ## No car needed, but needs you
 
+- **Sessions already recorded on another make (#59).** If the app's database
+  holds a session from the Odyssey (or any non-Ford), it can become a replay
+  without another visit: `scripts\export-replay.ps1` lists every session, and
+  exporting one is the same as above. Each one makes CI fail when a change
+  makes that vehicle discover less.
 - **OpenRouter (#65).** *Settings* → add OpenRouter with a free key, leave
   the model on *Automatic*, press *Test*. Then run an inspection, against the
   simulator if you like (`scripts\dev-core.ps1`). Done when it reaches a

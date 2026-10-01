@@ -814,7 +814,8 @@ export interface UdsFault {
 }
 
 export interface ScannedModule {
-  request_address: string;
+  /** Null on a pre-CAN vehicle, where modules are not addressed one at a time. */
+  request_address: string | null;
   address: string;
   name: string;
   /** True for the legislated emissions block a code reader can also see. */
