@@ -75,3 +75,52 @@ fn reading_the_module_on_its_own_keeps_the_codes_that_arrived_too() {
     assert!(warned.contains(&"fault_list_cut_off"), "{warned:?}");
     assert!(!warned.contains(&"module_did_not_report_codes"), "it did answer: {warned:?}");
 }
+
+/// Two visits in one database: the first reads 768's whole list, the second
+/// loses a frame of it. The faults the second never received are not called
+/// gone when the visits are compared.
+#[test]
+fn a_comparison_does_not_call_codes_that_never_arrived_gone() {
+    use aim_simulator::{ScenarioId, SimulatedTransport};
+
+    let store = SessionStore::open_in_memory().unwrap();
+    let decoders = Arc::new(DecoderSet::generic_obd().unwrap());
+    let start = |transport: Box<dyn aim_transport::Transport>| {
+        let adapter: Box<dyn DiagnosticAdapter> =
+            Box::new(Elm327Adapter::new(transport, Elm327Config::fast()));
+        let mut service = DiagnosticService::start(
+            adapter,
+            store.clone(),
+            decoders.clone(),
+            SafetyGate::phase1(),
+            None,
+        )
+        .unwrap();
+        assert!(service.connect(USER).success);
+        assert!(service.scan_modules(USER).success);
+        assert!(service.scan_all_modules(USER).success);
+        service.session_id().clone()
+    };
+
+    let whole = start(Box::new(SimulatedTransport::new(ScenarioId::Healthy)));
+
+    // The middle frame lost: what arrived is the first frame, no whole record.
+    let lost = "< 768 21 09 C1 21 87 08 9C 09\n";
+    assert!(RECORDED.contains(lost));
+    let text = RECORDED.replace(lost, "");
+    let replay =
+        ReplayTransport::new(Transcript::parse(&text).unwrap(), ReplayMode::Lookup, "lost");
+    let cut = start(Box::new(replay));
+
+    let comparison = aim_session::compare_sessions(&store, &whole, &cut).unwrap();
+    let change = |code: &str| {
+        comparison
+            .faults
+            .iter()
+            .find(|f| f.code == code)
+            .unwrap_or_else(|| panic!("{code} in {:?}", comparison.faults))
+            .change
+    };
+    assert_eq!(change("C0035-00"), aim_session::FaultChange::NotReceived);
+    assert_eq!(change("U0121-87"), aim_session::FaultChange::NotReceived);
+}

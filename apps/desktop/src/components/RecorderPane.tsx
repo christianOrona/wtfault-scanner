@@ -133,7 +133,7 @@ export function RecorderPane({
 function group(e: SessionEvent): Filter {
   const k = e.kind.kind;
   if (k.startsWith("adapter")) return "adapter";
-  if (k === "dtc_read") return "dtc";
+  if (k === "dtc_read" || k === "fault_list_cut_off") return "dtc";
   if (k === "measurement_recorded") return "measurement";
   if (k === "module_discovered") return "module";
   if (k === "safety_decision") return "safety";
@@ -178,6 +178,13 @@ function describe(e: SessionEvent): React.ReactNode {
       return <span>{String(k.module_key)} at {String(k.address)}</span>;
     case "dtc_read":
       return <span>{String(k.module_key)}  {String(k.code)}  {String(k.status)}</span>;
+    case "fault_list_cut_off":
+      return (
+        <span>
+          {String(k.module_key)}  fault list cut off: {String(k.received)} of{" "}
+          {String(k.announced)} bytes
+        </span>
+      );
     case "measurement_recorded":
       return (
         <span>

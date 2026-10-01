@@ -682,8 +682,15 @@ pub fn plan_change(
         .filter(|c| !c.passed)
         .all(|c| c.id == "mapping_known" || c.id == "security_gateway");
 
+    // A listed gateway is settled by measuring the owning module's gate,
+    // whatever the mapping's own standing, so it is offered for any mapping
+    // the probe can reach.
+    let gateway_would_unblock = checks.iter().any(|c| c.id == "security_gateway" && !c.passed)
+        && f.mapping.as_ref().and_then(|m| m.as_data_identifier()).is_some();
+
     let mut plan = finish(request, Some(f), checks);
-    plan.needs_write_gate_probe = gate_would_unblock && only_the_gate && !plan.can_apply;
+    plan.needs_write_gate_probe =
+        (gate_would_unblock || gateway_would_unblock) && only_the_gate && !plan.can_apply;
     // A write-verified feature is a known operation, and a verified location
     // with an unmeasured write is a first attempt at a measured thing. Only an
     // unverified location is a guess the vehicle has to settle.
@@ -1188,6 +1195,30 @@ mod first_write {
 
         assert!(check(&plan, "security_gateway").passed);
         assert!(check(&plan, "mapping_known").passed);
+    }
+
+    /// A setting already known to write still waits on the gateway, and is
+    /// still offered the measurement that settles it.
+    #[test]
+    fn a_write_verified_setting_behind_a_listed_gateway_is_offered_the_probe() {
+        let f = feature(RiskClass::Convenience, did_mapping(), VerificationStatus::Verified);
+        assert!(f.write_verification.is_some(), "the fixture is write-verified");
+        let gateway = jeep_gateway();
+
+        let modules = vec!["DDM_740".to_string()];
+        let mut ctx = perfect_context(&modules);
+        ctx.max_level = aim_safety::MAX_ENABLED_LEVEL;
+        let mut caps = AdapterCapabilities::unknown(aim_types::TransportKind::Usb);
+        caps.supports_transmit = true;
+        caps.multiple_can_buses = true;
+        caps.supports_long_messages = true;
+        ctx.adapter = Some(&caps);
+        ctx.gateway = Some(&gateway);
+        let plan = plan_change(&request(), Some(&f), &ctx);
+
+        assert!(!plan.can_apply);
+        assert!(!check(&plan, "security_gateway").passed);
+        assert!(plan.needs_write_gate_probe, "{:?}", plan.checks);
     }
 
     /// No listing, no row: "no gateway" is not something this build measured.

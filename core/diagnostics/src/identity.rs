@@ -480,6 +480,18 @@ impl VehicleIdentity {
         self.field(name).and_then(IdentityField::settled)
     }
 
+    /// Every value proposed for a field, settled or not.
+    ///
+    /// For a question every candidate can answer the same way. A 2020 Jeep is
+    /// "Stellantis / FCA US" by its VIN and "JEEP" by vPIC, which contests the
+    /// make; both are makes with a gateway, and asking only a settled make
+    /// would say nothing about it.
+    pub fn candidates(&self, name: &str) -> Vec<&str> {
+        self.field(name)
+            .map(|f| f.candidates.iter().map(|c| c.value.as_str()).collect())
+            .unwrap_or_default()
+    }
+
     /// Every field two sources disagreed about.
     ///
     /// The thing a caller should check before acting on an identity. An empty

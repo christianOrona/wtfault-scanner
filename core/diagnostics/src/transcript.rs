@@ -100,17 +100,41 @@ pub fn redact_vin(transcript: &str, vin: &str, replacement: &str) -> String {
     lines.join("\n")
 }
 
+/// Replace `vin` with its anonymous form throughout a transcript, and refuse
+/// if any trace of it is left.
+///
+/// The one way a transcript is anonymised, for the API's export and for the
+/// fixture tool alike, so a fix to one cannot miss the other.
+pub fn anonymise(transcript: &str, vin: &str) -> AimResult<String> {
+    let anonymous = anonymous_vin(vin)?;
+    let text = redact_vin(transcript, vin, &anonymous);
+    match vin_residue(&text, vin) {
+        Some(residue) => Err(aim_types::AimError::new(
+            aim_types::ErrorCode::PreconditionFailed,
+            format!("the transcript was not anonymised: {residue} after replacing it"),
+        )),
+        None => Ok(text),
+    }
+}
+
+/// The most bytes allowed between two characters of a VIN that still count as
+/// the VIN, for [`vin_residue`]. A non-CAN reply repeats its header and the
+/// service bytes on every line, which is six bytes on J1850.
+const VIN_MAX_GAP: usize = 8;
+
 /// Where a real VIN still shows in a transcript meant to have lost it, or
 /// `None` when it shows nowhere this can look.
 ///
 /// Checked after [`redact_vin`] and before a transcript leaves the machine it
-/// was recorded on. Deliberately cruder than the redaction: it looks for the
-/// VIN as text, and for its serial number (the part the anonymous VIN zeroes)
-/// in every reply's bytes, both run together and per module, whatever the
-/// framing. A reply layout the redaction does not understand is then a refusal
-/// to export rather than a VIN in a public fixture. It can refuse a clean
-/// transcript whose bytes happen to spell the serial, which is the cheap way
-/// to be wrong.
+/// was recorded on. Deliberately cruder than the redaction and independent of
+/// it: it looks for the VIN as text; for its serial number (the part the
+/// anonymous VIN zeroes) in the reply bytes, run together and per module; and
+/// for all seventeen characters in order with a few bytes between each, which
+/// is how a VIN looks when every line of a non-CAN reply repeats its header.
+/// Lines printed without spaces are split into bytes too. A reply layout the
+/// redaction does not understand is then a refusal to export rather than a VIN
+/// in a public fixture. It can refuse a clean transcript whose bytes happen to
+/// spell the serial, which is the cheap way to be wrong.
 pub fn vin_residue(transcript: &str, vin: &str) -> Option<String> {
     let vin = vin.trim().to_ascii_uppercase();
     if vin.len() != 17 {
@@ -125,18 +149,7 @@ pub fn vin_residue(transcript: &str, vin: &str) -> Option<String> {
     let mut by_address: BTreeMap<String, Vec<u8>> = BTreeMap::new();
     for line in transcript.lines() {
         let Some(reply) = line.strip_prefix("< ") else { continue };
-        let mut tokens = reply.split_whitespace().peekable();
-        let address = tokens
-            .peek()
-            .filter(|t| matches!(t.len(), 3 | 8) && t.chars().all(|c| c.is_ascii_hexdigit()))
-            .map(|t| t.to_ascii_uppercase());
-        if address.is_some() {
-            tokens.next();
-        }
-        let bytes: Vec<u8> = tokens
-            .filter(|t| t.len() == 2)
-            .filter_map(|t| u8::from_str_radix(t, 16).ok())
-            .collect();
+        let (address, bytes) = reply_bytes(reply);
         everything.extend_from_slice(&bytes);
         by_address.entry(address.unwrap_or_default()).or_default().extend_from_slice(&bytes);
     }
@@ -145,10 +158,73 @@ pub fn vin_residue(transcript: &str, vin: &str) -> Option<String> {
     if spells_serial(&everything) {
         return Some(format!("the serial of {vin} appears in the reply bytes"));
     }
-    by_address
+    if let Some((address, _)) = by_address.iter().find(|(_, bytes)| spells_serial(bytes)) {
+        return Some(format!("the serial of {vin} appears in the replies from {address}"));
+    }
+    spelled_with_gaps(&everything, vin.as_bytes(), VIN_MAX_GAP)
+        .then(|| format!("the VIN {vin} appears in the reply bytes, split across lines"))
+}
+
+/// The address a reply line names, if it names one, and its data bytes.
+///
+/// Spaced lines (`7E8 10 14 49 02 ...`) give their two-digit tokens. A line
+/// printed without spaces (`7E8101449020131...`) is split into pairs, after
+/// its 11-bit address when its length is odd.
+fn reply_bytes(reply: &str) -> (Option<String>, Vec<u8>) {
+    let tokens: Vec<&str> = reply.split_whitespace().collect();
+    let hex = |t: &str| t.chars().all(|c| c.is_ascii_hexdigit());
+    if let [only] = tokens.as_slice() {
+        if only.len() > 3 && hex(only) {
+            let (address, data) = if only.len() % 2 == 1 { only.split_at(3) } else { ("", *only) };
+            let bytes = data
+                .as_bytes()
+                .chunks(2)
+                .filter_map(|pair| std::str::from_utf8(pair).ok())
+                .filter_map(|pair| u8::from_str_radix(pair, 16).ok())
+                .collect();
+            let address = (!address.is_empty()).then(|| address.to_ascii_uppercase());
+            return (address, bytes);
+        }
+    }
+    let mut rest = tokens.as_slice();
+    let mut address = None;
+    if let Some(first) = rest.first().filter(|t| matches!(t.len(), 3 | 8) && hex(t)) {
+        address = Some(first.to_ascii_uppercase());
+        rest = &rest[1..];
+    }
+    let bytes = rest
         .iter()
-        .find(|(_, bytes)| spells_serial(bytes))
-        .map(|(address, _)| format!("the serial of {vin} appears in the replies from {address}"))
+        .filter(|t| t.len() == 2)
+        .filter_map(|t| u8::from_str_radix(t, 16).ok())
+        .collect();
+    (address, bytes)
+}
+
+/// Whether `needle` appears in `haystack` in order, with at most `max_gap`
+/// other bytes between each of its bytes and the next.
+fn spelled_with_gaps(haystack: &[u8], needle: &[u8], max_gap: usize) -> bool {
+    let Some((&first, rest)) = needle.split_first() else { return false };
+    // Positions where the needle so far could have ended.
+    let mut ends: Vec<usize> =
+        haystack.iter().enumerate().filter(|(_, &b)| b == first).map(|(i, _)| i).collect();
+    for &wanted in rest {
+        let mut next = Vec::new();
+        for &end in &ends {
+            let window = haystack.iter().enumerate().skip(end + 1).take(max_gap + 1);
+            for (i, &b) in window {
+                if b == wanted && next.last() != Some(&i) {
+                    next.push(i);
+                }
+            }
+        }
+        next.sort_unstable();
+        next.dedup();
+        if next.is_empty() {
+            return false;
+        }
+        ends = next;
+    }
+    true
 }
 
 /// One reply line from an adapter with headers on: address, ISO-TP PCI, data.
@@ -309,5 +385,32 @@ mod tests {
     #[test]
     fn a_vin_as_text_is_residue() {
         assert!(vin_residue("# notes on 1ft7w2bt6kec00001\n", VIN).is_some());
+    }
+
+    #[test]
+    fn a_vin_split_by_repeated_non_can_headers_is_found() {
+        // J1850 with headers on: every line repeats `48 6B 10 49 02 nn`.
+        let text = "> 0902\n< 48 6B 10 49 02 01 00 00 00 31\n< 48 6B 10 49 02 02 46 54 37 57\n\
+                    < 48 6B 10 49 02 03 32 42 54 36\n< 48 6B 10 49 02 04 4B 45 43 30\n\
+                    < 48 6B 10 49 02 05 30 30 30 31\n";
+        assert_eq!(redact_vin(text, VIN, NEW), text, "the redaction does not parse this");
+        let found = vin_residue(text, VIN).expect("found anyway");
+        assert!(found.contains("split across lines"), "{found}");
+        assert!(anonymise(text, VIN).is_err(), "and the export is refused");
+    }
+
+    #[test]
+    fn a_vin_on_a_line_printed_without_spaces_is_found() {
+        let text =
+            "> 0902\n< 7E8101449020131465437\n< 7E82157324254364B45\n< 7E8224330303030310000\n";
+        assert!(vin_residue(text, VIN).is_some());
+    }
+
+    #[test]
+    fn anonymise_replaces_the_vin_or_refuses() {
+        let text = "> 0902\n< 7E8 10 14 49 02 01 31 46 54\n< 7E8 21 37 57 32 42 54 36 4B\n< 7E8 22 45 43 30 30 30 30 31\n";
+        let out = anonymise(text, VIN).unwrap();
+        assert_eq!(vin_residue(&out, VIN), None);
+        assert!(!out.contains("30 30 30 31"), "{out}");
     }
 }
