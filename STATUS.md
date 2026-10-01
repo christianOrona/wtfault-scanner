@@ -65,7 +65,15 @@ Across all sessions: `stopped` 611, `not_understood` 264, `timeout` 345,
 `bus_error` 73, `unable_to_connect` 12. `stopped` in particular is high enough
 to be worth understanding rather than absorbing.
 
-**Open.** Needs investigation before it is worth acting on.
+**Not seen in the latest session.** The `STOPPED` replies were traced to the
+address sweep sending the next header while the adapter was still listening
+for the last probe, and the adapter now resends the command it never got. The
+2026-09-28 full scan of the same truck, now a CI replay fixture, has 326
+header changes and no `STOPPED` at all, no bus errors, one `?` (the
+multi-PID request a v1.4b clone does not support) and two `BUFFER FULL`.
+Whether the resend or the bus-selection fix ended them cannot be told apart
+from one session. Timeouts are not visible in a transcript, so that count is
+unmeasured.
 
 ### Protocol detection accepted a failed bus init
 
