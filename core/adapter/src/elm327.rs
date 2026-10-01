@@ -552,7 +552,7 @@ impl Elm327Adapter {
         // There used to be an `ATPB` probe here for everything else. It was
         // wrong twice over. It wrote programmable protocol parameters into a
         // device on every single connect, to establish a capability nothing in
-        // this app uses yet - the second bus is detected and never selected.
+        // this app used then - the second bus was detected and never selected.
         // And it proved less than it appeared to: an ELM327 answering `OK` to a
         // parameter write has said the command parsed, not that a second bus
         // exists or that the cable reaches pins 3 and 11.
@@ -573,8 +573,8 @@ impl Elm327Adapter {
                  that can switch buses on command. That is not the same as being unable to reach \
                  one - some cables carry a physical HS-CAN/MS-CAN switch, which no adapter can \
                  report and no software can detect or move. If yours has one, the bus you are on \
-                 is whichever way the switch is set. Nothing in this build selects a second bus \
-                 yet, so it costs you nothing today",
+                 is whichever way the switch is set. Scans with this device cover that one bus; \
+                 modules on a second bus, often the body and comfort ones, are not reached",
             );
         }
 
