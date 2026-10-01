@@ -20,6 +20,7 @@ pub mod dtc;
 pub mod explain;
 pub mod expr;
 pub mod features;
+pub mod gateways;
 pub mod import;
 pub mod knowledge;
 pub mod modules;
@@ -73,6 +74,8 @@ pub struct DecoderSet {
     /// Module types by manufacturer part number, for modules that do not name
     /// themselves.
     pub module_names: modules::ModuleNames,
+    /// Security gateways, by make and model year.
+    pub gateways: gateways::GatewayCatalog,
 }
 
 impl DecoderSet {
@@ -87,6 +90,7 @@ impl DecoderSet {
             profiles: ProfileReport::default(),
             catalog: catalog::SignalCatalog::embedded(),
             module_names: modules::ModuleNames::ford()?,
+            gateways: gateways::GatewayCatalog::shipped()?,
         })
     }
 

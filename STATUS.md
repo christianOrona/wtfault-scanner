@@ -271,6 +271,10 @@ Honest gaps, in the order they matter.
   bit-rate command is not necessarily wired to pins 3 and 11, and nothing on the
   wire distinguishes "this vehicle has nothing there" from "this cable cannot
   hear it".
+- **Security gateways are known from a table, not measured.** One entry: the
+  FCA / Stellantis Secure Gateway, from public documentation. A listed vehicle
+  is told about it and its write plans say so; a module measured accepting
+  writes overrules the listing. No gateway vehicle has been connected.
 - **No configuration mapping can be obtained without a vehicle.** There is no
   open, redistributable dataset of as-built bit meanings for any manufacturer:
   OBDb documents signals rather than configuration, the one open Ford decoder

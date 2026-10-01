@@ -297,6 +297,8 @@ pub struct ChangeContext<'a> {
     /// a change made on this basis is reported as a first attempt rather than
     /// as a known-good operation.
     pub write_gate_open_modules: &'a [String],
+    /// The security gateway this vehicle is listed as having, if any.
+    pub gateway: Option<&'a aim_decoders::gateways::Gateway>,
 }
 
 /// The voltage below which no module write is attempted.
@@ -522,6 +524,32 @@ pub fn plan_change(
         ));
     }
 
+    // 3a. A security gateway, when the vehicle is listed as having one. Asked
+    //     only then: a row saying "no gateway" on every other vehicle would be
+    //     a claim this build has no measurement behind.
+    if let Some(g) =
+        ctx.gateway.filter(|g| g.blocks(aim_decoders::gateways::GatedOperation::WriteConfiguration))
+    {
+        if gate_measured_open(f, ctx) {
+            checks.push(Check::pass_with_detail(
+                "security_gateway",
+                "Is a security gateway in the way?",
+                "This vehicle is listed as having one, and the module that owns this setting \
+                 was measured accepting writes anyway, so it is not behind it.",
+            ));
+        } else {
+            checks.push(Check::fail(
+                "security_gateway",
+                "Is a security gateway in the way?",
+                format!(
+                    "{} Measuring the module's write gate writes nothing and settles whether \
+                     this module is actually behind it.",
+                    g.boundary()
+                ),
+            ));
+        }
+    }
+
     // 4. Can the adapter actually do it?
     let can_transmit = ctx.adapter.map(|a| a.supports_transmit).unwrap_or(false);
     if can_transmit {
@@ -647,7 +675,12 @@ pub fn plan_change(
                 f.risk,
                 aim_types::RiskClass::Cosmetic | aim_types::RiskClass::Convenience
             ));
-    let only_the_gate = checks.iter().filter(|c| !c.passed).all(|c| c.id == "mapping_known");
+    // A listed gateway is settled by the same measurement, so it does not
+    // stand in the way of offering it.
+    let only_the_gate = checks
+        .iter()
+        .filter(|c| !c.passed)
+        .all(|c| c.id == "mapping_known" || c.id == "security_gateway");
 
     let mut plan = finish(request, Some(f), checks);
     plan.needs_write_gate_probe = gate_would_unblock && only_the_gate && !plan.can_apply;
@@ -761,6 +794,7 @@ mod tests {
             // Empty by default so the deadlock this resolves stays visible in
             // tests: a first write is refused unless the gate was measured.
             write_gate_open_modules: &[],
+            gateway: None,
         }
     }
 
@@ -1097,6 +1131,72 @@ mod first_write {
         let detail = c.detail.as_ref().expect("a pass that needs reading still carries its reason");
         assert!(detail.contains("first attempt"), "{detail}");
         assert!(detail.contains("read back"), "{detail}");
+    }
+
+    fn jeep_gateway() -> aim_decoders::gateways::Gateway {
+        aim_decoders::gateways::GatewayCatalog::shipped()
+            .unwrap()
+            .for_vehicle("Jeep", Some(2020))
+            .cloned()
+            .expect("the shipped table lists FCA")
+    }
+
+    /// On a vehicle listed as having a security gateway, the plan says so in
+    /// the boundary's own words, and offers the measurement that settles it
+    /// rather than a way around it.
+    #[test]
+    fn a_listed_gateway_is_named_in_the_plan_and_the_probe_is_still_offered() {
+        let mut f = feature(RiskClass::Convenience, did_mapping(), VerificationStatus::Verified);
+        f.write_verification = None;
+        let gateway = jeep_gateway();
+
+        // Everything else passes, so the gateway and the unmeasured gate are
+        // the only things standing in the way.
+        let modules = vec!["DDM_740".to_string()];
+        let mut ctx = perfect_context(&modules);
+        ctx.max_level = aim_safety::MAX_ENABLED_LEVEL;
+        let mut caps = AdapterCapabilities::unknown(aim_types::TransportKind::Usb);
+        caps.supports_transmit = true;
+        caps.multiple_can_buses = true;
+        caps.supports_long_messages = true;
+        ctx.adapter = Some(&caps);
+        ctx.gateway = Some(&gateway);
+        let plan = plan_change(&request(), Some(&f), &ctx);
+
+        assert!(!plan.can_apply);
+        let c = check(&plan, "security_gateway");
+        assert!(!c.passed);
+        let detail = c.detail.as_deref().unwrap();
+        assert!(detail.starts_with("Gateway access required. Status: unavailable."), "{detail}");
+        assert!(plan.needs_write_gate_probe, "measuring settles it; nothing is bypassed");
+    }
+
+    /// A module measured accepting writes is not behind the gateway, whatever
+    /// the listing says. The measurement wins.
+    #[test]
+    fn a_measured_open_gate_overrules_the_gateway_listing() {
+        let mut f = feature(RiskClass::Convenience, did_mapping(), VerificationStatus::Verified);
+        f.write_verification = None;
+        let gateway = jeep_gateway();
+        let gates = vec![String::from("726")];
+
+        let modules: Vec<String> = Vec::new();
+        let mut ctx = perfect_context(&modules);
+        ctx.gateway = Some(&gateway);
+        ctx.write_gate_open_modules = &gates;
+        let plan = plan_change(&request(), Some(&f), &ctx);
+
+        assert!(check(&plan, "security_gateway").passed);
+        assert!(check(&plan, "mapping_known").passed);
+    }
+
+    /// No listing, no row: "no gateway" is not something this build measured.
+    #[test]
+    fn a_vehicle_with_no_listed_gateway_gets_no_gateway_row() {
+        let f = feature(RiskClass::Convenience, did_mapping(), VerificationStatus::Verified);
+        let modules: Vec<String> = Vec::new();
+        let plan = plan_change(&request(), Some(&f), &perfect_context(&modules));
+        assert!(plan.checks.iter().all(|c| c.id != "security_gateway"));
     }
 
     /// A gate measured on one module says nothing about another. A body module

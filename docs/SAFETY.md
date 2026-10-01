@@ -69,6 +69,8 @@ trusted from an earlier preview — the engine may have been started since.
 - The adapter can transmit and has not produced a truncated reply this session.
   A truncated read is the signature of an adapter mishandling multi-frame flow
   control, and configuration writes are multi-frame.
+- On a vehicle listed as having a security gateway, the owning module's write
+  gate measured open. See below.
 - Ignition on, engine off, vehicle stationary.
 - Battery at least **12.4 V**. Module writes that lose power partway through are
   the classic way to produce a control unit that no longer answers.
@@ -77,6 +79,25 @@ trusted from an earlier preview — the engine may have been started since.
 
 A failed check is reported as a specific question with a specific answer, not as
 "unavailable".
+
+## Security gateways are a boundary, not an obstacle
+
+Some manufacturers put a module between the diagnostic port and the networks
+that lets an unauthenticated tool read but not change anything. Those listed in
+`vehicle-profiles/gateways/gateways.yaml` are reported as what they are:
+
+```
+Gateway access required. Status: unavailable.
+Reason: ... blocks this operation for a tool that has not authenticated
+with the manufacturer.
+```
+
+When the vehicle is identified, in the write-gate probe's verdict, and as a
+check in every write plan. Access comes from the manufacturer's own
+authentication, and this build has none and will not imitate one: **there is
+no bypass, and one will not be added.** The listing is from public
+documentation, so a module measured accepting writes overrules it, and the
+probe that measures that writes nothing.
 
 ## A write is not believed until it is seen
 
