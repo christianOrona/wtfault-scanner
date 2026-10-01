@@ -1710,6 +1710,12 @@ impl DiagnosticAdapter for Elm327Adapter {
         // is the price of not reading any that did not.
         let lines = match reply.class {
             ResponseClass::Timeout => {
+                // Everything arrived and only the prompt was late: the whole
+                // message reassembles, so it is used as it is.
+                let whole = assemble_can(&reply.lines, self.spaces_enabled, self.protocol);
+                if let Some(messages) = whole.ok().filter(|m| !m.is_empty()) {
+                    return Ok(messages);
+                }
                 reply.lines.split_last().map(|(_, whole)| whole).unwrap_or_default()
             }
             _ => match reply.ok_lines() {
@@ -2007,6 +2013,9 @@ fn assemble_can_with(
     let mut receivers: BTreeMap<String, IsoTpReceiver> = BTreeMap::new();
     let mut raw: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut done: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+    // When keeping what arrived: streams that broke partway (a frame lost, so
+    // the next is out of sequence), as far as they got before the break.
+    let mut cut: BTreeMap<String, (Vec<u8>, crate::CutOff)> = BTreeMap::new();
 
     for line in lines {
         let (header, data) = match split_header_line(line, spaces, protocol) {
@@ -2016,22 +2025,44 @@ fn assemble_can_with(
         };
         // Validate the header is a real CAN id; this rejects stray text that
         // slipped past classification instead of treating it as a frame.
-        let id = CanId::parse_hex(&header)?;
-        let frame = CanFrame::new(id, data)?;
+        let frame = match CanId::parse_hex(&header).and_then(|id| CanFrame::new(id, data)) {
+            Ok(frame) => frame,
+            Err(_) if keep_partial => continue,
+            Err(e) => return Err(e),
+        };
         let address = frame.id.to_hex();
+        if cut.contains_key(&address) {
+            // Already broken; what follows the break belongs to nothing.
+            continue;
+        }
         raw.entry(address.clone()).or_default().push(line.clone());
 
-        let isotp = IsoTpFrame::parse(&frame.data)?;
+        let isotp = match IsoTpFrame::parse(&frame.data) {
+            Ok(isotp) => isotp,
+            Err(_) if keep_partial => continue,
+            Err(e) => return Err(e),
+        };
         let rx = receivers.entry(address.clone()).or_insert_with(|| {
             // Block size 0 / STmin 0: the adapter owns flow control, so the
             // values we would advertise are never transmitted.
             IsoTpReceiver::new(0, 0)
         });
-        match rx.feed(isotp)? {
-            ReceiveOutcome::Complete(payload) => {
+        // The receiver forgets a stream it rejects, so what it held is taken
+        // first when there is any chance of wanting it.
+        let before = keep_partial.then(|| rx.partial().map(|(b, n)| (b.to_vec(), n))).flatten();
+        match rx.feed(isotp) {
+            Ok(ReceiveOutcome::Complete(payload)) => {
                 done.insert(address, payload);
             }
-            ReceiveOutcome::NeedMore | ReceiveOutcome::SendFlowControl(_) => {}
+            Ok(ReceiveOutcome::NeedMore | ReceiveOutcome::SendFlowControl(_)) => {}
+            Err(e) if keep_partial => match before {
+                Some((received, announced)) => {
+                    let cut_off = crate::CutOff { announced, received: received.len() };
+                    cut.insert(address, (received, cut_off));
+                }
+                None => return Err(e),
+            },
+            Err(e) => return Err(e),
         }
     }
 
@@ -2039,9 +2070,8 @@ fn assemble_can_with(
     // truncated read, not a message. Report it rather than returning a partial
     // payload that would decode into a plausible-looking lie - unless the
     // caller asked for what arrived, in which case it is marked as cut off.
-    let mut cut: BTreeMap<String, (Vec<u8>, crate::CutOff)> = BTreeMap::new();
     for (address, rx) in &receivers {
-        if keep_partial && !done.contains_key(address) {
+        if keep_partial {
             if let Some((received, announced)) = rx.partial() {
                 let cut_off = crate::CutOff { announced, received: received.len() };
                 cut.insert(address.clone(), (received.to_vec(), cut_off));
@@ -2060,6 +2090,12 @@ fn assemble_can_with(
         }
     }
 
+    // A stream still in progress began after anything the same module
+    // finished, so it is the answer: a "response pending" reply followed by
+    // a list that was cut off is a cut-off list, not a refusal.
+    for address in cut.keys() {
+        done.remove(address);
+    }
     let complete = done.into_iter().map(|(address, payload)| (address, (payload, None)));
     let partial = cut.into_iter().map(|(address, (payload, c))| (address, (payload, Some(c))));
     let mut messages: Vec<EcuMessage> = complete
@@ -2333,6 +2369,42 @@ mod tests {
         )
         .unwrap();
         assert_eq!(msgs[0].cut_off, Some(crate::CutOff { announced: 15, received: 6 }));
+    }
+
+    /// A frame lost in the middle puts the next one out of sequence. What
+    /// arrived before the gap is kept, rather than the whole list.
+    #[test]
+    fn a_stream_broken_by_a_lost_frame_keeps_what_came_before_the_gap() {
+        let msgs = assemble_can_keeping_partial(
+            &lines(&[
+                "768 10 0F 59 02 FF 40 35 00",
+                "768 22 00 50 00 00 00 00 00", // 21 never arrived
+            ]),
+            true,
+            ObdProtocol::Iso15765Can11_500,
+        )
+        .unwrap();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].cut_off, Some(crate::CutOff { announced: 15, received: 6 }));
+        assert_eq!(msgs[0].payload, [0x59, 0x02, 0xFF, 0x40, 0x35, 0x00]);
+    }
+
+    /// "Response pending" and then a list that was cut off is a cut-off list.
+    #[test]
+    fn a_list_cut_off_after_response_pending_is_the_answer() {
+        let msgs = assemble_can_keeping_partial(
+            &lines(&[
+                "768 03 7F 19 78 00 00 00 00",
+                "768 10 0F 59 02 FF 40 35 00",
+                "768 21 09 C1 21 87 08 9C 09",
+            ]),
+            true,
+            ObdProtocol::Iso15765Can11_500,
+        )
+        .unwrap();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].payload[0], 0x59);
+        assert!(msgs[0].cut_off.is_some());
     }
 
     /// Without being asked, the same stream is still an error. Everything

@@ -105,6 +105,17 @@ pub enum EventKind {
         /// Status class.
         status: crate::DtcStatus,
     },
+    /// A module's fault list stopped before its end. The codes that arrived
+    /// are recorded as `DtcRead`; this says the list was not whole, so a code
+    /// missing from it is unknown rather than gone.
+    FaultListCutOff {
+        /// Module key.
+        module_key: String,
+        /// Bytes the module announced.
+        announced: usize,
+        /// Bytes that arrived.
+        received: usize,
+    },
     /// A signal was decoded.
     MeasurementRecorded {
         /// Module key.
@@ -196,6 +207,7 @@ impl EventKind {
             EventKind::VehicleIdentified { .. } => "vehicle_identified",
             EventKind::ModuleDiscovered { .. } => "module_discovered",
             EventKind::DtcRead { .. } => "dtc_read",
+            EventKind::FaultListCutOff { .. } => "fault_list_cut_off",
             EventKind::MeasurementRecorded { .. } => "measurement_recorded",
             EventKind::SafetyDecision { .. } => "safety_decision",
             EventKind::ToolInvoked { .. } => "tool_invoked",

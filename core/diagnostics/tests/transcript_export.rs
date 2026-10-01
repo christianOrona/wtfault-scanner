@@ -100,3 +100,21 @@ fn a_transcript_without_the_vin_is_unchanged() {
 ";
     assert_eq!(redact_vin(text, "1FT7W2BT6KEC00001", REPLACEMENT), text);
 }
+
+/// The residue check must not cry wolf on a real transcript, or a clean export
+/// from a real vehicle could never be made. 6,000 exchanges from a 2019 F-250:
+/// VINs sharing its manufacturer, model and year but not its serial are not
+/// found in it, and the anonymous VIN that is in it is.
+#[test]
+fn the_residue_check_finds_what_is_there_and_nothing_that_is_not() {
+    let text = include_str!("replays/2019-f250-full-scan.transcript");
+    let present = "1FT7W2BT5KE000000";
+    assert!(aim_diagnostics::transcript::vin_residue(text, present).is_some());
+
+    for serial in ["C12345", "D98765", "A00017", "E31415", "F27182"] {
+        let mut vin: Vec<char> = format!("1FT7W2BT0KE{serial}").chars().collect();
+        vin[8] = aim_decoders::vin::check_digit(&vin.iter().collect::<String>()).unwrap();
+        let vin: String = vin.into_iter().collect();
+        assert_eq!(aim_diagnostics::transcript::vin_residue(text, &vin), None, "{vin}");
+    }
+}

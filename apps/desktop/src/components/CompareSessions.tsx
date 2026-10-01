@@ -39,6 +39,7 @@ export function CompareSessions({ sessions }: { sessions: SessionSummary[] }) {
   const c = result?.comparison;
   const appeared = c?.faults.filter((f) => f.change === "appeared") ?? [];
   const gone = c?.faults.filter((f) => f.change === "gone") ?? [];
+  const notReceived = c?.faults.filter((f) => f.change === "not_received") ?? [];
   const notable = new Set(result?.notable_signals ?? []);
 
   const options = sessions.map((s) => (
@@ -122,6 +123,23 @@ export function CompareSessions({ sessions }: { sessions: SessionSummary[] }) {
                     <strong>{f.code}</strong> {f.description ?? ""}
                   </div>
                 ))}
+              </div>
+            </div>
+          )}
+
+          {notReceived.length > 0 && (
+            <div className="banner caution" style={{ marginTop: 12 }}>
+              <span className="b-code">not received</span>
+              <div>
+                {notReceived.map((f) => (
+                  <div key={f.code}>
+                    <strong>{f.code}</strong> {f.description ?? ""}
+                  </div>
+                ))}
+                <div className="explain" style={{ marginTop: 6 }}>
+                  The later scan only got part of this module's fault list, so whether these
+                  are still stored is not known. Not the same as gone: scan again to find out.
+                </div>
               </div>
             </div>
           )}

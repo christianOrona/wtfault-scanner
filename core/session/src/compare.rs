@@ -38,6 +38,10 @@ pub enum FaultChange {
     Gone,
     /// In both.
     Unchanged,
+    /// In the earlier scan, and not in the later one, whose read of that
+    /// module was cut off before its end. Whether it is still there is not
+    /// known; it is not the same as gone.
+    NotReceived,
 }
 
 /// One fault, and what happened to it.
@@ -143,7 +147,19 @@ pub fn compare_sessions(
         _ => None,
     };
 
-    let faults = compare_faults(&store.dtcs(before, None)?, &store.dtcs(after, None)?);
+    // Modules whose fault list the later scan only got part of, by the
+    // earlier scan's module ids, which is what an earlier fault carries.
+    let cut_in_after = cut_off_modules(store, after)?;
+    let cut_before_ids: std::collections::BTreeSet<String> = store
+        .modules(before)?
+        .into_iter()
+        .filter(|m| cut_in_after.contains(&m.module_key))
+        .map(|m| m.id.as_str().to_string())
+        .collect();
+    let faults =
+        compare_faults(&store.dtcs(before, None)?, &store.dtcs(after, None)?, |module_id| {
+            cut_before_ids.contains(module_id)
+        });
 
     let mut signals = compare_signals(
         &means(&store.measurements(before, None, 5_000)?),
@@ -189,7 +205,33 @@ fn same_fault(a: &str, b: &str) -> bool {
     a == b || ((!a.contains('-') || !b.contains('-')) && base(a) == base(b))
 }
 
-fn compare_faults(before: &[DtcRecord], after: &[DtcRecord]) -> Vec<FaultDelta> {
+/// Module keys whose fault list was cut off in a session.
+fn cut_off_modules(
+    store: &SessionStore,
+    session: &SessionId,
+) -> AimResult<std::collections::BTreeSet<String>> {
+    let mut keys = std::collections::BTreeSet::new();
+    let mut after_seq = 0;
+    loop {
+        let events = store.events_since(session, after_seq, 1000)?;
+        let Some(last) = events.last() else { break };
+        after_seq = last.seq;
+        for event in &events {
+            if let aim_types::EventKind::FaultListCutOff { module_key, .. } = &event.kind {
+                keys.insert(module_key.clone());
+            }
+        }
+    }
+    Ok(keys)
+}
+
+/// `cut_in_after` says, for an earlier fault's module id, whether the later
+/// read of that module was cut off.
+fn compare_faults(
+    before: &[DtcRecord],
+    after: &[DtcRecord],
+    cut_in_after: impl Fn(&str) -> bool,
+) -> Vec<FaultDelta> {
     let key = |d: &DtcRecord| d.code.clone();
     let old: BTreeMap<String, &DtcRecord> = before.iter().map(|d| (key(d), d)).collect();
     let new: BTreeMap<String, &DtcRecord> = after.iter().map(|d| (key(d), d)).collect();
@@ -216,7 +258,11 @@ fn compare_faults(before: &[DtcRecord], after: &[DtcRecord]) -> Vec<FaultDelta> 
                 code: code.clone(),
                 module: d.module_id.as_str().to_string(),
                 description: d.description.clone(),
-                change: FaultChange::Gone,
+                change: if cut_in_after(d.module_id.as_str()) {
+                    FaultChange::NotReceived
+                } else {
+                    FaultChange::Gone
+                },
             });
         }
     }
@@ -286,7 +332,7 @@ mod tests {
     fn a_new_fault_is_distinguished_from_one_that_was_already_there() {
         let before = vec![dtc("P0420", "m1")];
         let after = vec![dtc("P0420", "m1"), dtc("P0301", "m1")];
-        let d = compare_faults(&before, &after);
+        let d = compare_faults(&before, &after, |_| false);
 
         let new = d.iter().find(|f| f.code == "P0301").unwrap();
         assert_eq!(new.change, FaultChange::Appeared);
@@ -299,11 +345,11 @@ mod tests {
         // Service 03 reports P2463; UDS 0x19 reports the same fault with its
         // failure type, P2463-00. A visit that read the engine one way and a
         // visit that read it the other must not say it went and came back.
-        let d = compare_faults(&[dtc("P2463", "m1")], &[dtc("P2463-00", "m1")]);
+        let d = compare_faults(&[dtc("P2463", "m1")], &[dtc("P2463-00", "m1")], |_| false);
         assert_eq!(d.len(), 1, "{d:?}");
         assert_eq!(d[0].change, FaultChange::Unchanged);
 
-        let d = compare_faults(&[dtc("P2463-00", "m1")], &[dtc("P2463", "m1")]);
+        let d = compare_faults(&[dtc("P2463-00", "m1")], &[dtc("P2463", "m1")], |_| false);
         assert_eq!(d.len(), 1, "{d:?}");
         assert_eq!(d[0].change, FaultChange::Unchanged);
     }
@@ -312,7 +358,7 @@ mod tests {
     fn a_different_failure_type_is_a_different_fault() {
         // C0035-00 and C0035-13 are two distinct failures of one circuit. When
         // both visits read the failure type, a change in it is a change.
-        let d = compare_faults(&[dtc("C0035-00", "m1")], &[dtc("C0035-13", "m1")]);
+        let d = compare_faults(&[dtc("C0035-00", "m1")], &[dtc("C0035-13", "m1")], |_| false);
         let change = |code: &str| d.iter().find(|f| f.code == code).unwrap().change;
         assert_eq!(change("C0035-13"), FaultChange::Appeared);
         assert_eq!(change("C0035-00"), FaultChange::Gone);
@@ -322,9 +368,19 @@ mod tests {
     fn a_fault_that_stopped_being_reported_is_gone_not_fixed() {
         // The wording matters. A code disappears when it is repaired and when
         // somebody clears it, and this comparison cannot tell those apart.
-        let d = compare_faults(&[dtc("P0420", "m1")], &[]);
+        let d = compare_faults(&[dtc("P0420", "m1")], &[], |_| false);
         assert_eq!(d.len(), 1);
         assert_eq!(d[0].change, FaultChange::Gone);
+    }
+
+    /// A code missing from a list that was cut off never arrived. Calling it
+    /// gone would tell somebody a fault went away when nothing said so.
+    #[test]
+    fn a_fault_missing_from_a_cut_off_list_is_not_received_rather_than_gone() {
+        let d = compare_faults(&[dtc("C0035-00", "m1"), dtc("P0420", "m2")], &[], |m| m == "m1");
+        let change = |code: &str| d.iter().find(|f| f.code == code).unwrap().change;
+        assert_eq!(change("C0035-00"), FaultChange::NotReceived);
+        assert_eq!(change("P0420"), FaultChange::Gone, "another module's read was whole");
     }
 
     #[test]

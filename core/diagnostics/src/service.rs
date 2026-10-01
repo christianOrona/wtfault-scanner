@@ -409,7 +409,7 @@ pub struct DiagnosticService {
     /// What each engine module said it burns (PID 0x51), once it has said.
     /// A procedure check is polled while somebody works towards a state, and
     /// the fuel does not change in between.
-    fuel_types: BTreeMap<String, String>,
+    fuel_types: BTreeMap<String, Option<String>>,
     reference_year: u16,
 }
 
@@ -2250,39 +2250,12 @@ impl DiagnosticService {
         }
 
         self.require_usable()?;
-        let module = self
-            .store
-            .modules(&self.session.id)
-            .unwrap_or_default()
-            .into_iter()
-            .find(|m| m.module_key.contains("7E8") || m.module_key.contains("7E0"))
-            .map(|m| m.module_key)
-            .unwrap_or_else(|| String::from("ECU_7E8"));
-
-        // Before anybody is asked to do anything: does this procedure mean
-        // anything on this engine? Asked of the engine, not of the make. An
-        // engine that does not say is given the procedure, and the run reports
-        // whatever it could not read.
+        let module = self.procedure_module();
+        if let Some(does_not_apply) = self.procedure_does_not_apply(&procedure, &module) {
+            return Ok(does_not_apply);
+        }
         let fuel = self.fuel_type(&module);
         let engine = fuel.as_deref().and_then(crate::procedure::Engine::from_fuel_type);
-        if let Some(why) = engine.and_then(|e| procedure.why_not_on(e)) {
-            return Ok(Payload {
-                data: Some(serde_json::json!({
-                    "procedure": procedure.id,
-                    "name": procedure.name,
-                    "purpose": procedure.purpose,
-                    "state": crate::procedure::ProcedureState::DoesNotApply,
-                    "does_not_apply_because": why,
-                    "fuel_type": fuel,
-                    "engine": engine,
-                    "applies_to": procedure.engines,
-                    "all_met": false,
-                })),
-                warnings: vec![Warning::info("procedure_does_not_apply", why)],
-                evidence: self.recorder.last_response_event(),
-                ..Default::default()
-            });
-        }
 
         let mut checks = Vec::new();
         for condition in &procedure.conditions {
@@ -2381,12 +2354,12 @@ impl DiagnosticService {
         }
         self.require_usable()?;
 
-        let before = self.check_procedure_inner(procedure_id)?;
-        let does_not_apply =
-            serde_json::to_value(crate::procedure::ProcedureState::DoesNotApply).ok();
-        if before.data.as_ref().map(|d| &d["state"]) == does_not_apply.as_ref() {
-            return Ok(before);
+        if let Some(does_not_apply) =
+            self.procedure_does_not_apply(&procedure, &self.procedure_module())
+        {
+            return Ok(does_not_apply);
         }
+        let before = self.check_procedure_inner(procedure_id)?;
         let held_before =
             before.data.as_ref().and_then(|d| d["all_met"].as_bool()).unwrap_or(false);
         if !held_before {
@@ -2402,14 +2375,7 @@ impl DiagnosticService {
         }
 
         // The readings, taken while the state holds.
-        let module = self
-            .store
-            .modules(&self.session.id)
-            .unwrap_or_default()
-            .into_iter()
-            .find(|m| m.module_key.contains("7E8") || m.module_key.contains("7E0"))
-            .map(|m| m.module_key)
-            .unwrap_or_else(|| String::from("ECU_7E8"));
+        let module = self.procedure_module();
         let reading = self.read_live_data(&module, &procedure.measure, "user:procedure");
 
         // And again afterwards. If the state broke while this was happening,
@@ -2522,11 +2488,17 @@ impl DiagnosticService {
     ///
     /// From the identified make and model year against
     /// `vehicle-profiles/gateways/gateways.yaml`. A listing, not a measurement.
+    /// Every candidate for each is asked, so a make contested between the
+    /// manufacturer the VIN names and the brand vPIC names is still listed.
     fn gateway(&self) -> Option<aim_decoders::gateways::Gateway> {
         let identity = self.identity();
-        let make = identity.settled("make")?;
-        let year = identity.settled("model_year").and_then(|y| y.parse().ok());
-        self.decoders.gateways.for_vehicle(make, year).cloned()
+        let years: Vec<Option<u16>> = match identity.candidates("model_year") {
+            years if years.is_empty() => vec![None],
+            years => years.iter().map(|y| y.parse().ok()).collect(),
+        };
+        identity.candidates("make").into_iter().find_map(|make| {
+            years.iter().find_map(|year| self.decoders.gateways.for_vehicle(make, *year).cloned())
+        })
     }
 
     /// What this engine burns, according to the engine.
@@ -2542,21 +2514,68 @@ impl DiagnosticService {
     /// diesel does not run to one, and a procedure built around them reported
     /// success on a diesel having measured none of them.
     ///
-    /// Kept once a module has answered, and asked again while it has not.
+    /// Asked once per module per session, and the answer kept either way: a
+    /// procedure check is polled while somebody works towards a state, and a
+    /// module that does not report its fuel will not start between polls.
     fn fuel_type(&mut self, module_key: &str) -> Option<String> {
         if let Some(known) = self.fuel_types.get(module_key) {
-            return Some(known.clone());
+            return known.clone();
         }
         let result = self.read_pid(module_key, "fuel_type", "user:procedure");
-        if !result.success {
-            return None;
-        }
-        let fuel = result.values.first().and_then(|v| match &v.value {
-            aim_types::Value::Text(t) => Some(t.clone()),
-            _ => None,
-        })?;
+        let fuel = result
+            .success
+            .then(|| {
+                result.values.first().and_then(|v| match &v.value {
+                    aim_types::Value::Text(t) => Some(t.clone()),
+                    _ => None,
+                })
+            })
+            .flatten();
         self.fuel_types.insert(module_key.to_string(), fuel.clone());
-        Some(fuel)
+        fuel
+    }
+
+    /// The engine module a procedure reads.
+    fn procedure_module(&self) -> String {
+        self.store
+            .modules(&self.session.id)
+            .unwrap_or_default()
+            .into_iter()
+            .find(|m| m.module_key.contains("7E8") || m.module_key.contains("7E0"))
+            .map(|m| m.module_key)
+            .unwrap_or_else(|| String::from("ECU_7E8"))
+    }
+
+    /// The answer for a procedure that means nothing on this engine, or `None`
+    /// when it applies or the engine does not say.
+    ///
+    /// Before anybody is asked to do anything. Asked of the engine, not of the
+    /// make. An engine that does not say is given the procedure, and the run
+    /// reports whatever it could not read.
+    fn procedure_does_not_apply(
+        &mut self,
+        procedure: &crate::procedure::Procedure,
+        module: &str,
+    ) -> Option<Payload> {
+        let fuel = self.fuel_type(module);
+        let engine = fuel.as_deref().and_then(crate::procedure::Engine::from_fuel_type);
+        let why = engine.and_then(|e| procedure.why_not_on(e))?;
+        Some(Payload {
+            data: Some(serde_json::json!({
+                "procedure": procedure.id,
+                "name": procedure.name,
+                "purpose": procedure.purpose,
+                "state": crate::procedure::ProcedureState::DoesNotApply,
+                "does_not_apply_because": why,
+                "fuel_type": fuel,
+                "engine": engine,
+                "applies_to": procedure.engines,
+                "all_met": false,
+            })),
+            warnings: vec![Warning::info("procedure_does_not_apply", why)],
+            evidence: self.recorder.last_response_event(),
+            ..Default::default()
+        })
     }
 
     /// One signal's current value, as a number.
@@ -4896,6 +4915,7 @@ impl DiagnosticService {
                         let mut outcome = self.decode_uds_dtcs(&m.payload, &key);
                         if let Some(cut) = m.cut_off {
                             self.saw_truncated_response = true;
+                            self.record_cut_off(&key, cut);
                             outcome.cut_off = Some(cut_off_note(&key, cut, outcome.dtcs.len()));
                         }
                         outcome
@@ -5074,9 +5094,12 @@ impl DiagnosticService {
                 Err(e) => {
                     // Silence on a bus we went looking on is a finding, not a failure.
                     if nth > 0 && e.code == ErrorCode::NoData {
-                        let make = self.identity().settled("make").map(str::to_string);
-                        let for_this_make =
-                            make.as_deref().and_then(second_bus_note_for_make).unwrap_or_default();
+                        let identity = self.identity();
+                        let for_this_make = identity
+                            .candidates("make")
+                            .into_iter()
+                            .find_map(second_bus_note_for_make)
+                            .unwrap_or_default();
                         all_warnings.push(Warning::info(
                             "second_bus_silent",
                             format!(
@@ -5259,11 +5282,16 @@ impl DiagnosticService {
         });
 
         // 3. Every range worth asking about.
-        let make = self.identity().settled("make").map(str::to_string);
+        // Skipped only when every make proposed for this vehicle is another
+        // manufacturer's: one candidate that is a Ford is reason to ask.
+        let identity = self.identity();
+        let makes = identity.candidates("make");
+        let not_a_ford = (!makes.is_empty() && !makes.iter().any(|m| make_has_as_built(m)))
+            .then(|| makes.join(" / "));
         let mut identifiers = Vec::new();
         let mut ranges_probed = Vec::new();
         for (start, end, purpose) in DID_SWEEP_RANGES {
-            if let Some(make) = make.as_deref().filter(|m| !make_has_as_built(m)) {
+            if let Some(make) = not_a_ford.as_deref() {
                 if start == FORD_CONFIGURATION {
                     let why = format!(
                         "{start:04X}-{end:04X} is where Ford keeps configuration, and this \
@@ -6273,6 +6301,7 @@ impl DiagnosticService {
             .collect();
         let cut_off = message.cut_off.map(|cut| {
             self.saw_truncated_response = true;
+            self.record_cut_off(&module.module_key, cut);
             cut_off_note(&module.module_key, cut, reports.len())
         });
 
@@ -6335,6 +6364,19 @@ impl DiagnosticService {
     /// The code is stored as it was read. A UDS code keeps its failure type
     /// (`C0035-00`); the comparison knows that is the same fault as a service
     /// 03 `C0035`.
+    /// Note in the session that a module's fault list was not whole, so a later
+    /// comparison does not read the codes that never arrived as gone.
+    fn record_cut_off(&self, module_key: &str, cut: aim_adapter::CutOff) {
+        let _ = self.store.append_event(
+            &self.session.id,
+            EventKind::FaultListCutOff {
+                module_key: module_key.to_string(),
+                announced: cut.announced,
+                received: cut.received,
+            },
+        );
+    }
+
     fn record_dtc_read(&self, module: &Module, report: &DtcReport) -> AimResult<()> {
         self.store.record_dtc(&DtcRecord {
             session_id: self.session.id.clone(),

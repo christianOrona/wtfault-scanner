@@ -131,3 +131,42 @@ fn a_ford_is_not_told_about_a_gateway_it_is_not_listed_as_having() {
     let probe = service.probe_write_gate("ECU_7E8", USER, Some(USER));
     assert!(!probe.warnings.iter().any(|w| w.code.starts_with("gateway_")));
 }
+
+/// vPIC names the brand, the VIN names the manufacturer, and on a Jeep the two
+/// do not agree word for word, so the make is contested. The gateway is still
+/// named: both candidates are makes it is fitted to.
+#[test]
+fn a_jeep_whose_make_vpic_contests_is_still_told_about_its_gateway() {
+    let vin = jeep_vin();
+    let mut service = visit(&vin);
+    assert!(service.identify_vehicle(USER).success);
+    let reply = serde_json::json!({
+        "Count": 1,
+        "Message": "Results returned successfully",
+        "SearchCriteria": format!("VIN:{vin}"),
+        "Results": [{
+            "VIN": vin, "Make": "JEEP", "Model": "Grand Cherokee", "ModelYear": "2020",
+            "ErrorCode": "0", "ErrorText": "0 - VIN decoded clean."
+        }]
+    });
+    service
+        .store()
+        .store_vpic_reply(&vin, "https://vpic.nhtsa.dot.gov/test", &reply.to_string())
+        .unwrap();
+
+    let identity = service.identity();
+    assert_eq!(
+        identity.settled("make"),
+        None,
+        "the make is contested: {:?}",
+        identity.candidates("make")
+    );
+
+    let probe = service.probe_write_gate("ECU_7E8", USER, Some(USER));
+    assert!(probe.success, "{:?}", probe.error);
+    assert!(
+        probe.warnings.iter().any(|w| w.code == "gateway_access_required"),
+        "{:?}",
+        probe.warnings
+    );
+}

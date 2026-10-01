@@ -1172,18 +1172,9 @@ async fn session_transcript(
         if let Some(ref vin_id) = session.vehicle_id {
             if let Some(vehicle) = state.store.get_vehicle(vin_id)? {
                 if let Some(vin) = vehicle.vin {
-                    text = aim_diagnostics::transcript::redact_vin(
-                        &text,
-                        &vin,
-                        &aim_diagnostics::transcript::anonymous_vin(&vin)?,
-                    );
-                    // A reply layout the redaction does not parse would
-                    // otherwise hand over the real VIN labelled as redacted.
-                    if let Some(residue) = aim_diagnostics::transcript::vin_residue(&text, &vin) {
-                        return Err(ApiError::internal(format!(
-                            "the transcript was not exported: {residue} after anonymising"
-                        )));
-                    }
+                    // Refuses rather than hand over the real VIN labelled as
+                    // redacted, when a reply layout defeats the replacement.
+                    text = aim_diagnostics::transcript::anonymise(&text, &vin)?;
                 }
             }
         }

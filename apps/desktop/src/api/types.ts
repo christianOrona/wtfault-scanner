@@ -362,6 +362,7 @@ export type EventKind =
   | { kind: "vehicle_identified"; vin: string; vehicle_id: string }
   | { kind: "module_discovered"; module_key: string; address: string }
   | { kind: "dtc_read"; module_key: string; code: string; status: DtcStatus }
+  | { kind: "fault_list_cut_off"; module_key: string; announced: number; received: number }
   | { kind: "measurement_recorded"; module_key: string; signal_id: string; value: number | null; unit: string | null; raw_hex: string | null }
   | { kind: "safety_decision"; operation: string; level: PermissionLevel; allowed: boolean; initiator: string; confirmed: boolean; reason: string | null }
   | { kind: "tool_invoked"; tool: string; arguments: unknown; initiator: string }
@@ -826,7 +827,8 @@ export interface FullScanData {
   addresses_probed: number;
 }
 
-export type FaultChange = "appeared" | "gone" | "unchanged";
+/** `not_received`: in the earlier scan, missing from a later list that was cut off. */
+export type FaultChange = "appeared" | "gone" | "unchanged" | "not_received";
 
 export interface FaultDelta {
   code: string;

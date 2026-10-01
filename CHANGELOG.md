@@ -36,6 +36,9 @@ with the caveat that everything below 1.0 is allowed to move.
 
 ### Fixed
 
+- Comparing two scans no longer calls a fault *gone* when the later scan only
+  got part of that module's fault list. It is shown as *not received*: whether
+  it is still stored is not known.
 - On a vehicle that is not a Ford, Lincoln or Mercury, the capability probe
   no longer sweeps Ford's configuration range (`DE00`-`DEFF`), 256 requests
   that could only come back empty. It says it skipped them and why. On a

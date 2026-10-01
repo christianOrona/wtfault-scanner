@@ -14,7 +14,7 @@
 //!
 //!     cargo test -p aim-diagnostics --test replay_baselines -- --ignored record_missing_baselines
 
-use aim_diagnostics::transcript::{anonymous_vin, export_transcript, redact_vin, vin_residue};
+use aim_diagnostics::transcript::{anonymise, anonymous_vin, export_transcript};
 use aim_session::SessionStore;
 use aim_types::SessionId;
 use std::path::{Path, PathBuf};
@@ -117,11 +117,7 @@ fn write(store: &SessionStore, session_id: &SessionId, name: &str) {
         ),
     )
     .unwrap_or_else(|e| fail(e.to_string()));
-    let text = redact_vin(&recorded, &vin, &anonymous);
-
-    if let Some(residue) = vin_residue(&text, &vin) {
-        fail(format!("not written: {residue} after anonymising"));
-    }
+    let text = anonymise(&recorded, &vin).unwrap_or_else(|e| fail(format!("not written: {e}")));
 
     let exchanges = text.lines().filter(|line| line.starts_with("> ")).count();
     if exchanges == 0 {
