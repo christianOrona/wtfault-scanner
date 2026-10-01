@@ -48,7 +48,11 @@ export function FullScanPane({ connected }: { connected: boolean }) {
 
   const data = result?.success ? result.data : null;
   const modules = data?.modules ?? [];
-  const withFaults = modules.filter((m) => m.fault_count > 0);
+  // A module whose list was cut off is shown with the faulty ones even when
+  // none of what arrived was a fault: "nothing to report" would be a claim
+  // about the part that never came.
+  const withFaults = modules.filter((m) => m.fault_count > 0 || m.cut_off);
+  const cutOff = modules.filter((m) => m.cut_off);
   const failingNow = modules.flatMap((m) => m.faults.filter((f) => f.failing_now));
 
   return (
@@ -141,7 +145,17 @@ export function FullScanPane({ connected }: { connected: boolean }) {
             {!easy && <Stat label="Addresses probed" value={String(data.addresses_probed)} />}
           </div>
 
-          {data.fault_count === 0 ? (
+          {data.fault_count === 0 && cutOff.length > 0 ? (
+            <div className="banner caution">
+              <span className="b-code">incomplete</span>
+              <span>
+                None of the faults that arrived is active or stored, but{" "}
+                {cutOff.length === 1 ? "one module" : `${cutOff.length} modules`} stopped partway
+                through {cutOff.length === 1 ? "its" : "their"} fault list, so this is not a clean
+                bill of health. Scanning again may get the rest.
+              </span>
+            </div>
+          ) : data.fault_count === 0 ? (
             <div className="banner info">
               <span className="b-code">all clear</span>
               <span>
@@ -188,7 +202,7 @@ export function FullScanPane({ connected }: { connected: boolean }) {
             <table style={{ marginTop: 8 }}>
               <tbody>
                 {modules
-                  .filter((m) => m.fault_count === 0)
+                  .filter((m) => m.fault_count === 0 && !m.cut_off)
                   .map((m) => (
                     <tr key={m.address}>
                       <td>{m.name}</td>
@@ -229,13 +243,22 @@ function ModuleCard({ module: m, easy }: { module: ScannedModule; easy: boolean 
         {!easy && <span className="faint mono" style={{ fontSize: 11 }}>{m.address}</span>}
       </div>
 
-      <table style={{ marginTop: 8 }}>
-        <tbody>
-          {m.faults.map((f) => (
-            <FaultRow key={f.code} fault={f} />
-          ))}
-        </tbody>
-      </table>
+      {m.cut_off && (
+        <div className="banner caution" style={{ marginTop: 8 }}>
+          <span className="b-code">list cut off</span>
+          <span>{m.cut_off}</span>
+        </div>
+      )}
+
+      {m.faults.length > 0 && (
+        <table style={{ marginTop: 8 }}>
+          <tbody>
+            {m.faults.map((f) => (
+              <FaultRow key={f.code} fault={f} />
+            ))}
+          </tbody>
+        </table>
+      )}
     </div>
   );
 }

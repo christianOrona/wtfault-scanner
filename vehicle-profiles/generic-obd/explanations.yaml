@@ -256,6 +256,27 @@ codes:
   - id: no_active_session
     easy: "Nothing is connected to a car right now."
     technical: "The requested operation needs a usable adapter link and there is none."
+  - id: fault_list_cut_off
+    easy: "One of the car's computers started sending its list of faults and stopped part-way. The faults that arrived are shown. The rest never came, so this is not that computer's full list. Scanning again may get all of it."
+    technical: "A UDS 0x19 0x02 reply ended before its announced length, usually in an adapter timeout. Every whole 4-byte record received was decoded; the remainder was not received. A partial reply is accepted only for fault reads, never for a read-back after a write."
+  - id: procedure_does_not_apply
+    easy: "This test is not meant for this kind of engine, so it was not started. Nothing was asked of you and nothing was measured."
+    technical: "The procedure declares the engine types it applies to, and the engine's own fuel type (service 01 PID 0x51) is not one of them. Checked before any condition is requested."
+  - id: not_on_this_engine
+    easy: "Some readings in this test only exist on petrol engines, and this engine is not one. They were left out, which is normal, and the test is complete without them."
+    technical: "Signals this engine type cannot produce, such as fuel trims on a diesel, are reported separately and not counted as missing."
+  - id: ford_range_not_swept
+    easy: "This car is not a Ford, so a group of settings only Fords keep in that place was not looked for. That does not mean this car has no settings."
+    technical: "DE00-DEFF is Ford's configuration range. On a vehicle whose identified make is not a Ford marque it is skipped rather than swept for an empty result."
+  - id: security_gateway_listed
+    easy: "Cars like this one usually have a security gate in front of their computers. Reading information works normally. Changing settings will probably be refused, and this app does not get around that."
+    technical: "The identified make and model year match an entry in vehicle-profiles/gateways/gateways.yaml. A listing from public documentation, not a measurement; a module measured accepting writes overrules it."
+  - id: gateway_access_required
+    easy: "The car's security gate stopped this. Getting past it needs the carmaker's own login for workshop tools, which this app does not have and will not try to get around. Nothing was changed."
+    technical: "On a vehicle listed as having a security gateway, the write-gate probe was refused for security or not answered. Reported as the gateway's boundary. Access requires the manufacturer's authentication; there is no bypass in this build."
+  - id: gateway_listed_but_writes_open
+    easy: "Cars like this usually have a security gate, but this computer accepted the test anyway, so it is not behind one. What the computer did counts for more than what the list says."
+    technical: "The write-gate probe found writes open on a module of a vehicle listed as having a gateway. The measurement wins over the listing."
 
 concepts:
   # Ideas the interface itself uses. Not vehicle data: how to read the screen.
