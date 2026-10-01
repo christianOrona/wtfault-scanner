@@ -38,6 +38,10 @@ export function GuidedTestsPane({
   const [error, setError] = useState<{ code: string; message: string } | null>(null);
   const { easy } = useExplain();
   const inFlight = useRef(false);
+  // The test a reply is wanted for. A reply for another one, from a check
+  // that was still out when the person switched, is dropped rather than shown
+  // under the new test's name.
+  const current = useRef<string | null>(null);
 
   useEffect(() => {
     api
@@ -46,15 +50,16 @@ export function GuidedTestsPane({
       .catch((e) => setError(describeError(e)));
   }, []);
 
-  const runCheck = useCallback(async (id: string) => {
+  const runCheck = useCallback(async (id: string, fromWatch = false) => {
     // A watch tick that lands while the last read is still out is skipped,
     // not queued: a slow adapter must not build up a backlog of reads.
-    if (inFlight.current) return;
+    if (fromWatch && inFlight.current) return;
     inFlight.current = true;
     setBusy("check");
     setError(null);
     try {
       const r = await api.checkProcedure(id);
+      if (current.current !== id) return;
       setCheck(r);
       // Nothing more to watch for once it cannot or does not apply.
       const state = r.data?.state;
@@ -70,11 +75,12 @@ export function GuidedTestsPane({
 
   useEffect(() => {
     if (!watching || !chosen) return;
-    const timer = window.setInterval(() => void runCheck(chosen), WATCH_MS);
+    const timer = window.setInterval(() => void runCheck(chosen, true), WATCH_MS);
     return () => window.clearInterval(timer);
   }, [watching, chosen, runCheck]);
 
   const choose = (id: string) => {
+    current.current = id;
     setChosen(id);
     setCheck(null);
     setMeasured(null);

@@ -239,9 +239,21 @@ pub fn report_endpoint() -> Option<String> {
     let configured = std::env::var("AIM_REPORT_ENDPOINT")
         .ok()
         .or_else(|| option_env!("AIM_REPORT_ENDPOINT").map(String::from))?;
-    let url = configured.trim().trim_end_matches('/').to_string();
-    let local = url.starts_with("http://127.0.0.1") || url.starts_with("http://localhost");
-    (url.starts_with("https://") || local).then_some(url)
+    acceptable_endpoint(&configured)
+}
+
+/// An address Send may post to: `https://` anywhere, plain `http://` only to
+/// this machine. Judged on the parsed host, not on how the text begins, so
+/// `http://localhost.example.com` is somebody else's machine and refused.
+fn acceptable_endpoint(configured: &str) -> Option<String> {
+    let url = reqwest::Url::parse(configured.trim()).ok()?;
+    let this_machine = matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "[::1]"));
+    let ok = match url.scheme() {
+        "https" => url.host_str().is_some(),
+        "http" => this_machine,
+        _ => false,
+    };
+    ok.then(|| url.as_str().trim_end_matches('/').to_string())
 }
 
 /// The text with identifiers taken out, and a description of what was.
@@ -297,12 +309,8 @@ pub fn withhold_identifiers(text: &str, known_vins: &[String]) -> (String, Vec<S
         out = replace_ignoring_case(&out, &home.replace('\\', "/"), "<home>");
     }
     if let Some(user) = user.filter(|u| u.len() >= 2) {
-        for (prefix, separator) in [("\\Users\\", ""), ("/Users/", ""), ("/home/", "")] {
-            out = replace_ignoring_case(
-                &out,
-                &format!("{prefix}{user}{separator}"),
-                &format!("{prefix}<user>{separator}"),
-            );
+        for prefix in ["\\Users\\", "/Users/", "/home/"] {
+            out = replace_path_component(&out, prefix, &user);
         }
     }
     if out != before {
@@ -310,6 +318,33 @@ pub fn withhold_identifiers(text: &str, known_vins: &[String]) -> (String, Vec<S
     }
 
     (out, withheld)
+}
+
+/// `haystack` with `prefix` + `user` replaced by `prefix<user>` wherever the
+/// name is a whole path component: `/home/al/` but not `/home/alice/`.
+fn replace_path_component(haystack: &str, prefix: &str, user: &str) -> String {
+    let needle = format!("{prefix}{user}").to_ascii_lowercase();
+    let lower = haystack.to_ascii_lowercase();
+    let mut out = String::with_capacity(haystack.len());
+    let mut from = 0;
+    while let Some(at) = lower[from..].find(&needle) {
+        let start = from + at;
+        let end = start + needle.len();
+        let whole = haystack[end..]
+            .chars()
+            .next()
+            .is_none_or(|c| !(c.is_alphanumeric() || matches!(c, '_' | '-' | '.')));
+        out.push_str(&haystack[from..start]);
+        if whole {
+            out.push_str(prefix);
+            out.push_str("<user>");
+        } else {
+            out.push_str(&haystack[start..end]);
+        }
+        from = end;
+    }
+    out.push_str(&haystack[from..]);
+    out
 }
 
 /// `haystack` with every case-insensitive occurrence of `needle` replaced.
@@ -555,15 +590,27 @@ mod tests {
 
     #[test]
     fn an_endpoint_must_be_https_unless_it_is_this_machine() {
-        // Read through the same function the app uses; the variable is set
-        // and cleared within this test only.
-        std::env::set_var("AIM_REPORT_ENDPOINT", "http://example.com");
-        assert_eq!(report_endpoint(), None);
-        std::env::set_var("AIM_REPORT_ENDPOINT", "https://reports.example.com/");
-        assert_eq!(report_endpoint().as_deref(), Some("https://reports.example.com"));
-        std::env::set_var("AIM_REPORT_ENDPOINT", "http://127.0.0.1:8790");
-        assert_eq!(report_endpoint().as_deref(), Some("http://127.0.0.1:8790"));
-        std::env::remove_var("AIM_REPORT_ENDPOINT");
+        assert_eq!(acceptable_endpoint("http://example.com"), None);
+        assert_eq!(
+            acceptable_endpoint("https://reports.example.com/").as_deref(),
+            Some("https://reports.example.com")
+        );
+        assert_eq!(
+            acceptable_endpoint("http://127.0.0.1:8790").as_deref(),
+            Some("http://127.0.0.1:8790")
+        );
+        // Names that only begin like this machine are somebody else's.
+        assert_eq!(acceptable_endpoint("http://localhost.attacker.example"), None);
+        assert_eq!(acceptable_endpoint("http://127.0.0.1.nip.io"), None);
+        assert_eq!(acceptable_endpoint("ftp://reports.example.com"), None);
+        assert_eq!(acceptable_endpoint("not a url"), None);
+    }
+
+    #[test]
+    fn a_user_name_is_only_replaced_as_a_whole_path_component() {
+        let out =
+            replace_path_component("/home/al/x and /home/alice/y and /home/al", "/home/", "al");
+        assert_eq!(out, "/home/<user>/x and /home/alice/y and /home/<user>");
     }
 
     #[test]

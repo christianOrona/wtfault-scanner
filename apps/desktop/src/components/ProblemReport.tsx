@@ -41,6 +41,12 @@ export function ProblemReportPanel({ report }: { report: SupportReport }) {
   const [said, setSaid] = useState<Said>({ kind: "idle" });
   const [withhold, setWithhold] = useState(true);
   const [shown, setShown] = useState<SupportReport>(report);
+  // Whether `shown` was assembled with identifiers withheld. It starts as the
+  // parent's copy, which was not, so nothing can leave until the withheld
+  // text has arrived and is the one on screen.
+  const [shownWithheld, setShownWithheld] = useState(false);
+  const [notWithheld, setNotWithheld] = useState<string | null>(null);
+  const ready = shownWithheld === withhold;
   const [sending, setSending] = useState(false);
   const [sentTo, setSentTo] = useState<string | null>(null);
 
@@ -48,13 +54,23 @@ export function ProblemReportPanel({ report }: { report: SupportReport }) {
   // saved and sent is one string rather than four.
   useEffect(() => {
     let cancelled = false;
+    setNotWithheld(null);
     api
       .supportReport(withhold)
       .then((r) => {
-        if (!cancelled) setShown(r);
+        if (cancelled) return;
+        setShown(r);
+        setShownWithheld(withhold);
       })
-      .catch(() => {
-        if (!cancelled) setShown(report);
+      .catch((e: unknown) => {
+        // Never fall back to the full text while the box says identifiers are
+        // left out: that is how a VIN would leave labelled as withheld.
+        if (!cancelled)
+          setNotWithheld(
+            `Could not prepare the report${withhold ? " without identifiers" : ""}: ${
+              e instanceof Error ? e.message : "unknown error"
+            }.`,
+          );
       });
     return () => {
       cancelled = true;
@@ -143,7 +159,8 @@ export function ProblemReportPanel({ report }: { report: SupportReport }) {
         <input type="checkbox" checked={withhold} onChange={(e) => setWithhold(e.target.checked)} />
         Leave out what identifies you or your vehicle
       </label>
-      {withhold && (
+      {notWithheld && <div className="cls-bus_error" style={{ fontSize: 11 }}>{notWithheld}</div>}
+      {withhold && ready && (
         <div className="faint" style={{ fontSize: 11 }}>
           {shown.withheld.length > 0
             ? `Taken out: ${shown.withheld.join("; ")}.`
@@ -153,14 +170,16 @@ export function ProblemReportPanel({ report }: { report: SupportReport }) {
 
       <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
         {shown.send_to && (
-          <button className="primary" onClick={() => void send()} disabled={sending}>
+          <button className="primary" onClick={() => void send()} disabled={sending || !ready}>
             {sending ? "Sending…" : `Send to ${new URL(shown.send_to).host}`}
           </button>
         )}
-        <button className={shown.send_to ? undefined : "primary"} onClick={copy}>
+        <button className={shown.send_to ? undefined : "primary"} onClick={copy} disabled={!ready}>
           Copy report
         </button>
-        <button onClick={save}>Save to a file</button>
+        <button onClick={save} disabled={!ready}>
+          Save to a file
+        </button>
         {report.log_dir && <button onClick={reveal}>Open log folder</button>}
       </div>
 

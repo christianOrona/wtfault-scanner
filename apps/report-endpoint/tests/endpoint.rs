@@ -75,7 +75,7 @@ async fn an_oversized_report_is_refused_and_nothing_is_kept() {
     let app = app(config(dir.path(), 5, 100, false), "203.0.113.7:5000");
     let (status, _) = post(&app, report(&"x".repeat(MAX_TEXT_BYTES + 1)), None).await;
     assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
-    let (status, _) = post(&app, report(&"x".repeat(MAX_TEXT_BYTES * 2)), None).await;
+    let (status, _) = post(&app, report(&"x".repeat(MAX_TEXT_BYTES * 5)), None).await;
     assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE, "refused before it is parsed");
     assert!(std::fs::read_dir(dir.path()).unwrap().next().is_none());
 }
@@ -130,4 +130,26 @@ async fn a_forwarded_address_counts_only_behind_a_proxy() {
     let proxied = app(config(dir.path(), 1, 100, true), "10.0.0.1:5000");
     assert_eq!(post(&proxied, report("1"), Some("198.51.100.1")).await.0, StatusCode::CREATED);
     assert_eq!(post(&proxied, report("2"), Some("198.51.100.2")).await.0, StatusCode::CREATED);
+
+    // A client that writes its own entry ahead of the one the proxy appends
+    // is still counted by the proxy's.
+    let spoofed = app(config(dir.path(), 1, 100, true), "10.0.0.1:5000");
+    assert_eq!(
+        post(&spoofed, report("1"), Some("1.1.1.1, 198.51.100.9")).await.0,
+        StatusCode::CREATED
+    );
+    assert_eq!(
+        post(&spoofed, report("2"), Some("2.2.2.2, 198.51.100.9")).await.0,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+}
+
+/// Text under the limit is kept however much escaping it needs as JSON.
+#[tokio::test]
+async fn text_under_the_limit_is_kept_however_much_it_escapes() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = app(config(dir.path(), 5, 100, false), "203.0.113.7:5000");
+    let paths = "C:\\Users\\x\\AppData\n".repeat(MAX_TEXT_BYTES / 22);
+    assert!(paths.len() <= MAX_TEXT_BYTES);
+    assert_eq!(post(&app, report(&paths), None).await.0, StatusCode::CREATED);
 }

@@ -36,6 +36,7 @@ export function VehicleKnowledgePanel() {
   const [expanded, setExpanded] = useState(false);
   const [sharing, setSharing] = useState<Contribution | null>(null);
   const [shareSaid, setShareSaid] = useState<string | null>(null);
+  const [shareSending, setShareSending] = useState(false);
 
   // Assembled by the core with the VIN left out, so the text on screen is the
   // text that would be sent. Nothing leaves until Send is pressed.
@@ -49,7 +50,8 @@ export function VehicleKnowledgePanel() {
   }, []);
 
   const sendShare = useCallback(async () => {
-    if (!sharing) return;
+    if (!sharing || shareSending) return;
+    setShareSending(true);
     try {
       const outcome = await api.supportSend(sharing.text);
       setShareSaid(
@@ -59,8 +61,10 @@ export function VehicleKnowledgePanel() {
       );
     } catch (e) {
       setShareSaid(`Not sent: ${e instanceof Error ? e.message : "the app could not try"}.`);
+    } finally {
+      setShareSending(false);
     }
-  }, [sharing]);
+  }, [sharing, shareSending]);
 
   const load = useCallback(async () => {
     try {
@@ -134,8 +138,8 @@ export function VehicleKnowledgePanel() {
           </p>
           <div className="row" style={{ gap: 8 }}>
             {sharing.send_to && (
-              <button className="primary" onClick={() => void sendShare()}>
-                Send to {new URL(sharing.send_to).host}
+              <button className="primary" onClick={() => void sendShare()} disabled={shareSending}>
+                {shareSending ? "Sending…" : `Send to ${new URL(sharing.send_to).host}`}
               </button>
             )}
             <button

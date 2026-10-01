@@ -39,8 +39,13 @@ use tokio::sync::Mutex;
 /// the last few hundred log lines; this is several times that.
 pub const MAX_TEXT_BYTES: usize = 256 * 1024;
 
-/// The whole request body, which is the text plus a little JSON around it.
-pub const MAX_BODY_BYTES: usize = MAX_TEXT_BYTES + 4 * 1024;
+/// The whole request body: the text, escaped as JSON, and a little around it.
+///
+/// Escaping grows text: every newline, backslash and quote takes two bytes, so
+/// a log of Windows paths can nearly double. Four times the text is generous
+/// for that and still bounded; the text itself is held to
+/// [`MAX_TEXT_BYTES`] once parsed.
+pub const MAX_BODY_BYTES: usize = 4 * MAX_TEXT_BYTES + 4 * 1024;
 
 /// How long `version` and `platform` may be.
 const MAX_LABEL_CHARS: usize = 64;
@@ -141,13 +146,18 @@ fn label_ok(s: &str) -> bool {
         && s.chars().all(|c| c.is_ascii_graphic() || c == ' ')
 }
 
+/// Who sent this, for the rate limit.
+///
+/// Behind a proxy, the last `X-Forwarded-For` entry: the one the proxy itself
+/// appended. Every entry before it came from the client, which can write any
+/// address it likes there and so dodge the limit with each request.
 fn client_address(headers: &HeaderMap, peer: SocketAddr, trust_forwarded_for: bool) -> IpAddr {
     if trust_forwarded_for {
         let forwarded = headers
             .get("x-forwarded-for")
             .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.split(',').next())
-            .and_then(|first| first.trim().parse().ok());
+            .and_then(|v| v.rsplit(',').next())
+            .and_then(|last| last.trim().parse().ok());
         if let Some(ip) = forwarded {
             return ip;
         }

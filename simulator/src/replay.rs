@@ -165,6 +165,18 @@ struct Context {
     header: Option<String>,
     /// Whether the secondary channel (`STP5x` on STN firmware) is selected.
     secondary: bool,
+    /// The secondary channel's bit rate (`STPBR`), when one was set. A bus
+    /// monitored at the wrong rate answers `CAN ERROR`, at the right one with
+    /// traffic, so the same command means different things at each.
+    rate: Option<String>,
+}
+
+impl Context {
+    /// The part of the context an adapter command depends on: the bus and its
+    /// rate, never the module header.
+    fn bus(&self) -> (bool, Option<&str>) {
+        (self.secondary, self.rate.as_deref())
+    }
 }
 
 impl Context {
@@ -176,6 +188,9 @@ impl Context {
             *self = Context::default();
         } else if command.starts_with("ATSP") || command.starts_with("ATTP") {
             self.secondary = false;
+            self.rate = None;
+        } else if let Some(rate) = command.strip_prefix("STPBR") {
+            self.rate = Some(rate.to_string());
         } else if let Some(protocol) = command.strip_prefix("STP") {
             // `STP53` is a protocol number; `STPBR`, `STPX` are other commands.
             if protocol.chars().next().is_some_and(|c| c.is_ascii_digit()) {
@@ -266,13 +281,25 @@ impl ReplayTransport {
                 // Adapter commands do not depend on the addressed module;
                 // everything else was answered by whichever module `ATSH`
                 // selected, on whichever bus was selected.
+                //
+                // An adapter command is answered from the same bus and rate
+                // when the recording has one there (`ATMA` hears different
+                // things at each rate), and from anywhere otherwise.
                 let is_setting = is_adapter_command(&wanted);
-                let found = self.transcript.exchanges.iter().zip(&self.recorded_headers).find(
-                    |(e, context)| {
-                        normalize(&e.command) == wanted
-                            && (is_setting || *context == &self.current_header)
-                    },
-                );
+                let exchanges = || {
+                    self.transcript
+                        .exchanges
+                        .iter()
+                        .zip(&self.recorded_headers)
+                        .filter(|(e, _)| normalize(&e.command) == wanted)
+                };
+                let found = if is_setting {
+                    exchanges()
+                        .find(|(_, context)| context.bus() == self.current_header.bus())
+                        .or_else(|| exchanges().next())
+                } else {
+                    exchanges().find(|(_, context)| *context == &self.current_header)
+                };
                 match found {
                     Some((e, _)) => Ok(e.lines.clone()),
                     None => {
@@ -510,6 +537,24 @@ mod tests {
         assert!(drive(&mut t, "3E00").unwrap().contains("NO DATA"));
     }
 
+    /// Monitoring the bus answers what was heard at the rate now set, so a rate
+    /// search finds the rate the recording found.
+    #[test]
+    fn a_bus_monitor_answers_for_the_rate_that_is_set() {
+        let transcript = Transcript::parse(
+            "> STP53\n< OK\n> STPBR 125000\n< OK\n> ATMA\n< CAN ERROR\n\
+             > STPBR 500000\n< OK\n> ATMA\n< 412 00 00 80 80 00 00 00 00\n",
+        )
+        .unwrap();
+        let mut t = ReplayTransport::new(transcript, ReplayMode::Lookup, "replay:test");
+        t.open().unwrap();
+        assert!(drive(&mut t, "STP53").unwrap().contains("OK"));
+        assert!(drive(&mut t, "STPBR 500000").unwrap().contains("OK"));
+        assert!(drive(&mut t, "ATMA").unwrap().contains("412"));
+        assert!(drive(&mut t, "STPBR 125000").unwrap().contains("OK"));
+        assert!(drive(&mut t, "ATMA").unwrap().contains("CAN ERROR"));
+    }
+
     /// A reply recorded on the second bus answers only on the second bus, and
     /// STN commands are the adapter's, answered whatever module is addressed.
     #[test]
@@ -527,7 +572,9 @@ mod tests {
         assert!(drive(&mut t, "3E00").unwrap().contains("NO DATA"));
 
         // `STP53` was recorded under another header and is answered anyway.
+        // The adapter always sets the rate after it, and so does this.
         assert!(drive(&mut t, "STP53").unwrap().contains("OK"));
+        assert!(drive(&mut t, "STPBR 500000").unwrap().contains("OK"));
         assert!(drive(&mut t, "ATSH726").unwrap().contains("OK"));
         assert!(drive(&mut t, "3E00").unwrap().contains("72E"));
 

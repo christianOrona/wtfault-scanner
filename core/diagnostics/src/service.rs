@@ -305,6 +305,38 @@ struct UdsFaultRead {
     cut_off: Option<String>,
 }
 
+const FAULT_LISTS_UNREAD: &str = "no_fault_lists_read";
+const FAULT_LISTS_PARTLY_READ: &str = "modules_without_fault_memory";
+
+/// What to say when `unread` of `found` modules did not hand over a fault list.
+///
+/// Every one of them is a caution: zero faults is then no information, and
+/// must not read as a clean result. Some of them is ordinary and informational.
+fn fault_list_warning(unread: usize, found: usize) -> Option<Warning> {
+    if unread == 0 {
+        None
+    } else if unread == found {
+        Some(Warning::caution(
+            FAULT_LISTS_UNREAD,
+            format!(
+                "{unread} modules answered the discovery probe and none of them answered the \
+                 fault request, so nothing is known about their stored faults. No faults found \
+                 here is not the same as no faults."
+            ),
+        ))
+    } else {
+        Some(Warning::info(
+            FAULT_LISTS_PARTLY_READ,
+            format!(
+                "{unread} of {found} modules answered the discovery probe but not the fault \
+                 request. That is normal: not every module implements the standard fault \
+                 service, and some only answer it in a diagnostic session this build does not \
+                 open."
+            ),
+        ))
+    }
+}
+
 /// What to say about a fault list a module began and did not finish.
 ///
 /// A UDS 0x19 0x02 reply is `59 02 <availability>` and then four bytes per
@@ -5009,29 +5041,7 @@ impl DiagnosticService {
         }
 
         warnings.extend(Self::not_faults_warning("the modules scanned", not_faults_total));
-        if refused > 0 && refused == found.len() {
-            // Not one fault list was read. Zero faults is then no information
-            // at all, and must not read as a clean result.
-            warnings.push(Warning::caution(
-                "no_fault_lists_read",
-                format!(
-                    "{refused} modules answered the discovery probe and none of them answered \
-                     the fault request, so nothing is known about their stored faults. No faults \
-                     found here is not the same as no faults."
-                ),
-            ));
-        } else if refused > 0 {
-            warnings.push(Warning::info(
-                "modules_without_fault_memory",
-                format!(
-                    "{refused} of {} modules answered the discovery probe but not the fault \
-                     request. That is normal: not every module implements the standard fault \
-                     service, and some only answer it in a diagnostic session this build does \
-                     not open.",
-                    found.len()
-                ),
-            ));
-        }
+        warnings.extend(fault_list_warning(refused, found.len()));
 
         // One warning per distinct reason, carrying what it means. A count of
         // refusals tells a user nothing they can act on; "four modules have
@@ -5151,12 +5161,20 @@ impl DiagnosticService {
             }));
 
             // One warning per reason: both buses raise the same scope note.
+            // How many fault lists were read is counted for the whole vehicle
+            // below, not taken from whichever bus said it first.
             for warning in found.warnings {
-                if !all_warnings.iter().any(|w: &Warning| w.code == warning.code) {
+                let per_bus_count =
+                    matches!(warning.code.as_str(), FAULT_LISTS_UNREAD | FAULT_LISTS_PARTLY_READ);
+                if !per_bus_count && !all_warnings.iter().any(|w: &Warning| w.code == warning.code)
+                {
                     all_warnings.push(warning);
                 }
             }
         }
+
+        let unread = all_modules.iter().filter(|m| !m["note"].is_null()).count();
+        all_warnings.extend(fault_list_warning(unread, all_modules.len()));
 
         // Back where we started, whatever happened. Everything after a scan
         // assumes the bus it was already talking to, and leaving the adapter
@@ -6898,6 +6916,19 @@ mod tests {
             .expect("a known non-Ford make must be refused");
         assert!(reason.contains("Mazda"));
         assert!(reason.contains("0xDE00"));
+    }
+
+    /// Counted over the whole vehicle: one bus reading nothing does not make
+    /// the vehicle unread, and every bus reading nothing does.
+    #[test]
+    fn a_fault_list_warning_is_about_the_whole_count() {
+        assert!(fault_list_warning(0, 35).is_none());
+        let some = fault_list_warning(6, 35).unwrap();
+        assert_eq!(some.code, FAULT_LISTS_PARTLY_READ);
+        assert!(some.message.starts_with("6 of 35"), "{}", some.message);
+        let all = fault_list_warning(35, 35).unwrap();
+        assert_eq!(all.code, FAULT_LISTS_UNREAD);
+        assert!(all.message.starts_with("35 modules"), "{}", all.message);
     }
 
     #[test]
