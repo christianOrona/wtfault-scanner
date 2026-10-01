@@ -52,6 +52,12 @@ with the caveat that everything below 1.0 is allowed to move.
 
 ### Fixed
 
+- **An update is checked before it is kept.** A downloaded installer must hash
+  to the SHA-256 its release states, in `SHA256SUMS.txt` and in GitHub's own
+  record of the file, each where it is given; one that does not, or that
+  nobody vouched for, is thrown away with the reason. Before this only its
+  size was checked.
+
 - On a vehicle that uses 29-bit addresses, like a 2023 Honda Odyssey, guided
   tests read the engine instead of waiting on a module that was not there, and
   a module found by the ordinary scan can be probed without a full scan first.

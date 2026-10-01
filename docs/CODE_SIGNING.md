@@ -95,8 +95,11 @@ them has to be inferred.
 ### What it sends when a person asks it to
 
 - **Downloads a newer installer**, when the check above has found one and the
-  person presses **Download**, from this repository's GitHub release. It is
-  installed only when they then press **Install and restart**.
+  person presses **Download**, from this repository's GitHub release, along
+  with that release's `SHA256SUMS.txt`. The installer is kept only if its
+  SHA-256 matches that file and the digest GitHub reports for it, each where
+  it is given, and at least one is required. It is installed only when they
+  then press **Install and restart**.
 
 - **To the AI model provider the person configured** — and only once they have
   configured one and asked a question or started an inspection: the question,

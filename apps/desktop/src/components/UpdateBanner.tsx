@@ -149,7 +149,18 @@ export function UpdateBanner({ coreUp }: { coreUp: boolean }) {
             {notes ? "hide what changed" : "what changed?"}
           </button>
         )}
-        {ready && <span className="faint">downloaded — installs when you say so</span>}
+        {ready && (
+          <span
+            className="faint"
+            title={
+              download.verified_against.length
+                ? `SHA-256 matched: ${download.verified_against.join(", ")}`
+                : undefined
+            }
+          >
+            downloaded and checked — installs when you say so
+          </span>
+        )}
         {status.size != null && !ready && !downloading && (
           <span className="faint">{Math.max(1, Math.round(status.size / 1_000_000))} MB</span>
         )}

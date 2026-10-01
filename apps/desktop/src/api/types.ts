@@ -880,6 +880,8 @@ export interface DownloadState {
   downloaded: number;
   total: number | null;
   path: string | null;
+  /** What the installer's SHA-256 was checked against, once it is ready. */
+  verified_against: string[];
   error: string | null;
 }
 

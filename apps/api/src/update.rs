@@ -12,9 +12,15 @@
 //! # What is trusted
 //!
 //! The repository is a compile-time constant, the asset must come from GitHub's
-//! own hosts, and the downloaded size must match what the release metadata
-//! promised. That is not a substitute for a code signature — this build is
-//! unsigned, and it is worth saying so plainly rather than implying a chain of
+//! own hosts, the downloaded size must match what the release metadata
+//! promised, and the bytes must hash to the SHA-256 the release publishes for
+//! them: the digest GitHub's API reports for the asset, and the line for it in
+//! the release's `SHA256SUMS.txt`, each one checked when it is there, and at
+//! least one required. Both come from responses other than the download, so a
+//! download cut short, corrupted or swapped on the way is caught; neither
+//! survives the release itself being replaced, because whoever can do that
+//! can rewrite them too. That is what a code signature is for, and this build
+//! is unsigned; it is worth saying so plainly rather than implying a chain of
 //! trust that does not exist.
 
 use serde::{Deserialize, Serialize};
@@ -97,6 +103,73 @@ struct Asset {
     name: String,
     browser_download_url: String,
     size: u64,
+    /// `sha256:<hex>`, which GitHub computes for every asset it holds. Absent
+    /// on assets uploaded before GitHub began reporting it.
+    #[serde(default)]
+    digest: Option<String>,
+}
+
+/// The file a release lists every asset's SHA-256 in, written by the release
+/// workflow with `sha256sum`.
+const CHECKSUMS: &str = "SHA256SUMS.txt";
+
+/// A SHA-256 the release states for the installer, and where it was stated.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Expected {
+    source: &'static str,
+    hex: String,
+}
+
+/// The hex of a GitHub asset digest, when it is a SHA-256.
+fn api_digest(asset: &Asset) -> Option<String> {
+    let hex = asset.digest.as_deref()?.strip_prefix("sha256:")?;
+    is_sha256_hex(hex).then(|| hex.to_ascii_lowercase())
+}
+
+/// The line for `name` in a `sha256sum` listing: `<hex>  <name>`, or
+/// `<hex> *<name>` when it was written in binary mode.
+fn listed_digest(sums: &str, name: &str) -> Option<String> {
+    sums.lines().find_map(|line| {
+        let (hex, rest) = line.trim_end_matches('\r').split_once(char::is_whitespace)?;
+        let file = rest.trim_start().trim_start_matches('*');
+        (file == name && is_sha256_hex(hex)).then(|| hex.to_ascii_lowercase())
+    })
+}
+
+fn is_sha256_hex(s: &str) -> bool {
+    s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    ring::digest::digest(&ring::digest::SHA256, bytes)
+        .as_ref()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// Whether `bytes` are what the release says they are. Every stated digest
+/// must match, and there must be at least one: an installer nobody vouched
+/// for is not saved, because the next thing done with it is running it.
+/// Returns where the digest that matched came from.
+fn verify(bytes: &[u8], name: &str, expected: &[Expected]) -> Result<Vec<&'static str>, String> {
+    if expected.is_empty() {
+        return Err(format!(
+            "the release states no SHA-256 for {name}: GitHub reported no digest for it and \
+             {CHECKSUMS} does not list it. It was not saved."
+        ));
+    }
+    let actual = sha256_hex(bytes);
+    for e in expected {
+        if e.hex != actual {
+            return Err(format!(
+                "{name} does not match the SHA-256 in {}: expected {}, downloaded {actual}. \
+                 It was not saved.",
+                e.source, e.hex
+            ));
+        }
+    }
+    Ok(expected.iter().map(|e| e.source).collect())
 }
 
 /// Compare two versions the way releases are actually numbered.
@@ -266,6 +339,8 @@ pub struct DownloadState {
     pub total: Option<u64>,
     /// Where it landed, once it is `Ready`.
     pub path: Option<String>,
+    /// What its SHA-256 was checked against, once it is `Ready`.
+    pub verified_against: Vec<String>,
     /// Why it stopped, when it stopped badly.
     pub error: Option<String>,
 }
@@ -278,6 +353,7 @@ impl Default for DownloadState {
             downloaded: 0,
             total: None,
             path: None,
+            verified_against: Vec::new(),
             error: None,
         }
     }
@@ -395,6 +471,7 @@ async fn fetch_installer() -> Result<DownloadState, String> {
             downloaded: bytes.len() as u64,
             total: Some(asset.size),
             path: None,
+            verified_against: Vec::new(),
             error: None,
         });
     }
@@ -406,6 +483,18 @@ async fn fetch_installer() -> Result<DownloadState, String> {
             asset.size
         ));
     }
+
+    let mut expected = Vec::new();
+    if let Some(hex) = api_digest(&asset) {
+        expected.push(Expected { source: "GitHub's record of the asset", hex });
+    }
+    if let Some(hex) = checksums(&client, &release.assets)
+        .await?
+        .and_then(|sums| listed_digest(&sums, &asset.name))
+    {
+        expected.push(Expected { source: CHECKSUMS, hex });
+    }
+    let verified = verify(&bytes, &asset.name, &expected)?;
 
     let dir = std::env::temp_dir().join("wtfault-scanner-update");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -420,10 +509,37 @@ async fn fetch_installer() -> Result<DownloadState, String> {
         downloaded: bytes.len() as u64,
         total: Some(asset.size),
         path: Some(path.display().to_string()),
+        verified_against: verified.into_iter().map(String::from).collect(),
         error: None,
     };
     set_state(ready.clone());
     Ok(ready)
+}
+
+/// The release's checksums file, when it has one. Fetched under the same host
+/// rule as the installer; a file that is there but cannot be read is an
+/// error rather than a reason to skip the check.
+async fn checksums(client: &reqwest::Client, assets: &[Asset]) -> Result<Option<String>, String> {
+    let Some(asset) = assets.iter().find(|a| a.name == CHECKSUMS) else {
+        return Ok(None);
+    };
+    if !host_allowed(&asset.browser_download_url) {
+        return Err(format!(
+            "{CHECKSUMS} is hosted at an unexpected address ({}), so the installer was not saved",
+            asset.browser_download_url
+        ));
+    }
+    let text = client
+        .get(&asset.browser_download_url)
+        .send()
+        .await
+        .map_err(|e| format!("could not download {CHECKSUMS}: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("the download of {CHECKSUMS} was refused: {e}"))?
+        .text()
+        .await
+        .map_err(|e| format!("could not read {CHECKSUMS}: {e}"))?;
+    Ok(Some(text))
 }
 
 /// Flags that make the installer do its work without ever drawing a window.
@@ -563,11 +679,13 @@ mod tests {
                 name: "app.msi".into(),
                 browser_download_url: "https://objects.githubusercontent.com/m".into(),
                 size: 2,
+                digest: None,
             },
             Asset {
                 name: "app-setup.exe".into(),
                 browser_download_url: "https://objects.githubusercontent.com/e".into(),
                 size: 1,
+                digest: None,
             },
         ];
         assert_eq!(installer(&assets).unwrap().name, "app-setup.exe");
@@ -579,8 +697,80 @@ mod tests {
             name: "notes.txt".into(),
             browser_download_url: "https://objects.githubusercontent.com/n".into(),
             size: 1,
+            digest: None,
         }];
         assert!(installer(&assets).is_none());
+    }
+
+    const SETUP: &str = "WTFault.Scanner_0.6.0_x64-setup.exe";
+
+    fn expected(source: &'static str, bytes: &[u8]) -> Expected {
+        Expected { source, hex: sha256_hex(bytes) }
+    }
+
+    /// The known answer, so the hash is SHA-256 and not merely consistent.
+    #[test]
+    fn the_hash_is_sha256() {
+        assert_eq!(
+            sha256_hex(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    /// The listing `sha256sum` writes, as the release workflow writes it.
+    #[test]
+    fn the_installer_line_is_found_in_a_checksums_listing() {
+        let hex = sha256_hex(b"installer");
+        let sums = format!(
+            "{}  WTFault.Scanner_0.6.0_x64_en-US.msi\n{hex}  {SETUP}\n{}  app.apk\n",
+            sha256_hex(b"msi"),
+            sha256_hex(b"apk")
+        );
+        assert_eq!(listed_digest(&sums, SETUP), Some(hex.clone()));
+        // Binary mode, Windows line endings, upper case: the same file.
+        let windows = format!("{} *{SETUP}\r\n", hex.to_uppercase());
+        assert_eq!(listed_digest(&windows, SETUP), Some(hex));
+        // A name that only starts the same is another file.
+        assert_eq!(listed_digest(&sums, "WTFault.Scanner_0.6.0_x64-setup"), None);
+        assert_eq!(listed_digest("not a listing", SETUP), None);
+    }
+
+    #[test]
+    fn a_github_digest_is_read_only_when_it_is_a_sha256() {
+        let mut asset = Asset {
+            name: SETUP.into(),
+            browser_download_url: "https://github.com/x".into(),
+            size: 1,
+            digest: Some(format!("sha256:{}", sha256_hex(b"x").to_uppercase())),
+        };
+        assert_eq!(api_digest(&asset), Some(sha256_hex(b"x")));
+        asset.digest = Some("md5:0cc175b9c0f1b6a831c399e269772661".into());
+        assert_eq!(api_digest(&asset), None);
+        asset.digest = None;
+        assert_eq!(api_digest(&asset), None);
+    }
+
+    #[test]
+    fn an_installer_that_matches_every_stated_digest_is_kept() {
+        let bytes = b"the installer";
+        let stated = [expected("GitHub", bytes), expected(CHECKSUMS, bytes)];
+        assert_eq!(verify(bytes, SETUP, &stated).unwrap(), vec!["GitHub", CHECKSUMS]);
+    }
+
+    /// One digest matching is not enough when another disagrees: the two are
+    /// meant to be the same file's, so a disagreement means something changed.
+    #[test]
+    fn an_installer_that_differs_from_any_stated_digest_is_refused() {
+        let bytes = b"the installer";
+        let stated = [expected("GitHub", bytes), expected(CHECKSUMS, b"another installer")];
+        let why = verify(bytes, SETUP, &stated).unwrap_err();
+        assert!(why.contains(CHECKSUMS) && why.contains("was not saved"), "{why}");
+    }
+
+    #[test]
+    fn an_installer_nobody_vouched_for_is_refused() {
+        let why = verify(b"the installer", SETUP, &[]).unwrap_err();
+        assert!(why.contains("states no SHA-256"), "{why}");
     }
 }
 
