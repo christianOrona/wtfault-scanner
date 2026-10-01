@@ -231,6 +231,26 @@ removed, not yet against the 2012 truck.
   record of the file. That catches a damaged or swapped download; it does not
   replace signing, which is what would catch a replaced release.
 
+## Pending, as of 2026-10-01
+
+Desk work that is ready to pick up:
+- Wideband oxygen sensors: PIDs 24-2B (voltage, `(256C+D)*8/65535` V) and
+  34-3B (current, `(256C+D)/256 - 128` mA), both checked against python-OBD.
+  Lambda from bytes A-B needs a second output for numeric PIDs, which the file
+  format does not have yet.
+- PID 13 (which O2 sensors are present): the two sources disagree on which
+  nibble is bank 1. Needs a third source before it is decoded.
+
+Needs the vehicle or the owner (steps in `docs/AT-THE-CAR.md`):
+- #54 cold-start baseline on the F-250 (`dev-core.ps1 -Db` is ready).
+- #39 a second make end to end (Mazda 3 or Odyssey), then export its replay (#59).
+- #64 the Android build against the paired adapter.
+- #65 one inspection on a real OpenRouter key.
+- #50 host the report endpoint, then build a release with `AIM_REPORT_ENDPOINT`.
+- #62 SignPath approval, then #48's unattended install.
+- Pre-CAN support has only met the simulator; the first K-line or J1850 car
+  is its real test.
+
 ## What is not built
 
 Honest gaps, in the order they matter.
