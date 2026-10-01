@@ -1332,6 +1332,20 @@ impl DiagnosticService {
             }
         }
 
+        // Said once, when the vehicle is known, rather than discovered one
+        // refused write at a time.
+        let gateway = self.gateway();
+        if let Some(g) = &gateway {
+            warnings.push(Warning::info(
+                "security_gateway_listed",
+                format!(
+                    "This vehicle is listed as having a {} (from model year {}). Reading is not \
+                     affected; changing configuration is expected to be refused. {}",
+                    g.name, g.from_model_year, g.allows
+                ),
+            ));
+        }
+
         Ok(Payload {
             values,
             data: Some(serde_json::json!({
@@ -1341,6 +1355,7 @@ impl DiagnosticService {
                 "reported_by": module_address,
                 "calibration_ids": calibration_ids,
                 "calibration_verification_numbers": cvns,
+                "security_gateway": gateway,
             })),
             warnings,
             evidence,
@@ -2503,6 +2518,17 @@ impl DiagnosticService {
         })
     }
 
+    /// The security gateway this vehicle is listed as having, if any.
+    ///
+    /// From the identified make and model year against
+    /// `vehicle-profiles/gateways/gateways.yaml`. A listing, not a measurement.
+    fn gateway(&self) -> Option<aim_decoders::gateways::Gateway> {
+        let identity = self.identity();
+        let make = identity.settled("make")?;
+        let year = identity.settled("model_year").and_then(|y| y.parse().ok());
+        self.decoders.gateways.for_vehicle(make, year).cloned()
+    }
+
     /// What this engine burns, according to the engine.
     ///
     /// Service 01 PID 0x51, which this build has decoded since before it could
@@ -2895,6 +2921,7 @@ impl DiagnosticService {
         let modules: Vec<String> =
             self.store.modules(&self.session.id)?.into_iter().map(|m| m.module_key).collect();
         let gates = self.write_gates_known_open();
+        let gateway = self.gateway();
         let caps = self.adapter.capabilities();
         let request = crate::config::ChangeRequest { feature_id: feature_id.to_string(), desired };
         let ctx = crate::config::ChangeContext {
@@ -2905,6 +2932,7 @@ impl DiagnosticService {
             battery_voltage: self.conditions.battery_voltage,
             max_level: aim_safety::MAX_ENABLED_LEVEL,
             write_gate_open_modules: &gates,
+            gateway: gateway.as_ref(),
         };
         let mut plan =
             crate::config::plan_change(&request, self.decoders.features.get(feature_id), &ctx);
@@ -5789,7 +5817,34 @@ impl DiagnosticService {
             );
         }
 
+        // On a vehicle listed as having a gateway, a lock or a silence is the
+        // gateway's answer as much as the module's, and is reported as the
+        // boundary. An open gate is reported too: it means this module is not
+        // behind one, whatever the listing says.
+        let gateway = self
+            .gateway()
+            .filter(|g| g.blocks(aim_decoders::gateways::GatedOperation::WriteConfiguration));
+        let gateway_boundary = gateway.as_ref().and_then(|g| match refusal {
+            Some(aim_protocols::RefusalKind::SecurityRequired) | None => Some(g.boundary()),
+            _ => None,
+        });
+        let mut gateway_warnings = Vec::new();
+        if let Some(boundary) = &gateway_boundary {
+            gateway_warnings.push(Warning::caution("gateway_access_required", boundary.clone()));
+        } else if let (Some(g), true) = (&gateway, writes_open) {
+            gateway_warnings.push(Warning::info(
+                "gateway_listed_but_writes_open",
+                format!(
+                    "This vehicle is listed as having a {}, and this module accepted the write \
+                     probe anyway. The measurement wins: either this model does not have one, \
+                     or this module is not behind it.",
+                    g.name
+                ),
+            ));
+        }
+
         let verdict = match refusal {
+            _ if gateway_boundary.is_some() => gateway_boundary.as_deref().unwrap_or_default(),
             Some(aim_protocols::RefusalKind::NotPresent) => {
                 "This module processed the write and refused it because the identifier does not \
                  exist - not because of security. Writes are open here in the session that is \
@@ -5826,15 +5881,18 @@ impl DiagnosticService {
                 "writes_open_without_security": writes_open,
                 "refused_because": refusal.map(|r| r.code()),
                 "verdict": verdict,
+                "security_gateway": gateway,
             })),
-            warnings: vec![Warning::info(
+            warnings: std::iter::once(Warning::info(
                 "nothing_was_written",
                 format!(
                     "The identifier {ABSENT_DID:04X} was confirmed absent on this module \
                      immediately before, so the write had nowhere to land. What was measured is \
                      the refusal, not a change."
                 ),
-            )],
+            ))
+            .chain(gateway_warnings)
+            .collect(),
             evidence: self.recorder.last_response_event(),
             ..Default::default()
         })

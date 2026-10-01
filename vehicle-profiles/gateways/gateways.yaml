@@ -1,0 +1,27 @@
+# Security gateways: a module between the diagnostic port and the vehicle's
+# networks that lets a tool read but stops it changing anything until the
+# tool has authenticated with the manufacturer.
+#
+# This build has no manufacturer authentication and will not imitate one. A
+# gateway is reported as a boundary - what it blocks, what it does not, and
+# where access comes from - never worked around.
+#
+# Listed only from public documentation; `verification` says so. A model year
+# is where fitting began, not a promise that every model of that year has one,
+# which is why the app still lets a measurement of the module itself overrule
+# this table: a write gate measured open is evidence, and this is not.
+version: 1
+gateways:
+  - id: fca_secure_gateway
+    name: "Secure Gateway Module (FCA / Stellantis)"
+    makes: ["Stellantis", "FCA", "Chrysler", "Dodge", "Jeep", "Ram", "Fiat", "Alfa Romeo"]
+    from_model_year: 2018
+    blocks: [write_configuration]
+    allows: >-
+      Reading fault codes, live data and module identity, and the generic
+      emissions services every scan tool is entitled to.
+    access: >-
+      An authenticated tool, registered with FCA's AutoAuth service, or the
+      gateway bypassed by a dealer. Neither is something this build does.
+    verification: unverified
+    source: "FCA/Stellantis public documentation of the Secure Gateway Module and AutoAuth"

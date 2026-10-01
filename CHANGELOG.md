@@ -7,6 +7,12 @@ with the caveat that everything below 1.0 is allowed to move.
 
 ### Added
 
+- **Security gateways are named.** A vehicle listed as having one (FCA /
+  Stellantis from model year 2018) is told so when it is identified: reading
+  works, changing configuration is expected to be refused, and access comes
+  from the manufacturer's own authentication, which this app does not have and
+  will not imitate. A write plan on such a vehicle says *Gateway access
+  required* unless the module was measured accepting writes anyway.
 - **An Android app.** The same scanner runs on an Android phone, so the thing
   that goes to the car can be the thing in your pocket. Pair the ELM327 in
   Android's Bluetooth settings, install the `.apk` from the release, and pick
