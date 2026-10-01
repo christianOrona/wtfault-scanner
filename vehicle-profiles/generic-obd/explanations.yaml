@@ -158,6 +158,36 @@ signals:
   - id: o2_b2s4_voltage
     easy: "The voltage from an oxygen sensor in the exhaust (further down the exhaust). A healthy one in front of the converter flickers between about 0.1 and 0.9 volts once the engine is warm. One that sits still at either end has usually failed."
     technical: "Service 01 PID 1B. Narrowband O2 sensor output, bank 2 sensor 4, A/200 V. Bank and sensor follow the PID 13 layout. The short-term trim in byte B is not decoded."
+  - id: commanded_evap_purge
+    easy: "How hard the engine is drawing fuel vapour out of the charcoal canister that stops petrol fumes escaping from the tank. It varies with driving; zero at idle is normal."
+    technical: "Service 01 PID 2E. Commanded EVAP purge duty, A*100/255 %."
+  - id: catalyst_temp_b2s1
+    easy: "The temperature the computer works out for the catalytic converter on the engine's second side. It has to be hot to clean the exhaust."
+    technical: "Service 01 PID 3D. Catalyst temperature, bank 2 sensor 1, (256A+B)/10-40 C. Often modelled rather than measured."
+  - id: catalyst_temp_b1s2
+    easy: "The catalytic converter's temperature further downstream on the first side."
+    technical: "Service 01 PID 3E. Catalyst temperature, bank 1 sensor 2, (256A+B)/10-40 C."
+  - id: catalyst_temp_b2s2
+    easy: "The catalytic converter's temperature further downstream on the second side."
+    technical: "Service 01 PID 3F. Catalyst temperature, bank 2 sensor 2, (256A+B)/10-40 C."
+  - id: time_with_mil_on
+    easy: "How long the engine has run with the check-engine light on. A large number means a fault has been ignored for a while."
+    technical: "Service 01 PID 4D. Engine run time while the MIL is on, minutes."
+  - id: time_since_codes_cleared
+    easy: "How long the engine has run since the fault codes were last erased. A small number on a car you are looking at buying means they were cleared recently."
+    technical: "Service 01 PID 4E. Engine run time since DTCs were cleared, minutes."
+  - id: ethanol_percent
+    easy: "How much ethanol the car thinks is in the fuel. Matters on flex-fuel vehicles; on others it may read zero."
+    technical: "Service 01 PID 52. Ethanol fuel percentage, A*100/255 %."
+  - id: fuel_rail_absolute_pressure
+    easy: "The fuel pressure at the injectors, measured from a vacuum rather than from the air outside."
+    technical: "Service 01 PID 59. Fuel rail absolute pressure, (256A+B)*10 kPa."
+  - id: hybrid_battery_remaining_life
+    easy: "How much charge the hybrid's big battery has left, as the car reports it."
+    technical: "Service 01 PID 5B. Hybrid battery pack remaining life, A*100/255 %. State of charge as the vehicle defines it, not battery health."
+  - id: fuel_injection_timing
+    easy: "When the fuel is injected, measured against the piston's position. Mostly a number for mechanics."
+    technical: "Service 01 PID 5D. Fuel injection timing, (256A+B-26880)/128 degrees; negative is before top dead centre."
   - id: long_fuel_trim_b1
     easy: "The long-run version of that fuel correction: what the computer has learned it needs to add or remove all the time. One of the most useful numbers on this screen. A big positive value is the classic sign of an air leak, a tired fuel pump, or a dirty air sensor."
     technical: "Service 01 PID 07. Long-term fuel trim, bank 1. Beyond roughly plus or minus 10 percent warrants investigation; beyond 25 percent will set a P0171 or P0172 family code."

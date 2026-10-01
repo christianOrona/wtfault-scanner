@@ -558,6 +558,24 @@ mod tests {
         assert_eq!(v.unit.as_deref(), Some("degC"));
     }
 
+    /// The PIDs added from SAE J1979 as python-OBD implements it, each at a
+    /// value whose answer is known.
+    #[test]
+    fn the_added_pids_decode_to_known_values() {
+        let r = registry();
+        let ts = aim_types::now();
+        let one = |pid: u8, bytes: &[u8]| r.decode(1, pid, bytes, ts).unwrap().remove(0);
+        // Narrowband oxygen sensor: 0x5A is 0.45 V.
+        assert_eq!(one(0x14, &[0x5A, 0x80]).value, Value::Number(0.45));
+        assert_eq!(one(0x1B, &[0xFF, 0xFF]).signal_id, "o2_b2s4_voltage");
+        // Injection timing is offset so that 0x6900 is top dead centre.
+        assert_eq!(one(0x5D, &[0x69, 0x00]).value, Value::Number(0.0));
+        assert_eq!(one(0x4E, &[0x00, 0x3C]).value, Value::Number(60.0));
+        assert_eq!(one(0x59, &[0x00, 0x64]).value, Value::Number(1000.0));
+        assert_eq!(one(0x3E, &[0x01, 0x90]).value, Value::Number(0.0));
+        assert_eq!(one(0x52, &[0xFF]).value, Value::Number(100.0));
+    }
+
     #[test]
     fn unverified_definitions_produce_untrustworthy_values() {
         let r = registry();

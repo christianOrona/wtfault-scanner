@@ -2,7 +2,7 @@
 #
 # Byte names follow the SAE convention: A is the first payload byte after the
 # echoed PID, B the second, and so on.
-version: 5
+version: 6
 source: "SAE J1979 generic OBD-II service 01"
 service: 1
 pids:
@@ -412,6 +412,16 @@ pids:
     range: { min: -100, max: 99.2 }
     verification: verified
 
+  - pid: 0x2E
+    signal_id: commanded_evap_purge
+    name: "Commanded evaporative purge"
+    kind: numeric
+    bytes: 1
+    unit: "%"
+    formula: "A * 100 / 255"
+    range: { min: 0, max: 100 }
+    verification: verified
+
   - pid: 0x2F
     signal_id: fuel_tank_level
     name: "Fuel tank level input"
@@ -455,6 +465,36 @@ pids:
   - pid: 0x3C
     signal_id: catalyst_temp_b1s1
     name: "Catalyst temperature, bank 1 sensor 1"
+    kind: numeric
+    bytes: 2
+    unit: "degC"
+    formula: "(256 * A + B) / 10 - 40"
+    range: { min: -40, max: 6513.5 }
+    verification: verified
+
+  - pid: 0x3D
+    signal_id: catalyst_temp_b2s1
+    name: "Catalyst temperature, bank 2 sensor 1"
+    kind: numeric
+    bytes: 2
+    unit: "degC"
+    formula: "(256 * A + B) / 10 - 40"
+    range: { min: -40, max: 6513.5 }
+    verification: verified
+
+  - pid: 0x3E
+    signal_id: catalyst_temp_b1s2
+    name: "Catalyst temperature, bank 1 sensor 2"
+    kind: numeric
+    bytes: 2
+    unit: "degC"
+    formula: "(256 * A + B) / 10 - 40"
+    range: { min: -40, max: 6513.5 }
+    verification: verified
+
+  - pid: 0x3F
+    signal_id: catalyst_temp_b2s2
+    name: "Catalyst temperature, bank 2 sensor 2"
     kind: numeric
     bytes: 2
     unit: "degC"
@@ -559,6 +599,26 @@ pids:
     range: { min: 0, max: 100 }
     verification: verified
 
+  - pid: 0x4D
+    signal_id: time_with_mil_on
+    name: "Time run with the warning lamp on"
+    kind: numeric
+    bytes: 2
+    unit: "min"
+    formula: "256 * A + B"
+    range: { min: 0, max: 65535 }
+    verification: verified
+
+  - pid: 0x4E
+    signal_id: time_since_codes_cleared
+    name: "Time since trouble codes were cleared"
+    kind: numeric
+    bytes: 2
+    unit: "min"
+    formula: "256 * A + B"
+    range: { min: 0, max: 65535 }
+    verification: verified
+
   - pid: 0x51
     signal_id: fuel_type
     name: "Fuel type"
@@ -593,9 +653,39 @@ pids:
       22: "Hybrid Regenerative"
       23: "Bifuel running diesel"
 
+  - pid: 0x52
+    signal_id: ethanol_percent
+    name: "Ethanol fuel percentage"
+    kind: numeric
+    bytes: 1
+    unit: "%"
+    formula: "A * 100 / 255"
+    range: { min: 0, max: 100 }
+    verification: verified
+
+  - pid: 0x59
+    signal_id: fuel_rail_absolute_pressure
+    name: "Fuel rail absolute pressure"
+    kind: numeric
+    bytes: 2
+    unit: "kPa"
+    formula: "(256 * A + B) * 10"
+    range: { min: 0, max: 655350 }
+    verification: verified
+
   - pid: 0x5A
     signal_id: relative_accelerator_pedal_position
     name: "Relative accelerator pedal position"
+    kind: numeric
+    bytes: 1
+    unit: "%"
+    formula: "A * 100 / 255"
+    range: { min: 0, max: 100 }
+    verification: verified
+
+  - pid: 0x5B
+    signal_id: hybrid_battery_remaining_life
+    name: "Hybrid battery pack remaining life"
     kind: numeric
     bytes: 1
     unit: "%"
@@ -611,6 +701,16 @@ pids:
     unit: "degC"
     formula: "A - 40"
     range: { min: -40, max: 210 }
+    verification: verified
+
+  - pid: 0x5D
+    signal_id: fuel_injection_timing
+    name: "Fuel injection timing"
+    kind: numeric
+    bytes: 2
+    unit: "deg"
+    formula: "(256 * A + B - 26880) / 128"
+    range: { min: -210, max: 301.992 }
     verification: verified
 
   - pid: 0x5E
