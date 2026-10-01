@@ -1411,9 +1411,16 @@ impl DiagnosticService {
                     {
                         self.saw_truncated_response = true;
                     }
+                    // Many modules simply do not report every info type. That
+                    // is said as itself, not as an adapter transcript.
+                    let why = if e.code == ErrorCode::NoData {
+                        String::from("not reported by this vehicle")
+                    } else {
+                        e.message
+                    };
                     warnings.push(Warning::info(
                         "calibration_unavailable",
-                        format!("service 09 info type {info_type:02X}: {}", e.message),
+                        format!("service 09 info type {info_type:02X}: {why}"),
                     ))
                 }
             }
@@ -1881,7 +1888,11 @@ impl DiagnosticService {
                 }
                 Err(e) => warnings.push(Warning::info(
                     "identity_field_unavailable",
-                    format!("{label}: {}", e.message),
+                    if e.code == ErrorCode::NoData {
+                        format!("{label}: not reported by this module")
+                    } else {
+                        format!("{label}: {}", e.message)
+                    },
                 )),
             }
         }
