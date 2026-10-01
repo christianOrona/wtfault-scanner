@@ -77,6 +77,10 @@ pub struct ServerConfig {
     /// directory for them. `None` disables importing rather than inventing a
     /// location to write somebody else.s YAML into.
     pub profiles_dir: Option<std::path::PathBuf>,
+    /// A recorded transcript the simulated connection answers from instead of
+    /// the virtual vehicle, so a real session can be opened without the
+    /// vehicle. Commands it never recorded answer `NO DATA`.
+    pub replay: Option<std::path::PathBuf>,
 }
 
 /// What a connect request asks for.
@@ -353,6 +357,19 @@ fn build_adapter(
     known_baud: Option<u32>,
 ) -> ApiResult<Box<dyn DiagnosticAdapter>> {
     match choice {
+        TransportChoice::Simulator if config.replay.is_some() => {
+            let path = config.replay.as_ref().expect("guarded above");
+            let transport =
+                aim_simulator::ReplayTransport::from_file(path, aim_simulator::ReplayMode::Lookup)
+                    .map_err(|e| {
+                        ApiError::bad_request(format!(
+                            "cannot replay {}: {}",
+                            path.display(),
+                            e.message
+                        ))
+                    })?;
+            Ok(Box::new(Elm327Adapter::new(Box::new(transport), Elm327Config::fast())))
+        }
         TransportChoice::Simulator => {
             let transport =
                 SimulatedTransport::with_personality(scenario, config.personality.build())

@@ -147,11 +147,50 @@ pub struct ReplayTransport {
     stats: TransportStats,
     /// Commands that had no recorded answer, for the caller to report.
     pub misses: Vec<String>,
-    /// For each exchange, the header that was in effect when it was recorded.
-    /// None means "no header set" (default).
-    recorded_headers: Vec<Option<String>>,
-    /// The current header being used for lookups.
-    current_header: Option<String>,
+    /// For each exchange, the header and bus in effect when it was recorded.
+    recorded_headers: Vec<Context>,
+    /// The header and bus the replay is on now.
+    current_header: Context,
+}
+
+/// Which module a command was addressed to, and on which bus.
+///
+/// Two modules on two buses can share an address, and a reply recorded on the
+/// second bus must not answer a request made on the first: that is how a
+/// replay reported a truck's twenty-nine body modules as being on its primary
+/// bus, and its secondary bus as unreachable.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct Context {
+    /// The `ATSH` header, or `None` for the default.
+    header: Option<String>,
+    /// Whether the secondary channel (`STP5x` on STN firmware) is selected.
+    secondary: bool,
+}
+
+impl Context {
+    /// Follow a command that changes what later commands are addressed to.
+    fn follow(&mut self, command: &str) {
+        if let Some(header) = command.strip_prefix("ATSH") {
+            self.header = Some(header.to_string());
+        } else if command == "ATZ" || command == "ATD" {
+            *self = Context::default();
+        } else if command.starts_with("ATSP") || command.starts_with("ATTP") {
+            self.secondary = false;
+        } else if let Some(protocol) = command.strip_prefix("STP") {
+            // `STP53` is a protocol number; `STPBR`, `STPX` are other commands.
+            if protocol.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+                self.secondary = protocol.starts_with('5');
+            }
+        }
+    }
+}
+
+/// Whether a command is for the adapter rather than the vehicle, so its answer
+/// does not depend on which module or bus is addressed. `ST` is the STN
+/// extension set, except `STPX`, which carries a request to the vehicle.
+fn is_adapter_command(normalized: &str) -> bool {
+    normalized.starts_with("AT")
+        || (normalized.starts_with("ST") && !normalized.starts_with("STPX"))
 }
 
 impl ReplayTransport {
@@ -159,25 +198,10 @@ impl ReplayTransport {
     pub fn new(transcript: Transcript, mode: ReplayMode, descriptor: impl Into<String>) -> Self {
         // Compute the headers for each exchange
         let mut recorded_headers = Vec::with_capacity(transcript.exchanges.len());
-        let mut current_header = None;
-
+        let mut context = Context::default();
         for exchange in &transcript.exchanges {
-            let command = normalize(&exchange.command);
-
-            if command.starts_with("ATSH") {
-                // Set the header to the part after ATSH
-                if let Some(header) = command.strip_prefix("ATSH") {
-                    current_header = Some(header.to_string());
-                }
-                recorded_headers.push(current_header.clone());
-            } else if command == "ATZ" || command == "ATD" {
-                // Reset header
-                current_header = None;
-                recorded_headers.push(current_header.clone());
-            } else {
-                // Keep the current header for non-header commands
-                recorded_headers.push(current_header.clone());
-            }
+            context.follow(&normalize(&exchange.command));
+            recorded_headers.push(context.clone());
         }
 
         ReplayTransport {
@@ -191,7 +215,7 @@ impl ReplayTransport {
             stats: TransportStats::default(),
             misses: Vec::new(),
             recorded_headers,
-            current_header: None,
+            current_header: Context::default(),
         }
     }
 
@@ -239,13 +263,14 @@ impl ReplayTransport {
                 Ok(next.lines.clone())
             }
             ReplayMode::Lookup => {
-                // Adapter settings (`AT...`) do not depend on the addressed module;
-                // everything else was answered by whichever module `ATSH` selected.
-                let is_setting = wanted.starts_with("AT");
+                // Adapter commands do not depend on the addressed module;
+                // everything else was answered by whichever module `ATSH`
+                // selected, on whichever bus was selected.
+                let is_setting = is_adapter_command(&wanted);
                 let found = self.transcript.exchanges.iter().zip(&self.recorded_headers).find(
-                    |(e, header)| {
+                    |(e, context)| {
                         normalize(&e.command) == wanted
-                            && (is_setting || header.as_ref() == self.current_header.as_ref())
+                            && (is_setting || *context == &self.current_header)
                     },
                 );
                 match found {
@@ -312,15 +337,7 @@ impl Transport for ReplayTransport {
                     let command = String::from_utf8_lossy(&self.line).to_string();
                     self.line.clear();
 
-                    // Update current header if this is an ATSH command
-                    let normalized_command = normalize(&command);
-                    if normalized_command.starts_with("ATSH") {
-                        if let Some(header) = normalized_command.strip_prefix("ATSH") {
-                            self.current_header = Some(header.to_string());
-                        }
-                    } else if normalized_command == "ATZ" || normalized_command == "ATD" {
-                        self.current_header = None;
-                    }
+                    self.current_header.follow(&normalize(&command));
 
                     let lines = self.answer(&command)?;
                     let mut reply = String::new();
@@ -490,6 +507,33 @@ mod tests {
 
         // Then send ATSH7E2 then 3E00 - should get NO DATA
         assert!(drive(&mut t, "ATSH7E2").unwrap().contains("NO DATA"));
+        assert!(drive(&mut t, "3E00").unwrap().contains("NO DATA"));
+    }
+
+    /// A reply recorded on the second bus answers only on the second bus, and
+    /// STN commands are the adapter's, answered whatever module is addressed.
+    #[test]
+    fn lookup_mode_keeps_the_two_buses_apart() {
+        let transcript = Transcript::parse(
+            "> ATSH7E0\n< OK\n> STP53\n< OK\n> STPBR 500000\n< OK\n\
+             > ATSH726\n< OK\n> 3E00\n< 72E 02 7E 00\n> ATSP6\n< OK\n",
+        )
+        .unwrap();
+        let mut t = ReplayTransport::new(transcript, ReplayMode::Lookup, "replay:test");
+        t.open().unwrap();
+
+        // On the primary bus, the body module recorded on the second is silent.
+        assert!(drive(&mut t, "ATSH726").unwrap().contains("OK"));
+        assert!(drive(&mut t, "3E00").unwrap().contains("NO DATA"));
+
+        // `STP53` was recorded under another header and is answered anyway.
+        assert!(drive(&mut t, "STP53").unwrap().contains("OK"));
+        assert!(drive(&mut t, "ATSH726").unwrap().contains("OK"));
+        assert!(drive(&mut t, "3E00").unwrap().contains("72E"));
+
+        // And back on the primary bus it is silent again.
+        assert!(drive(&mut t, "ATSP6").unwrap().contains("OK"));
+        assert!(drive(&mut t, "ATSH726").unwrap().contains("OK"));
         assert!(drive(&mut t, "3E00").unwrap().contains("NO DATA"));
     }
 }

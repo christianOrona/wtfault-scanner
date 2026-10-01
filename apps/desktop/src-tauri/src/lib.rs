@@ -269,6 +269,7 @@ fn start_core(app: &mut tauri::App) -> tauri::Result<()> {
             .map(|dir| dir.join("providers.json"))
             .unwrap_or_else(|| std::path::PathBuf::from("providers.json")),
         profiles_dir: profiles,
+        replay: None,
     };
 
     let state = AppState::new(store, decoders, config);

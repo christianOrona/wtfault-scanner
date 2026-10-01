@@ -74,6 +74,12 @@ struct Args {
     #[arg(long, value_name = "PATH")]
     profiles: Option<String>,
 
+    /// Answer the simulated connection from a recorded transcript instead of
+    /// the virtual vehicle, e.g. one in core/diagnostics/tests/replays. Opens a
+    /// real session in the app without the vehicle it was recorded on.
+    #[arg(long, value_name = "TRANSCRIPT", conflicts_with = "serial")]
+    replay: Option<String>,
+
     /// List the simulator scenarios and exit.
     #[arg(long)]
     list_scenarios: bool,
@@ -150,6 +156,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map(std::path::PathBuf::from)
             .unwrap_or_else(default_settings_path),
         profiles_dir: args.profiles.as_ref().map(std::path::PathBuf::from),
+        replay: args.replay.as_ref().map(std::path::PathBuf::from),
     };
 
     tracing::info!(
