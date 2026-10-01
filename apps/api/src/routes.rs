@@ -1898,6 +1898,9 @@ async fn list_procedures(State(_state): State<AppState>) -> ApiResult<Json<Value
                 "instructions": p.conditions.iter().map(|c| c.instruction()).collect::<Vec<_>>(),
                 "can_run_alone": p.safe_for_one_person(),
                 "why_not_alone": p.why_not_alone(),
+                // Empty means any engine. Checked against what the engine
+                // reports before the procedure asks anybody to do anything.
+                "applies_to": p.engines,
             })
         })
         .collect();

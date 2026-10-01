@@ -362,6 +362,10 @@ pub struct DiagnosticService {
     /// three times running is not about to start answering, and every retry
     /// costs six seconds of somebody standing next to a vehicle.
     signal_timeouts: BTreeMap<String, usize>,
+    /// What each engine module said it burns (PID 0x51), once it has said.
+    /// A procedure check is polled while somebody works towards a state, and
+    /// the fuel does not change in between.
+    fuel_types: BTreeMap<String, String>,
     reference_year: u16,
 }
 
@@ -397,6 +401,7 @@ impl DiagnosticService {
             saw_truncated_response: false,
             write_gate_open: std::collections::BTreeSet::new(),
             signal_timeouts: BTreeMap::new(),
+            fuel_types: BTreeMap::new(),
             reference_year: 2026,
         })
     }
@@ -2195,6 +2200,31 @@ impl DiagnosticService {
             .map(|m| m.module_key)
             .unwrap_or_else(|| String::from("ECU_7E8"));
 
+        // Before anybody is asked to do anything: does this procedure mean
+        // anything on this engine? Asked of the engine, not of the make. An
+        // engine that does not say is given the procedure, and the run reports
+        // whatever it could not read.
+        let fuel = self.fuel_type(&module);
+        let engine = fuel.as_deref().and_then(crate::procedure::Engine::from_fuel_type);
+        if let Some(why) = engine.and_then(|e| procedure.why_not_on(e)) {
+            return Ok(Payload {
+                data: Some(serde_json::json!({
+                    "procedure": procedure.id,
+                    "name": procedure.name,
+                    "purpose": procedure.purpose,
+                    "state": crate::procedure::ProcedureState::DoesNotApply,
+                    "does_not_apply_because": why,
+                    "fuel_type": fuel,
+                    "engine": engine,
+                    "applies_to": procedure.engines,
+                    "all_met": false,
+                })),
+                warnings: vec![Warning::info("procedure_does_not_apply", why)],
+                evidence: self.recorder.last_response_event(),
+                ..Default::default()
+            });
+        }
+
         let mut checks = Vec::new();
         for condition in &procedure.conditions {
             let (value, unmeasurable) = match condition.signal() {
@@ -2250,6 +2280,9 @@ impl DiagnosticService {
                 "hold_seconds": procedure.hold_seconds,
                 "safety_notes": procedure.safety_notes,
                 "measures": procedure.measure,
+                "fuel_type": fuel,
+                "engine": engine,
+                "not_on_this_engine": engine.map(|e| procedure.not_on(e)).unwrap_or_default(),
             })),
             warnings: Vec::new(),
             evidence: self.recorder.last_response_event(),
@@ -2290,6 +2323,11 @@ impl DiagnosticService {
         self.require_usable()?;
 
         let before = self.check_procedure_inner(procedure_id)?;
+        let does_not_apply =
+            serde_json::to_value(crate::procedure::ProcedureState::DoesNotApply).ok();
+        if before.data.as_ref().map(|d| &d["state"]) == does_not_apply.as_ref() {
+            return Ok(before);
+        }
         let held_before =
             before.data.as_ref().and_then(|d| d["all_met"].as_bool()).unwrap_or(false);
         if !held_before {
@@ -2330,28 +2368,41 @@ impl DiagnosticService {
         // missing, and neither is visible in a list of the values that did
         // arrive: the id might not exist, or this engine might not have it. A
         // diesel has no fuel trims to report.
+        //
+        // What this engine cannot produce at all is not missing: a diesel
+        // holding 2500 rpm is measured on what it has, and the fuel trims it
+        // has none of are named separately rather than failing the run.
+        let fuel = self.fuel_type(&module);
+        let engine = fuel.as_deref().and_then(crate::procedure::Engine::from_fuel_type);
+        let not_on_this_engine = engine.map(|e| procedure.not_on(e)).unwrap_or_default();
         let missing: Vec<String> = procedure
             .measure
             .iter()
+            .filter(|wanted| !not_on_this_engine.contains(wanted))
             .filter(|wanted| !reading.values.iter().any(|v| &&v.signal_id == wanted))
             .cloned()
             .collect();
 
-        // Ask the vehicle what it burns, rather than describing the general
-        // case. PID 0x51 has been decoded by this build all along and nothing
-        // ever read it, so a diesel was told about fuel trims in the abstract
-        // while being unable to report them for a reason it could have stated.
-        let fuel = self.fuel_type(&module);
-
         let mut warnings = reading.warnings.clone();
-        if !missing.is_empty() {
-            let because = match fuel.as_deref() {
-                Some("Diesel") => String::from(
-                    " This engine reports its fuel type as diesel, and a diesel has no fuel \
-                     trims to report: they describe a correction around a petrol engine's \
-                     stoichiometric target, which a diesel does not run to.",
+        if let (Some(engine), false) = (engine, not_on_this_engine.is_empty()) {
+            warnings.push(Warning::info(
+                "not_on_this_engine",
+                format!(
+                    "{} not measured: this engine reports that it is {}, which does not produce \
+                     {}. That is a fact about the engine, not a fault, and the measurement is \
+                     complete without {}.",
+                    not_on_this_engine.join(", "),
+                    engine.describe(),
+                    if not_on_this_engine.len() == 1 { "it" } else { "them" },
+                    if not_on_this_engine.len() == 1 { "it" } else { "them" },
                 ),
-                Some(other) => format!(" This engine reports its fuel type as {other}."),
+            ));
+        }
+        if !missing.is_empty() {
+            // What the engine structurally lacks has already been taken out
+            // above; what is left is something it might have and did not send.
+            let because = match fuel.as_deref() {
+                Some(fuel) => format!(" This engine reports its fuel type as {fuel}."),
                 None => String::new(),
             };
             warnings.push(Warning::caution(
@@ -2395,7 +2446,9 @@ impl DiagnosticService {
                 // conditions can hold perfectly while the thing being
                 // established never gets read.
                 "fuel_type": fuel,
+                "engine": engine,
                 "declared": procedure.measure,
+                "not_on_this_engine": not_on_this_engine,
                 "unavailable": missing,
                 "complete": missing.is_empty() && held_after,
             })),
@@ -2418,15 +2471,22 @@ impl DiagnosticService {
     /// are a correction around a petrol engine's stoichiometric target, a
     /// diesel does not run to one, and a procedure built around them reported
     /// success on a diesel having measured none of them.
+    ///
+    /// Kept once a module has answered, and asked again while it has not.
     fn fuel_type(&mut self, module_key: &str) -> Option<String> {
+        if let Some(known) = self.fuel_types.get(module_key) {
+            return Some(known.clone());
+        }
         let result = self.read_pid(module_key, "fuel_type", "user:procedure");
         if !result.success {
             return None;
         }
-        result.values.first().and_then(|v| match &v.value {
+        let fuel = result.values.first().and_then(|v| match &v.value {
             aim_types::Value::Text(t) => Some(t.clone()),
             _ => None,
-        })
+        })?;
+        self.fuel_types.insert(module_key.to_string(), fuel.clone());
+        Some(fuel)
     }
 
     /// One signal's current value, as a number.

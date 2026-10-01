@@ -233,11 +233,13 @@ Honest gaps, in the order they matter.
   both sides share the scaling; the units are a best guess and labelled as one.
   A 2019 F-250 returned 54 on 2026-09-28; earlier visits recorded none, and why
   is not known.
-- **Fuel type is readable but not used.** PID `0x51` reads `Diesel` on the
-  F-250 (2026-09-28), and nothing asks it before choosing what to measure. A gasoline-shaped procedure therefore runs on a diesel and
-  measures nothing: `warm_idle` exists for fuel trims, a diesel has none, and
-  until 2026-09-11 it reported success anyway. It now says what it could not
-  measure, but a procedure still cannot declare which engines it applies to.
+- **Procedures know which engines they apply to, from one kind of signal.**
+  Each procedure declares its engines, and the engine's own PID `0x51` is read
+  before anyone is asked to do anything: `warm_idle` (fuel trims) is not
+  offered to a diesel, and a diesel holding 2500 rpm is measured without the
+  fuel trims it cannot have. Fuel trims are the only signals this build knows
+  to be engine-specific; an engine that does not answer `0x51` is given every
+  procedure, as before.
 - **Few diesel-specific signals.** DEF level is read; DPF pressure,
   regeneration state and SCR data are carried by legislated PIDs the truck
   supports (7A, 8B, 85, 83) and are not decoded, for want of a documented
