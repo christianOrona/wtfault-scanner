@@ -152,6 +152,9 @@ export function UpdateBanner({ coreUp }: { coreUp: boolean }) {
             ? `${status.latest} is downloaded. Restart when you are ready to finish installing it.`
             : `Downloading ${status.latest}${percent != null ? ` (${percent}%)` : ""}…`}
         </span>
+        {(failed || downloadError) && (
+          <span className="cls-bus_error">{failed ?? downloadError}</span>
+        )}
         {(ready || installing || quitting) && (
           <button className="mini" onClick={install} disabled={installing}>
             {quitting ? "Restarting…" : installing ? "Installing…" : "Install and restart"}
