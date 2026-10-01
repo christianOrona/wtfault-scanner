@@ -86,6 +86,11 @@ pub struct VehicleState {
     pub short_fuel_trim_pct: f64,
     /// Long-term fuel trim, bank 1, percent.
     pub long_fuel_trim_pct: f64,
+    /// Narrowband oxygen sensor voltage, bank 1, before the catalytic
+    /// converter. Only a petrol engine has it.
+    pub o2_upstream_v: f64,
+    /// The same, after the converter.
+    pub o2_downstream_v: f64,
 }
 
 impl VehicleState {
@@ -123,6 +128,8 @@ impl VehicleState {
             demand_torque_pct: 0.0,
             reference_torque_nm: 1152,
             fuel_type: 0x04,
+            o2_upstream_v: 0.45,
+            o2_downstream_v: 0.65,
             short_fuel_trim_pct: 0.0,
             long_fuel_trim_pct: 0.0,
         }
@@ -213,6 +220,14 @@ pub fn encode_pid(pid: u8, s: &VehicleState) -> Option<Vec<u8>> {
         // Fuel trims: (A - 128) * 100 / 128.
         0x06 => vec![u8_clamped(s.short_fuel_trim_pct * 128.0 / 100.0 + 128.0)],
         0x07 => vec![u8_clamped(s.long_fuel_trim_pct * 128.0 / 100.0 + 128.0)],
+        // Oxygen sensors, bank 1: A is the voltage over 200. B is the trim
+        // the sensor feeds, FF for the one after the converter, which feeds
+        // none.
+        0x14 => vec![
+            u8_clamped(s.o2_upstream_v * 200.0),
+            u8_clamped(s.short_fuel_trim_pct * 128.0 / 100.0 + 128.0),
+        ],
+        0x15 => vec![u8_clamped(s.o2_downstream_v * 200.0), 0xFF],
         0x0B => vec![u8_clamped(s.map_kpa)],
         0x0C => enc_rpm(s.rpm).to_vec(),
         0x0D => vec![u8_clamped(s.speed_kph)],

@@ -134,6 +134,30 @@ signals:
   - id: short_fuel_trim_b1
     easy: "A live correction: how much extra or less fuel the computer is adding this very second to keep the mixture right. Near zero is healthy. A large positive number means it is adding fuel to make up for air getting in where it should not."
     technical: "Service 01 PID 06. Short-term fuel trim, bank 1. Percent correction about stoichiometric; responds within seconds."
+  - id: o2_b1s1_voltage
+    easy: "The voltage from an oxygen sensor in the exhaust (before the catalytic converter, the one the engine steers its fuel by). A healthy one in front of the converter flickers between about 0.1 and 0.9 volts once the engine is warm. One that sits still at either end has usually failed."
+    technical: "Service 01 PID 14. Narrowband O2 sensor output, bank 1 sensor 1, A/200 V. Bank and sensor follow the PID 13 layout. The short-term trim in byte B is not decoded."
+  - id: o2_b1s2_voltage
+    easy: "The voltage from an oxygen sensor in the exhaust (after the catalytic converter, which checks the converter is working). A healthy one in front of the converter flickers between about 0.1 and 0.9 volts once the engine is warm. One that sits still at either end has usually failed."
+    technical: "Service 01 PID 15. Narrowband O2 sensor output, bank 1 sensor 2, A/200 V. Bank and sensor follow the PID 13 layout. The short-term trim in byte B is not decoded."
+  - id: o2_b1s3_voltage
+    easy: "The voltage from an oxygen sensor in the exhaust (further down the exhaust). A healthy one in front of the converter flickers between about 0.1 and 0.9 volts once the engine is warm. One that sits still at either end has usually failed."
+    technical: "Service 01 PID 16. Narrowband O2 sensor output, bank 1 sensor 3, A/200 V. Bank and sensor follow the PID 13 layout. The short-term trim in byte B is not decoded."
+  - id: o2_b1s4_voltage
+    easy: "The voltage from an oxygen sensor in the exhaust (further down the exhaust). A healthy one in front of the converter flickers between about 0.1 and 0.9 volts once the engine is warm. One that sits still at either end has usually failed."
+    technical: "Service 01 PID 17. Narrowband O2 sensor output, bank 1 sensor 4, A/200 V. Bank and sensor follow the PID 13 layout. The short-term trim in byte B is not decoded."
+  - id: o2_b2s1_voltage
+    easy: "The voltage from an oxygen sensor in the exhaust (before the catalytic converter, the one the engine steers its fuel by). A healthy one in front of the converter flickers between about 0.1 and 0.9 volts once the engine is warm. One that sits still at either end has usually failed."
+    technical: "Service 01 PID 18. Narrowband O2 sensor output, bank 2 sensor 1, A/200 V. Bank and sensor follow the PID 13 layout. The short-term trim in byte B is not decoded."
+  - id: o2_b2s2_voltage
+    easy: "The voltage from an oxygen sensor in the exhaust (after the catalytic converter, which checks the converter is working). A healthy one in front of the converter flickers between about 0.1 and 0.9 volts once the engine is warm. One that sits still at either end has usually failed."
+    technical: "Service 01 PID 19. Narrowband O2 sensor output, bank 2 sensor 2, A/200 V. Bank and sensor follow the PID 13 layout. The short-term trim in byte B is not decoded."
+  - id: o2_b2s3_voltage
+    easy: "The voltage from an oxygen sensor in the exhaust (further down the exhaust). A healthy one in front of the converter flickers between about 0.1 and 0.9 volts once the engine is warm. One that sits still at either end has usually failed."
+    technical: "Service 01 PID 1A. Narrowband O2 sensor output, bank 2 sensor 3, A/200 V. Bank and sensor follow the PID 13 layout. The short-term trim in byte B is not decoded."
+  - id: o2_b2s4_voltage
+    easy: "The voltage from an oxygen sensor in the exhaust (further down the exhaust). A healthy one in front of the converter flickers between about 0.1 and 0.9 volts once the engine is warm. One that sits still at either end has usually failed."
+    technical: "Service 01 PID 1B. Narrowband O2 sensor output, bank 2 sensor 4, A/200 V. Bank and sensor follow the PID 13 layout. The short-term trim in byte B is not decoded."
   - id: long_fuel_trim_b1
     easy: "The long-run version of that fuel correction: what the computer has learned it needs to add or remove all the time. One of the most useful numbers on this screen. A big positive value is the classic sign of an air leak, a tired fuel pump, or a dirty air sensor."
     technical: "Service 01 PID 07. Long-term fuel trim, bank 1. Beyond roughly plus or minus 10 percent warrants investigation; beyond 25 percent will set a P0171 or P0172 family code."

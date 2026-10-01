@@ -97,6 +97,19 @@ fn supported_pids_and_live_readings_decode() {
     let rpm = live.values.iter().find(|v| v.signal_id == "engine_rpm").unwrap();
     let rpm = rpm.value.as_f64().unwrap();
     assert!((500.0..2500.0).contains(&rpm), "engine speed {rpm}");
+
+    // The narrowband oxygen sensors an engine of this age has, before and
+    // after the catalytic converter.
+    let o2 = service.read_live_data(
+        "ECU_10",
+        &["o2_b1s1_voltage".into(), "o2_b1s2_voltage".into()],
+        USER,
+    );
+    assert!(o2.success, "{:?}", o2.error);
+    let volts =
+        |id: &str| o2.values.iter().find(|v| v.signal_id == id).unwrap().value.as_f64().unwrap();
+    assert!((0.0..=1.275).contains(&volts("o2_b1s1_voltage")));
+    assert!((volts("o2_b1s2_voltage") - 0.65).abs() < 0.01);
 }
 
 /// Codes come three to a frame with no count byte, from both modules.

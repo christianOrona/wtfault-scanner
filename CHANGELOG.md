@@ -7,6 +7,10 @@ with the caveat that everything below 1.0 is allowed to move.
 
 ### Added
 
+- **Oxygen sensor voltages.** The narrowband sensors nearly every petrol engine
+  from before wideband sensors reports (PIDs 14 to 1B) are read as volts, with
+  an explanation of what a healthy one does.
+
 - **Pick the virtual vehicle when connecting.** The Connect dialog offers the
   2019 F-250, the 2023 Odyssey and the 2004 Toyota, so the app can be tried on
   another make, or a car from before CAN, without the command line.

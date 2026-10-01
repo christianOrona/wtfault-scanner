@@ -513,8 +513,8 @@ impl VirtualVehicle {
             calibration_ids: vec![pad_ascii("34715100", 16)],
             cvns: Vec::new(),
             supported_service01: vec![
-                0x01, 0x03, 0x04, 0x05, 0x06, 0x07, 0x0C, 0x0D, 0x0E, 0x0F, 0x10, 0x11, 0x13, 0x1C,
-                0x20, 0x21,
+                0x01, 0x03, 0x04, 0x05, 0x06, 0x07, 0x0C, 0x0D, 0x0E, 0x0F, 0x10, 0x11, 0x13, 0x14,
+                0x15, 0x1C, 0x20, 0x21,
             ],
             supported_service09: vec![0x02, 0x04],
             reports_dtcs: true,
@@ -612,6 +612,10 @@ impl VirtualVehicle {
             let t = self.elapsed_s();
             s.short_fuel_trim_pct = 2.3 * crate::state::wobble(t, 0.7, 1.9);
             s.long_fuel_trim_pct = 3.1;
+            // The sensor before the converter switches rich and lean in
+            // closed loop; the one after sits steady behind a working one.
+            s.o2_upstream_v = 0.45 + 0.4 * crate::state::wobble(t, 1.3, 2.9);
+            s.o2_downstream_v = 0.65;
         }
         s
     }
