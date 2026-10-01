@@ -53,6 +53,10 @@ export function FullScanPane({ connected }: { connected: boolean }) {
   // about the part that never came.
   const withFaults = modules.filter((m) => m.fault_count > 0 || m.cut_off);
   const cutOff = modules.filter((m) => m.cut_off);
+  // A module with a note never handed over its fault list. Its zero is
+  // unknown, not clean, and "all clear" may only speak for the rest.
+  const unread = modules.filter((m) => m.note);
+  const read = modules.length - unread.length;
   const failingNow = modules.flatMap((m) => m.faults.filter((f) => f.failing_now));
 
   return (
@@ -132,20 +136,29 @@ export function FullScanPane({ connected }: { connected: boolean }) {
         <>
           <div className="row" style={{ gap: 24, marginBottom: 14 }}>
             <Stat label="Modules found" value={String(data.module_count)} />
+            {/* With no fault list read, a zero is not known to be zero. */}
             <Stat
               label="Faults stored"
-              value={String(data.fault_count)}
-              tone={data.fault_count ? "var(--caution)" : "var(--ok)"}
+              value={read === 0 ? "unknown" : String(data.fault_count)}
+              tone={data.fault_count ? "var(--caution)" : read === 0 ? undefined : "var(--ok)"}
             />
             <Stat
               label="Failing right now"
-              value={String(failingNow.length)}
-              tone={failingNow.length ? "var(--serious)" : "var(--ok)"}
+              value={read === 0 ? "unknown" : String(failingNow.length)}
+              tone={failingNow.length ? "var(--serious)" : read === 0 ? undefined : "var(--ok)"}
             />
             {!easy && <Stat label="Addresses probed" value={String(data.addresses_probed)} />}
           </div>
 
-          {data.fault_count === 0 && cutOff.length > 0 ? (
+          {data.fault_count === 0 && modules.length > 0 && read === 0 ? (
+            <div className="banner caution">
+              <span className="b-code">nothing read</span>
+              <span>
+                {modules.length} modules answered, but none of them handed over its list of faults,
+                so whether any faults are stored is not known. This is not a clean result.
+              </span>
+            </div>
+          ) : data.fault_count === 0 && cutOff.length > 0 ? (
             <div className="banner caution">
               <span className="b-code">incomplete</span>
               <span>
@@ -159,9 +172,11 @@ export function FullScanPane({ connected }: { connected: boolean }) {
             <div className="banner info">
               <span className="b-code">all clear</span>
               <span>
-                {data.module_count} modules answered and none of them is holding a fault. That
-                is a stronger result than a clean code scan, because it covers systems the
-                emissions rules never look at.
+                {read} module{read === 1 ? "" : "s"} handed over {read === 1 ? "its" : "their"}{" "}
+                fault list and none of them is holding a fault. That is a stronger result than a
+                clean code scan, because it covers systems the emissions rules never look at.
+                {unread.length > 0 &&
+                  ` ${unread.length} more answered but would not hand one over, so nothing is known about them.`}
               </span>
             </div>
           ) : (
@@ -197,7 +212,9 @@ export function FullScanPane({ connected }: { connected: boolean }) {
 
           <details style={{ marginTop: 12 }}>
             <summary className="faint" style={{ cursor: "pointer", fontSize: 12 }}>
-              modules with nothing to report ({modules.length - withFaults.length})
+              {unread.length > 0
+                ? `modules with no faults or no fault list (${modules.length - withFaults.length})`
+                : `modules with nothing to report (${modules.length - withFaults.length})`}
             </summary>
             <table style={{ marginTop: 8 }}>
               <tbody>

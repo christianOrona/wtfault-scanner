@@ -41,6 +41,9 @@ with the caveat that everything below 1.0 is allowed to move.
 
 ### Fixed
 
+- A full scan in which no module handed over its fault list no longer says
+  *all clear*. It says nothing was read and shows the counts as unknown; when
+  only some modules answered, *all clear* speaks only for those.
 - A vehicle named by its brand in the online VIN lookup ("JEEP") and by its
   manufacturer in the VIN ("Stellantis / FCA US") is no longer shown with two
   disagreeing makes. Mazda and North American Honda VINs are now recognised.

@@ -5009,7 +5009,18 @@ impl DiagnosticService {
         }
 
         warnings.extend(Self::not_faults_warning("the modules scanned", not_faults_total));
-        if refused > 0 {
+        if refused > 0 && refused == found.len() {
+            // Not one fault list was read. Zero faults is then no information
+            // at all, and must not read as a clean result.
+            warnings.push(Warning::caution(
+                "no_fault_lists_read",
+                format!(
+                    "{refused} modules answered the discovery probe and none of them answered \
+                     the fault request, so nothing is known about their stored faults. No faults \
+                     found here is not the same as no faults."
+                ),
+            ));
+        } else if refused > 0 {
             warnings.push(Warning::info(
                 "modules_without_fault_memory",
                 format!(

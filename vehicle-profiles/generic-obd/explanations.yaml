@@ -256,6 +256,12 @@ codes:
   - id: no_active_session
     easy: "Nothing is connected to a car right now."
     technical: "The requested operation needs a usable adapter link and there is none."
+  - id: no_fault_lists_read
+    easy: "The car's computers answered when we knocked, but none of them would hand over its list of faults. So we do not know whether any faults are stored. This is not a clean result."
+    technical: "Every module that answered the discovery probe failed or refused UDS 0x19 0x02. A fault count of zero carries no information in that case. Common causes: modules that only answer in an extended diagnostic session, or a link dropping long replies."
+  - id: modules_without_fault_memory
+    easy: "Some of the car's computers answered but would not hand over a list of faults. That is common: not every computer keeps one in a way a scan tool can ask for. The ones that did answer are shown."
+    technical: "A subset of modules answered the discovery probe but not UDS 0x19 0x02. Their fault memory is unknown, not empty."
   - id: fault_list_cut_off
     easy: "One of the car's computers started sending its list of faults and stopped part-way. The faults that arrived are shown. The rest never came, so this is not that computer's full list. Scanning again may get all of it."
     technical: "A UDS 0x19 0x02 reply ended before its announced length, usually in an adapter timeout. Every whole 4-byte record received was decoded; the remainder was not received. A partial reply is accepted only for fault reads, never for a read-back after a write."
