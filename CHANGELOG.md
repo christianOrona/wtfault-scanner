@@ -12,6 +12,9 @@ with the caveat that everything below 1.0 is allowed to move.
   your user name are left out of it by default, and the screen says what was
   taken out. If it cannot be sent, copy and save work as before. The
   receiving endpoint is in `apps/report-endpoint`; see `docs/REPORTS.md`.
+- **Share what a vehicle taught.** The findings panel under *Settings on the
+  car* can assemble everything measured on this vehicle, named by make, model
+  and year and never by VIN, to copy or send the same way.
 - **A Guided tests tab.** Pick a test such as *Hold 2500 rpm* or *Warm idle*;
   it reads the car to see whether it is in the state the test needs, tells you
   the one thing to do next, can keep checking while you do it, and measures

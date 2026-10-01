@@ -148,6 +148,9 @@ them has to be inferred.
   automatically, and a build with no report address has no Send button. The
   endpoint keeps the text, version, platform and time of arrival as one file,
   and not the address it came from. See `docs/REPORTS.md`.
+- **What a vehicle taught, when the person presses Send** on it: the findings
+  measured on the connected vehicle, naming it by make, model and model year
+  and never by VIN, through the same report address and the same withholding.
 
 ### What it never sends
 

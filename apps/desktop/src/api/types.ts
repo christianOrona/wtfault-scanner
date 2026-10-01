@@ -1140,3 +1140,11 @@ export interface ProcedureMeasurement {
   does_not_apply_because?: string;
   conditions?: ProcedureCondition[];
 }
+
+/** What a vehicle taught, written to be shared, with no VIN in it. */
+export interface Contribution {
+  text: string;
+  findings: number;
+  withheld: string[];
+  send_to: string | null;
+}

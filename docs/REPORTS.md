@@ -17,6 +17,14 @@ in a build that has a report address, press **Send** (#50).
 - If the address cannot be reached, the report can still be copied or saved,
   exactly as before.
 
+## Sharing what a vehicle taught
+
+The same Send carries a **contribution** (#51): what was measured on the
+connected vehicle, ruled out first, then established, then observed (which is
+how a module map is made). It names the vehicle by make, model and model year;
+the VIN is never included, and the text goes through the same withholding.
+`GET /api/v1/vehicles/contribution` assembles it and sends nothing.
+
 ## Giving a build an address
 
 The address is compiled in when the project builds a release:

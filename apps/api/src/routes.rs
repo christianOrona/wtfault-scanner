@@ -44,6 +44,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/config/compare-to-factory", post(compare_to_factory))
         .route("/api/v1/vehicles/knowledge", get(vehicle_knowledge).post(record_vehicle_knowledge))
         .route("/api/v1/vehicles/scorecard", get(vehicle_scorecard))
+        .route("/api/v1/vehicles/contribution", get(vehicle_contribution))
         .route("/api/v1/vehicles/scorecard/diff", post(diff_scorecards))
         .route("/api/v1/config/diff", post(diff_captures))
         .route("/api/v1/config/captures", get(list_captures))
@@ -1366,6 +1367,66 @@ struct KnowledgeQuery {
     /// Which vehicle to report on. Omitted means the connected one.
     #[serde(default)]
     vin: Option<String>,
+}
+
+/// What the connected vehicle has taught, written to be shared (#51).
+///
+/// Everything measured, each labelled with how firm it is: an observation is
+/// how a module map is made (which module answered where, and what it said it
+/// was), so it is shared as one rather than left out. The vehicle is named by
+/// make, model and year,
+/// never by VIN, and the text goes through the same withholding as a problem
+/// report before anybody sees it, so what is shown is what can be sent. A read:
+/// sending is the person's decision, through the report endpoint.
+async fn vehicle_contribution(State(state): State<AppState>) -> ApiResult<Json<Value>> {
+    let (findings, identity) = state.with_service(|s| (s.knowledge(), s.identity())).await?;
+    let describe = |field: &str| match identity.candidates(field) {
+        values if values.is_empty() => String::from("unknown"),
+        values => values.join(" / "),
+    };
+    // Ruled out first: the finding most expensive to learn and least likely
+    // to be written down anywhere else.
+    let rank = |o: aim_session::FindingOutcome| match o {
+        aim_session::FindingOutcome::RuledOut => 0,
+        aim_session::FindingOutcome::Established => 1,
+        aim_session::FindingOutcome::Observed => 2,
+    };
+    let mut shareable: Vec<_> = findings.iter().collect();
+    shareable.sort_by_key(|f| rank(f.outcome));
+
+    let mut text = String::from("WTFault Scanner contribution\n");
+    text.push_str(&format!("App version : {}\n", crate::update::current_version()));
+    text.push_str(&format!(
+        "Vehicle     : {}, {}, model year {}\n",
+        describe("make"),
+        describe("model"),
+        describe("model_year")
+    ));
+    text.push_str("VIN         : not included\n\n");
+    text.push_str(
+        "What was measured on this vehicle: ruled out (tested, does not hold), \
+         established (tested, holds) and observed (seen, not tested).\n",
+    );
+    for f in &shareable {
+        let outcome = match f.outcome {
+            aim_session::FindingOutcome::Established => "established",
+            aim_session::FindingOutcome::RuledOut => "ruled out",
+            aim_session::FindingOutcome::Observed => "observed",
+        };
+        text.push_str(&format!(
+            "\n[{outcome}] {}\n    how: {}\n    ({}, {})\n",
+            f.claim, f.evidence, f.subject, f.authority
+        ));
+    }
+
+    let vins = state.store.known_vins().unwrap_or_default();
+    let (text, withheld) = crate::support::withhold_identifiers(&text, &vins);
+    Ok(Json(json!({
+        "text": text,
+        "findings": shareable.len(),
+        "withheld": withheld,
+        "send_to": crate::support::report_endpoint(),
+    })))
 }
 
 async fn vehicle_knowledge(

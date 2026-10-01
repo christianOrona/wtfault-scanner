@@ -260,8 +260,9 @@ Honest gaps, in the order they matter.
 - **No manufacturer-specific decoding.** Everything is the public standard,
   which is why it works across brands and also why a module can answer with a
   code nobody has a description for.
-- **Profile import is folder-only.** Dropping a YAML file in works; importing
-  one from a URL with a verification count does not exist.
+- **Profile import has never been used with a real shared profile.** A YAML
+  file can be dropped in the folder, pasted, or fetched from an `https://`
+  address after a preview of what it would change; nobody has published one.
 - **The second bus is reached by the app, on one truck.** On 2026-09-11 a 2019 F-250's secondary bus was mapped by hand
   through the adapter: 500 kbit/s on pins 3 and 11, 29 modules answering
   TesterPresent across `700-7FF`, 22 of them holding as-built configuration

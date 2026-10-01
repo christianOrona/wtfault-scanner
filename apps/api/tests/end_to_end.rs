@@ -704,3 +704,23 @@ async fn a_make_level_obdb_set_stands_in_when_the_model_has_none() {
     assert_eq!(fetched["make_level"], true);
     assert_eq!(fetched["source"], "https://github.com/OBDb/Ford");
 }
+
+/// What the vehicle taught, ready to share: named by make and year, never by
+/// VIN, with each finding labelled by how firm it is (#51).
+#[tokio::test]
+async fn a_contribution_names_the_vehicle_without_its_vin() {
+    let h = Harness::start(ScenarioId::Healthy).await;
+    ok(&h.post("/adapter/connect", json!({})).await, "connect");
+    ok(&h.post("/vehicles/identify", json!({})).await, "identify");
+    ok(&h.post("/modules", json!({})).await, "scan");
+    ok(&h.post("/modules/scan-all", json!({})).await, "full scan");
+
+    let c = h.get("/vehicles/contribution").await;
+    let text = c["text"].as_str().unwrap();
+    assert!(text.contains("VIN         : not included"), "{text}");
+    assert!(!text.contains(aim_simulator::SIMULATED_VIN), "{text}");
+    assert!(text.contains("Ford"), "{text}");
+    assert!(c["findings"].as_u64().unwrap() > 0, "{text}");
+    assert!(text.contains("[ruled out]") && text.contains("[observed]"), "{text}");
+    assert!(text.find("[ruled out]") < text.find("[observed]"), "ruled out leads: {text}");
+}

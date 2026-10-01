@@ -10,6 +10,7 @@
 // a diagnostic outcome with evidence attached, and it comes back as a value.
 
 import type {
+  Contribution,
   SendOutcome,
   ProcedureCheck, ProcedureInfo, ProcedureMeasurement,
   AdapterStatus, CapabilitiesResponse, ConnectData, DtcData, FreezeFrameData,
@@ -146,6 +147,8 @@ export const api = {
     request<SupportReport>(`/support/report${withhold ? "?withhold=true" : ""}`),
   /** Send the report text, exactly as shown, to the address this build has. */
   supportSend: (text: string) => post<SendOutcome>("/support/send", { text }),
+  /** What the connected vehicle taught, ready to share. Sends nothing. */
+  contribution: () => request<Contribution>("/vehicles/contribution"),
   /** Open the log folder in the desktop's own file manager. */
   supportReveal: () => post<{ opened: string }>("/support/reveal", {}),
   exportFile: (body: { filename: string; content: string }) =>

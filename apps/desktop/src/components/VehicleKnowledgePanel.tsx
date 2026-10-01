@@ -20,7 +20,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api/client";
-import type { VehicleFinding } from "../api/types";
+import type { Contribution, VehicleFinding } from "../api/types";
 
 /** Order: what was ruled out, then what holds, then what was merely seen. */
 const RANK: Record<string, number> = { ruled_out: 0, established: 1, observed: 2 };
@@ -34,6 +34,33 @@ const LABEL: Record<string, string> = {
 export function VehicleKnowledgePanel() {
   const [findings, setFindings] = useState<VehicleFinding[] | null>(null);
   const [expanded, setExpanded] = useState(false);
+  const [sharing, setSharing] = useState<Contribution | null>(null);
+  const [shareSaid, setShareSaid] = useState<string | null>(null);
+
+  // Assembled by the core with the VIN left out, so the text on screen is the
+  // text that would be sent. Nothing leaves until Send is pressed.
+  const openShare = useCallback(async () => {
+    setShareSaid(null);
+    try {
+      setSharing(await api.contribution());
+    } catch (e) {
+      setShareSaid(e instanceof Error ? e.message : "could not assemble it");
+    }
+  }, []);
+
+  const sendShare = useCallback(async () => {
+    if (!sharing) return;
+    try {
+      const outcome = await api.supportSend(sharing.text);
+      setShareSaid(
+        outcome.sent
+          ? `Sent${outcome.reference ? `, reference ${outcome.reference}` : ""}. Thank you.`
+          : `Not sent: ${outcome.reason ?? "unknown reason"}. You can still copy it.`,
+      );
+    } catch (e) {
+      setShareSaid(`Not sent: ${e instanceof Error ? e.message : "the app could not try"}.`);
+    }
+  }, [sharing]);
 
   const load = useCallback(async () => {
     try {
@@ -87,13 +114,44 @@ export function VehicleKnowledgePanel() {
         ))}
       </div>
 
-      {sorted.length > 4 && (
-        <button
-          style={{ marginTop: 8 }}
-          onClick={() => setExpanded((e) => !e)}
-        >
-          {expanded ? "show less" : `show all ${sorted.length}`}
+      <div className="row" style={{ marginTop: 8, gap: 8 }}>
+        {sorted.length > 4 && (
+          <button onClick={() => setExpanded((e) => !e)}>
+            {expanded ? "show less" : `show all ${sorted.length}`}
+          </button>
+        )}
+        <button onClick={() => (sharing ? setSharing(null) : void openShare())}>
+          {sharing ? "close" : "Share what this vehicle taught"}
         </button>
+      </div>
+
+      {sharing && (
+        <div style={{ marginTop: 10 }}>
+          <p className="faint" style={{ fontSize: 11, margin: "0 0 6px" }}>
+            What was measured here, for the next owner of the same model. The
+            vehicle is named by make, model and year; its VIN is not included
+            {sharing.withheld.length > 0 ? ` (taken out: ${sharing.withheld.join("; ")})` : ""}.
+          </p>
+          <div className="row" style={{ gap: 8 }}>
+            {sharing.send_to && (
+              <button className="primary" onClick={() => void sendShare()}>
+                Send to {new URL(sharing.send_to).host}
+              </button>
+            )}
+            <button
+              onClick={() =>
+                void navigator.clipboard
+                  .writeText(sharing.text)
+                  .then(() => setShareSaid("Copied."))
+                  .catch(() => setShareSaid("Could not reach the clipboard; select the text below."))
+              }
+            >
+              Copy
+            </button>
+          </div>
+          {shareSaid && <div className="faint" style={{ fontSize: 11, marginTop: 4 }}>{shareSaid}</div>}
+          <pre className="report-text">{sharing.text}</pre>
+        </div>
       )}
     </div>
   );
