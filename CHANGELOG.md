@@ -67,6 +67,11 @@ with the caveat that everything below 1.0 is allowed to move.
 
 ### Fixed
 
+- **A 1996 or 1997 vehicle is no longer dated 2026 or 2027.** The model-year
+  letter repeats every 30 years. For North American VINs, a digit in position
+  7 now places the vehicle before 2010, as the US and Canadian VIN rules
+  provide.
+
 - **Clearing one module's codes never clears them all by surprise.** Where a
   module cannot be asked on its own (on older vehicles, or when its address
   is not known), clearing it used to send the clear to every module. It is now

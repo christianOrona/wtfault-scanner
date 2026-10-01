@@ -111,6 +111,23 @@ pub fn model_year(code: char, reference_year: u16) -> Option<u16> {
     Some(year)
 }
 
+/// Model year from a whole VIN, using what position 7 says about the cycle.
+///
+/// From model year 2010, US and Canadian rules (49 CFR 565.15, and the
+/// Canadian equivalent) make position 7 a letter on light vehicles, so a
+/// digit there puts the vehicle in the 1980-2009 cycle. Without that, the most
+/// recent cycle wins, and the first OBD-II years came out three decades late:
+/// a 1996 (`T`) read as 2026 and a 1997 (`V`) as 2027. Applied only to North
+/// American VINs, where the rule is known to hold; a letter in position 7
+/// proves nothing, since older vehicles could have one too.
+fn model_year_of(chars: &[char], reference_year: u16) -> Option<u16> {
+    let north_american = matches!(chars[0], '1'..='5');
+    if north_american && chars[6].is_ascii_digit() {
+        return model_year(chars[9], 2009);
+    }
+    model_year(chars[9], reference_year)
+}
+
 /// A deliberately tiny WMI table.
 ///
 /// Only entries this project is confident about are listed. An unlisted WMI
@@ -194,7 +211,7 @@ pub fn decode(vin: &str, reference_year: u16) -> AimResult<VinInfo> {
     Ok(VinInfo {
         manufacturer: manufacturer_for(&wmi).map(String::from),
         region: region_for(chars[0]).map(String::from),
-        model_year: model_year(chars[9], reference_year),
+        model_year: model_year_of(&chars, reference_year),
         check_digit_valid: expected == Some(chars[8]),
         wmi,
         vds,
@@ -253,6 +270,28 @@ mod tests {
             "next model year is already in use during the preceding calendar year"
         );
         assert_eq!(model_year('I', 2026), None, "not a valid code");
+    }
+
+    /// The first OBD-II model years share codes with this decade's. A North
+    /// American VIN with a digit in position 7 is from before 2010.
+    #[test]
+    fn a_digit_in_position_seven_puts_a_north_american_vin_before_2010() {
+        let with = |template: &str| {
+            let mut v: Vec<char> = template.chars().collect();
+            v[8] = check_digit(&v.iter().collect::<String>()).unwrap();
+            v.into_iter().collect::<String>()
+        };
+        // 1997 Ford: position 7 is a digit, position 10 is V.
+        let old = decode(&with("1FTDX1765VKA00001"), 2026).unwrap();
+        assert_eq!(old.model_year, Some(1997));
+        // 2027 Ford: position 7 is a letter, position 10 is V.
+        let new = decode(&with("1FTFW1E80VFA00001"), 2026).unwrap();
+        assert_eq!(new.model_year, Some(2027));
+        // The simulated 2019 truck is unaffected.
+        assert_eq!(decode(SIM_VIN, 2026).unwrap().model_year, Some(2019));
+        // Outside North America position 7 is not read: the most recent cycle.
+        let european = decode(&with("WVWZZZ1JZXW000001"), 2026).unwrap();
+        assert_eq!(european.model_year, Some(1999));
     }
 
     #[test]
