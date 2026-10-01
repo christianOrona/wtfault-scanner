@@ -270,6 +270,7 @@ fn start_core(app: &mut tauri::App) -> tauri::Result<()> {
             .unwrap_or_else(|| std::path::PathBuf::from("providers.json")),
         profiles_dir: profiles,
         replay: None,
+        simulated_vehicle: Default::default(),
     };
 
     let state = AppState::new(store, decoders, config);

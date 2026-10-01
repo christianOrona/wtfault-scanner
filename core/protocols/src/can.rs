@@ -79,6 +79,14 @@ impl CanId {
             {
                 Some(CanId::Standard(v - OBD_PHYSICAL_COUNT))
             }
+            // ISO 15765-4 normal fixed addressing: a reply from `18DAF1xx`
+            // came from module `xx` to the tester at `F1`, and the module is
+            // asked at `18DAxxF1`. A rule of the standard, not a convention,
+            // so it holds outside the emissions modules too.
+            CanId::Extended(v) if v & 0xFFFF_FF00 == 0x18DA_F100 => {
+                let module = v & 0xFF;
+                Some(CanId::Extended(0x18DA_00F1 | (module << 8)))
+            }
             _ => None,
         }
     }
@@ -186,9 +194,10 @@ mod tests {
                 Some(CanId::Standard(OBD_PHYSICAL_REQUEST_BASE + i))
             );
         }
-        // Outside the OBD range there is no defined mapping.
+        // Outside the OBD range there is no defined mapping. (A 29-bit reply
+        // to the tester has one; see the test below.)
         assert_eq!(CanId::Standard(0x123).obd_response_to_request(), None);
-        assert_eq!(CanId::Extended(0x18DAF110).obd_response_to_request(), None);
+        assert_eq!(CanId::Extended(0x18DA10F1).obd_response_to_request(), None);
     }
 
     #[test]
@@ -214,5 +223,19 @@ mod tests {
     #[test]
     fn module_keys_are_derived_from_the_address() {
         assert_eq!(CanId::Standard(0x7E8).module_key(), "ECU_7E8");
+    }
+
+    /// A 29-bit reply names the module it came from, so where to ask it
+    /// follows: the Odyssey's engine answers from `18DAF110`.
+    #[test]
+    fn a_29_bit_reply_gives_the_address_to_ask() {
+        let reply = CanId::Extended(0x18DA_F110);
+        assert_eq!(reply.obd_response_to_request(), Some(CanId::Extended(0x18DA_10F1)));
+        assert_eq!(
+            CanId::Extended(0x18DA_F11E).obd_response_to_request(),
+            Some(CanId::Extended(0x18DA_1EF1))
+        );
+        // Not a reply to the tester: no request follows from it.
+        assert_eq!(CanId::Extended(0x18DB_33F1).obd_response_to_request(), None);
     }
 }

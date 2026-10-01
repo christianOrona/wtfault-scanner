@@ -81,6 +81,30 @@ pub struct ServerConfig {
     /// the virtual vehicle, so a real session can be opened without the
     /// vehicle. Commands it never recorded answer `NO DATA`.
     pub replay: Option<std::path::PathBuf>,
+    /// Which vehicle the simulator is: the 2019 F-250 it was built on, or a
+    /// petrol Honda on 29-bit CAN, so a change can be seen against both.
+    pub simulated_vehicle: SimulatedVehicle,
+}
+
+/// The vehicles the simulator can be.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SimulatedVehicle {
+    /// A 2019 F-250 diesel on 11-bit CAN, with a second bus.
+    #[default]
+    F250,
+    /// A 2023 Honda Odyssey, petrol, on 29-bit CAN.
+    Odyssey,
+}
+
+impl SimulatedVehicle {
+    /// The command-line spelling.
+    pub fn parse(s: &str) -> Option<SimulatedVehicle> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "f250" | "f-250" | "ford" => Some(SimulatedVehicle::F250),
+            "odyssey" | "honda" => Some(SimulatedVehicle::Odyssey),
+            _ => None,
+        }
+    }
 }
 
 /// What a connect request asks for.
@@ -368,6 +392,12 @@ fn build_adapter(
                             e.message
                         ))
                     })?;
+            Ok(Box::new(Elm327Adapter::new(Box::new(transport), Elm327Config::fast())))
+        }
+        TransportChoice::Simulator if config.simulated_vehicle == SimulatedVehicle::Odyssey => {
+            let vehicle = aim_simulator::VirtualVehicle::honda_odyssey(scenario);
+            let transport = SimulatedTransport::with_vehicle(vehicle, config.personality.build())
+                .with_latency(config.simulator_latency);
             Ok(Box::new(Elm327Adapter::new(Box::new(transport), Elm327Config::fast())))
         }
         TransportChoice::Simulator => {

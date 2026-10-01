@@ -98,7 +98,11 @@ pub struct ElmEmulator {
     protocol: Option<u8>,
     /// Which protocol `ATSP` selected; 0 means automatic.
     requested_protocol: u8,
-    header: u16,
+    /// The request header: 11 bits, or all 29 once `ATCP` and a six-digit
+    /// `ATSH` (or an eight-digit one) have set it.
+    header: u32,
+    /// The 29-bit priority byte `ATCP` sets, used by a six-digit `ATSH`.
+    priority: u8,
     faults: VecDeque<InjectedFault>,
     /// Every command received, for transcript recording and assertions.
     pub log: Vec<String>,
@@ -121,6 +125,7 @@ impl ElmEmulator {
             protocol: None,
             requested_protocol: 0,
             header: 0x7DF,
+            priority: 0x18,
             faults: VecDeque::new(),
             log: Vec::new(),
             on_secondary_bus: false,
@@ -199,12 +204,29 @@ impl ElmEmulator {
 
         // Commands with a payload are matched by prefix; bare toggles exactly.
         if let Some(v) = rest.strip_prefix("SH") {
-            return match u16::from_str_radix(v, 16) {
-                Ok(h) => {
+            // Three digits are an 11-bit header; six are the low 24 bits of a
+            // 29-bit one, under the priority `ATCP` set; eight are all of it.
+            let parsed = u32::from_str_radix(v, 16).ok().and_then(|h| match v.len() {
+                3 => Some(h),
+                6 => Some(u32::from(self.priority) << 24 | h),
+                8 => Some(h),
+                _ => None,
+            });
+            return match parsed {
+                Some(h) => {
                     self.header = h;
                     vec![String::from("OK")]
                 }
-                Err(_) => vec![String::from("?")],
+                None => vec![String::from("?")],
+            };
+        }
+        if let Some(v) = rest.strip_prefix("CP") {
+            return match u8::from_str_radix(v, 16) {
+                Ok(p) if v.len() == 2 => {
+                    self.priority = p;
+                    vec![String::from("OK")]
+                }
+                _ => vec![String::from("?")],
             };
         }
         if let Some(v) = rest.strip_prefix("SP") {
@@ -236,6 +258,7 @@ impl ElmEmulator {
                 self.protocol = None;
                 self.requested_protocol = 0;
                 self.header = 0x7DF;
+                self.priority = 0x18;
                 self.on_secondary_bus = false;
                 vec![self.personality.banner.clone()]
             }
@@ -364,16 +387,32 @@ impl ElmEmulator {
             lines.push(String::from("SEARCHING..."));
         }
 
+        // A protocol of the wrong width reaches nothing: a 29-bit vehicle does
+        // not answer 11-bit frames, and the other way round. While searching,
+        // the adapter tries each with its own broadcast header, so the vehicle
+        // is found on its own width.
+        let wants_29_bit = matches!(self.protocol, Some(7 | 9));
+        let wants_11_bit = matches!(self.protocol, Some(6 | 8));
+        if (self.vehicle.extended && wants_11_bit) || (!self.vehicle.extended && wants_29_bit) {
+            lines.push(String::from("NO DATA"));
+            return lines;
+        }
+        let header = if searching && self.vehicle.extended && self.header == 0x7DF {
+            0x18DB_33F1
+        } else {
+            self.header
+        };
+
         let replies = if self.on_secondary_bus {
             // Check if we're on the secondary bus with a supported baud rate
             if self.secondary_baud == 500000 {
-                self.vehicle.handle_secondary(self.header, &request)
+                self.vehicle.handle_secondary(header, &request)
             } else {
                 // Other baud rates return NO DATA (as per requirements)
                 Vec::new()
             }
         } else {
-            self.vehicle.handle(self.header, &request)
+            self.vehicle.handle(header, &request)
         };
 
         if replies.is_empty() {
@@ -389,12 +428,17 @@ impl ElmEmulator {
 
         // The first successful exchange is what establishes the protocol.
         if self.protocol.is_none() {
+            let found = if self.vehicle.extended { 7 } else { 6 };
             self.protocol =
-                Some(if self.requested_protocol == 0 { 6 } else { self.requested_protocol });
+                Some(if self.requested_protocol == 0 { found } else { self.requested_protocol });
         }
 
         for reply in replies {
-            let id = CanId::Standard(reply.response_id);
+            let id = if reply.response_id > 0x7FF {
+                CanId::Extended(reply.response_id)
+            } else {
+                CanId::Standard(reply.response_id as u16)
+            };
             for frame in segment(&reply.payload) {
                 let data = frame.encode(8, 0x00);
                 lines.push(self.format_frame(&id, &data));
@@ -406,9 +450,19 @@ impl ElmEmulator {
     fn format_frame(&self, id: &CanId, data: &[u8]) -> String {
         let mut s = String::new();
         if self.headers {
-            s.push_str(&id.to_hex());
-            if self.spaces {
-                s.push(' ');
+            match id {
+                // With spaces on, a 29-bit header prints as four bytes.
+                CanId::Extended(v) if self.spaces => {
+                    for b in v.to_be_bytes() {
+                        s.push_str(&format!("{b:02X} "));
+                    }
+                }
+                _ => {
+                    s.push_str(&id.to_hex());
+                    if self.spaces {
+                        s.push(' ');
+                    }
+                }
             }
         }
         for (i, b) in data.iter().enumerate() {

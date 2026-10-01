@@ -31,6 +31,10 @@ use std::time::Instant;
 /// vehicle; see the module docs.
 pub const SIMULATED_VIN: &str = "1FT7W2BT6KEC00001";
 
+/// The VIN the simulated Honda reports: a 2023 Odyssey built in Alabama, with
+/// a valid check digit and a zeroed serial.
+pub const SIMULATED_HONDA_VIN: &str = "5FNRL6H72PB000001";
+
 /// How the simulated vehicle tells the time.
 #[derive(Debug, Clone)]
 pub enum TimeSource {
@@ -165,8 +169,9 @@ fn is_mask_pid(pid: u8) -> bool {
 /// One ECU's answer to one request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EcuReply {
-    /// Identifier the reply is sent from, e.g. `0x7E8`.
-    pub response_id: u16,
+    /// Identifier the reply is sent from: `0x7E8`, or `0x18DAF110` on a
+    /// vehicle with 29-bit addressing.
+    pub response_id: u32,
     /// Full response PDU, service byte first.
     pub payload: Vec<u8>,
 }
@@ -209,6 +214,12 @@ pub struct VirtualVehicle {
     /// scenario says is left alone: a module still answers, faults are still
     /// stored, voltage is still whatever the scenario models.
     pub engine_stopped: bool,
+    /// 29-bit addressing (ISO 15765-4 protocol 7), as a 2023 Honda Odyssey
+    /// uses. On such a vehicle each module's `response_id` is its one-byte
+    /// address: it is asked at `18DA{addr}F1` and answers from `18DAF1{addr}`.
+    pub extended: bool,
+    /// What the engine burns, as PID 0x51 encodes it.
+    pub fuel_type: u8,
 }
 
 impl VirtualVehicle {
@@ -401,6 +412,84 @@ impl VirtualVehicle {
             // Running, like every scenario. A test that needs the key-on,
             // engine-off state asks for it.
             engine_stopped: false,
+            extended: false,
+            fuel_type: 0x04,
+        }
+    }
+
+    /// A petrol vehicle on 29-bit CAN, shaped after the owner's 2023 Honda
+    /// Odyssey: the engine controller at `18DAF110` and the transmission at
+    /// `18DAF11E`, the two addresses measured on the real one. No second bus.
+    ///
+    /// It exists so the core meets a vehicle that is not a Ford in every way
+    /// the Ford was convenient: another make, another addressing scheme, and
+    /// an engine with fuel trims.
+    pub fn honda_odyssey(scenario: ScenarioId) -> VirtualVehicle {
+        let engine = VirtualEcu {
+            response_id: 0x10,
+            label: String::from("Engine control module"),
+            ecu_name: Some(pad_ascii("ECM-EngineControl", 20)),
+            calibration_ids: vec![pad_ascii("37805-5MR-A120", 16)],
+            cvns: vec![0x0BAD_F00D],
+            supported_service01: vec![
+                0x01, 0x03, 0x04, 0x05, 0x06, 0x07, 0x0B, 0x0C, 0x0D, 0x0F, 0x10, 0x11, 0x1C, 0x1F,
+                0x20, 0x21, 0x2F, 0x30, 0x31, 0x33, 0x40, 0x42, 0x45, 0x46, 0x49, 0x51,
+            ],
+            supported_service09: vec![0x02, 0x04, 0x06, 0x0A],
+            reports_dtcs: true,
+            // The scenarios' monitor results are a diesel's. A petrol engine
+            // reporting a NOx adsorber would be the simulator inventing.
+            runs_monitors: false,
+            reports_vin: true,
+            uds_faults: Some(Vec::new()),
+            config_records: BTreeMap::new(),
+            config_write: ConfigWriteBehaviour::Refuse,
+        };
+        let transmission = VirtualEcu {
+            response_id: 0x1E,
+            label: String::from("Transmission control module"),
+            ecu_name: Some(pad_ascii("TCM-TransmisCtrl", 20)),
+            calibration_ids: Vec::new(),
+            cvns: Vec::new(),
+            supported_service01: vec![0x01, 0x0D],
+            supported_service09: vec![0x0A],
+            reports_dtcs: true,
+            runs_monitors: false,
+            reports_vin: false,
+            uds_faults: Some(Vec::new()),
+            config_records: BTreeMap::new(),
+            config_write: ConfigWriteBehaviour::Refuse,
+        };
+        VirtualVehicle {
+            vin: String::from(SIMULATED_HONDA_VIN),
+            scenario: Scenario::new(scenario),
+            ecus: vec![engine, transmission],
+            secondary_ecus: Vec::new(),
+            time: TimeSource::deterministic(),
+            dtcs_cleared: false,
+            engine_stopped: false,
+            extended: true,
+            fuel_type: 0x01,
+        }
+    }
+
+    /// Whether `target_id` addresses `ecu` on this vehicle.
+    fn addresses(&self, target_id: u32, ecu: &VirtualEcu) -> bool {
+        if self.extended {
+            // Functional `18DB33F1`, or physical `18DA{addr}F1`.
+            target_id == 0x18DB_33F1
+                || target_id == 0x18DA_00F1 | (u32::from(ecu.response_id as u8) << 8)
+        } else {
+            target_id == 0x7DF || target_id == u32::from(ecu.request_id())
+        }
+    }
+
+    /// The identifier `ecu` answers from on this vehicle.
+    fn reply_id(&self, ecu: &VirtualEcu) -> u32 {
+        if self.extended {
+            0x18DA_F100 | u32::from(ecu.response_id as u8)
+        } else {
+            u32::from(ecu.response_id)
         }
     }
 
@@ -426,6 +515,13 @@ impl VirtualVehicle {
             // which is not the state anybody is trying to reach here.
             s.speed_kph = 0.0;
         }
+        s.fuel_type = self.fuel_type;
+        if self.fuel_type != 0x04 {
+            // A petrol engine at operating temperature trims around zero.
+            let t = self.elapsed_s();
+            s.short_fuel_trim_pct = 2.3 * crate::state::wobble(t, 0.7, 1.9);
+            s.long_fuel_trim_pct = 3.1;
+        }
         s
     }
 
@@ -434,7 +530,7 @@ impl VirtualVehicle {
     /// `target_id` is `0x7DF` for a broadcast, or a physical request id. The
     /// returned vector is empty when nothing answers, which the adapter layer
     /// turns into `NO DATA`.
-    pub fn handle(&mut self, target_id: u16, request: &[u8]) -> Vec<EcuReply> {
+    pub fn handle(&mut self, target_id: u32, request: &[u8]) -> Vec<EcuReply> {
         self.handle_on_bus(false, target_id, request)
     }
 
@@ -443,7 +539,7 @@ impl VirtualVehicle {
     /// Used when the adapter has selected pins 3 and 11. The modules there are
     /// a separate set: nothing on the primary bus answers, and nothing here
     /// answers while the primary bus is selected.
-    pub fn handle_secondary(&mut self, target_id: u16, request: &[u8]) -> Vec<EcuReply> {
+    pub fn handle_secondary(&mut self, target_id: u32, request: &[u8]) -> Vec<EcuReply> {
         self.handle_on_bus(true, target_id, request)
     }
 
@@ -451,7 +547,7 @@ impl VirtualVehicle {
     ///
     /// The list is moved out of `self` for the duration, so answering can take
     /// `&self` while a write still lands on the real module.
-    fn handle_on_bus(&mut self, secondary: bool, target_id: u16, request: &[u8]) -> Vec<EcuReply> {
+    fn handle_on_bus(&mut self, secondary: bool, target_id: u32, request: &[u8]) -> Vec<EcuReply> {
         let mut ecus =
             std::mem::take(if secondary { &mut self.secondary_ecus } else { &mut self.ecus });
         let replies = self.answer_from(&mut ecus, target_id, request);
@@ -462,7 +558,7 @@ impl VirtualVehicle {
     fn answer_from(
         &mut self,
         ecus: &mut [VirtualEcu],
-        target_id: u16,
+        target_id: u32,
         request: &[u8],
     ) -> Vec<EcuReply> {
         self.time.advance();
@@ -476,7 +572,7 @@ impl VirtualVehicle {
         let addressed: Vec<usize> = ecus
             .iter()
             .enumerate()
-            .filter(|(_, e)| target_id == 0x7DF || target_id == e.request_id())
+            .filter(|(_, e)| self.addresses(target_id, e))
             .map(|(i, _)| i)
             .collect();
 
@@ -503,7 +599,7 @@ impl VirtualVehicle {
                 if request[0] == 0x14 && payload.first() == Some(&0x54) {
                     ecus[i].uds_faults = Some(Vec::new());
                 }
-                replies.push(EcuReply { response_id: ecus[i].response_id, payload });
+                replies.push(EcuReply { response_id: self.reply_id(&ecus[i]), payload });
             }
         }
 

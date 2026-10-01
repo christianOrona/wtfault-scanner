@@ -37,6 +37,13 @@ impl SimulatedTransport {
         SimulatedTransport::with_personality(scenario, AdapterPersonality::cheap_clone_v2_1())
     }
 
+    /// A transport to any vehicle, behind any adapter: the Honda, for one.
+    pub fn with_vehicle(vehicle: VirtualVehicle, personality: AdapterPersonality) -> Self {
+        let emulator = ElmEmulator::new(vehicle, personality);
+        let descriptor = format!("sim:{}", emulator.vehicle.vin);
+        Self::from_emulator(std::sync::Arc::new(std::sync::Mutex::new(emulator)), descriptor)
+    }
+
     /// A transport for `scenario` with a specific adapter personality.
     pub fn with_personality(scenario: ScenarioId, personality: AdapterPersonality) -> Self {
         let emulator = ElmEmulator::new(VirtualVehicle::f250_2019(scenario), personality);

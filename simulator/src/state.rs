@@ -80,6 +80,12 @@ pub struct VehicleState {
     pub demand_torque_pct: f64,
     /// Reference engine torque, Nm.
     pub reference_torque_nm: u16,
+    /// What the engine burns, as PID 0x51 encodes it: 1 petrol, 4 diesel.
+    pub fuel_type: u8,
+    /// Short-term fuel trim, bank 1, percent. Only a petrol engine reports it.
+    pub short_fuel_trim_pct: f64,
+    /// Long-term fuel trim, bank 1, percent.
+    pub long_fuel_trim_pct: f64,
 }
 
 impl VehicleState {
@@ -116,6 +122,9 @@ impl VehicleState {
             torque_pct: 0.0,
             demand_torque_pct: 0.0,
             reference_torque_nm: 1152,
+            fuel_type: 0x04,
+            short_fuel_trim_pct: 0.0,
+            long_fuel_trim_pct: 0.0,
         }
     }
 }
@@ -201,6 +210,9 @@ pub fn encode_pid(pid: u8, s: &VehicleState) -> Option<Vec<u8>> {
         0x03 => vec![0x00, 0x00],
         0x04 => vec![enc_percent(s.load_pct)],
         0x05 => vec![enc_temp(s.coolant_c)],
+        // Fuel trims: (A - 128) * 100 / 128.
+        0x06 => vec![u8_clamped(s.short_fuel_trim_pct * 128.0 / 100.0 + 128.0)],
+        0x07 => vec![u8_clamped(s.long_fuel_trim_pct * 128.0 / 100.0 + 128.0)],
         0x0B => vec![u8_clamped(s.map_kpa)],
         0x0C => enc_rpm(s.rpm).to_vec(),
         0x0D => vec![u8_clamped(s.speed_kph)],
@@ -224,8 +236,7 @@ pub fn encode_pid(pid: u8, s: &VehicleState) -> Option<Vec<u8>> {
         0x46 => vec![enc_temp(s.ambient_c)],
         0x49 => vec![enc_percent(s.pedal_pct)],
         0x4A => vec![enc_percent(s.pedal_pct * 0.98)],
-        // Diesel.
-        0x51 => vec![0x04],
+        0x51 => vec![s.fuel_type],
         0x5A => vec![enc_percent(s.pedal_pct)],
         0x5C => vec![enc_temp(s.oil_temp_c)],
         0x5E => u16_clamped(s.fuel_rate_lph * 20.0).to_vec(),

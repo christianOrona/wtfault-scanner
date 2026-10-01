@@ -7,6 +7,9 @@ with the caveat that everything below 1.0 is allowed to move.
 
 ### Added
 
+- **A second simulated vehicle.** `aim-api --simulator --vehicle odyssey` is
+  a petrol Honda on 29-bit CAN, so a change can be seen against something
+  other than the Ford diesel it was built on.
 - **Send a problem report.** In a build given a report address, the problem
   report has a **Send** button that posts exactly the text on screen. VINs and
   your user name are left out of it by default, and the screen says what was
@@ -49,6 +52,9 @@ with the caveat that everything below 1.0 is allowed to move.
 
 ### Fixed
 
+- On a vehicle that uses 29-bit addresses, like a 2023 Honda Odyssey, guided
+  tests read the engine instead of waiting on a module that was not there, and
+  a module found by the ordinary scan can be probed without a full scan first.
 - Clearing the codes of a body module (one that does not speak the OBD-II
   services) works: it is cleared with UDS, on its own bus, instead of failing
   with "no data". It still needs your confirmation and the engine off.

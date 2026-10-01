@@ -2568,13 +2568,32 @@ impl DiagnosticService {
     }
 
     /// The engine module a procedure reads.
+    ///
+    /// The module known to report engine speed, when one is; otherwise the
+    /// engine's legislated address in whichever addressing the vehicle uses,
+    /// `7E8` or `18DAF110`; otherwise any module answering in the emissions
+    /// block. This looked for `7E8` alone, and on a 29-bit vehicle every
+    /// procedure waited forever on a module that was not there.
     fn procedure_module(&self) -> String {
-        self.store
-            .modules(&self.session.id)
-            .unwrap_or_default()
-            .into_iter()
-            .find(|m| m.module_key.contains("7E8") || m.module_key.contains("7E0"))
-            .map(|m| m.module_key)
+        let modules = self.store.modules(&self.session.id).unwrap_or_default();
+        let reports_rpm =
+            |key: &str| self.supported_pids.get(key).is_some_and(|pids| pids.contains(&0x0C));
+        let emissions_block = |address: &str| {
+            let a = address.to_ascii_uppercase();
+            (a.len() == 3 && ("7E8"..="7EF").contains(&a.as_str()))
+                || (a.len() == 8 && a.starts_with("18DAF1"))
+        };
+        modules
+            .iter()
+            .find(|m| reports_rpm(&m.module_key))
+            .or_else(|| {
+                modules.iter().find(|m| {
+                    m.address.eq_ignore_ascii_case("7E8")
+                        || m.address.eq_ignore_ascii_case("18DAF110")
+                })
+            })
+            .or_else(|| modules.iter().find(|m| emissions_block(&m.address)))
+            .map(|m| m.module_key.clone())
             .unwrap_or_else(|| String::from("ECU_7E8"))
     }
 

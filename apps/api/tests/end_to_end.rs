@@ -48,6 +48,7 @@ impl Harness {
             settings_path: dir.path().join("providers.json"),
             profiles_dir: Some(dir.path().join("profiles")),
             replay: None,
+            simulated_vehicle: Default::default(),
         };
         let app = aim_api::router(AppState::new(store.clone(), decoders, config));
         tokio::spawn(async move {
