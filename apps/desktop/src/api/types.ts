@@ -635,6 +635,8 @@ export interface MonitorTestsData {
   module: string;
   /** False when the vehicle does not implement service 06 at all. */
   supported: boolean;
+  /** Set on a pre-CAN vehicle, whose service 06 layout is not decoded. */
+  layout_not_decoded?: boolean;
   monitors: MonitorReading[];
   failing?: number;
   marginal?: number;

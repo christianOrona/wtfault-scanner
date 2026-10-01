@@ -2018,6 +2018,35 @@ impl DiagnosticService {
         self.require_usable()?;
         let module = self.module_by_key(module_key)?;
 
+        // Before CAN, service 06 is a different message: test and component
+        // IDs with manufacturer-defined limits, where CAN has monitor IDs and
+        // standard scalings. Parsed as the CAN form it would produce test
+        // names, values and pass/fail verdicts that look right and mean
+        // nothing, so it is not asked at all.
+        let protocol = self.adapter.protocol();
+        if legacy_wire(protocol).is_some() {
+            return Ok(Payload {
+                data: Some(serde_json::json!({
+                    "module": module_key,
+                    "supported": false,
+                    "layout_not_decoded": true,
+                    "monitors": [],
+                })),
+                warnings: vec![Warning::info(
+                    "monitor_tests_pre_can_layout",
+                    format!(
+                        "This vehicle answers on {}. Before CAN, self-test results come in a \
+                         different layout, with limits each manufacturer defines, which this \
+                         build does not decode. Rather than show those numbers under the wrong \
+                         meaning, it shows none.",
+                        protocol.label()
+                    ),
+                )],
+                module: Some(module_key.to_string()),
+                ..Default::default()
+            });
+        }
+
         let mids = self.enumerate_supported_mids(&module)?;
         let mut warnings = Vec::new();
         if mids.is_empty() {

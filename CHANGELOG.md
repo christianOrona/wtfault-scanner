@@ -67,6 +67,11 @@ with the caveat that everything below 1.0 is allowed to move.
 
 ### Fixed
 
+- **Self-test results are not misread on older vehicles.** Before CAN,
+  vehicles report self-test results in a different layout. Read as the CAN
+  layout they would have shown test names and pass/fail verdicts that meant
+  nothing. On those vehicles the screen now says the layout is not decoded.
+
 - **Older vehicles get honest answers, not CAN ones.** On a pre-CAN vehicle
   (K-line or J1850), the full scan said "no module answered" right after two
   had. It now reads the fault codes of the modules that do answer, and says

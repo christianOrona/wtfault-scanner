@@ -168,3 +168,17 @@ fn what_needs_uds_says_the_k_line_does_not_carry_it() {
         assert!(error.message.contains("legislated OBD-II services"), "{}", error.message);
     }
 }
+
+/// Service 06 before CAN is another message layout. It is not parsed as the
+/// CAN one, which would invent test names and verdicts; it says so instead.
+#[test]
+fn self_test_results_are_not_read_in_the_wrong_layout() {
+    let mut service = toyota(ScenarioId::Healthy);
+    assert!(service.scan_modules(USER).success);
+    let monitors = service.read_monitor_tests("ECU_10", USER);
+    assert!(monitors.success, "{:?}", monitors.error);
+    let data = monitors.data.unwrap();
+    assert_eq!(data["supported"], false);
+    assert_eq!(data["layout_not_decoded"], true);
+    assert!(monitors.warnings.iter().any(|w| w.code == "monitor_tests_pre_can_layout"));
+}

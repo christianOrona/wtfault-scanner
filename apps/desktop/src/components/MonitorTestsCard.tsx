@@ -108,7 +108,17 @@ export function MonitorTestsCard({
         </div>
       )}
 
-      {data && !data.supported && (
+      {data && !data.supported && data.layout_not_decoded && (
+        <div className="banner info" style={{ marginTop: 12, marginBottom: 0 }}>
+          <span className="b-code">not decoded</span>
+          <span>
+            {result?.warnings[0]?.message ??
+              "This vehicle reports its self-test results in an older layout this app does not decode."}
+          </span>
+        </div>
+      )}
+
+      {data && !data.supported && !data.layout_not_decoded && (
         <div className="banner info" style={{ marginTop: 12, marginBottom: 0 }}>
           <span className="b-code">not offered</span>
           <span>
