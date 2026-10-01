@@ -19,6 +19,11 @@ Simulator scenarios: `healthy` (warm idle, nothing stored), `dpf-regen`
 vehicle does not), `parked` (key on, engine off — the state a configuration
 change is made in). `cargo run -p aim-api -- --list-scenarios` prints them.
 
+Simulated vehicles, chosen with `--vehicle`: `f250` (the default, a diesel on
+11-bit CAN with a second bus), `odyssey` (a 2023 Honda, petrol, 29-bit CAN) and
+`toyota` (a 2004 Toyota, petrol, on the K-line before CAN). `--replay
+<transcript>` answers from a recorded session instead.
+
 - [Conventions](#conventions)
 - [Core envelopes](#core-envelopes)
 - [Endpoints](#endpoints)
