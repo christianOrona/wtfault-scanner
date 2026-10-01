@@ -236,15 +236,22 @@ honest one.
 
 ## Try it without a car
 
-There is a full virtual vehicle built in — a 2019 F-250 with a diesel, five
-control modules, realistic sensor behaviour over time, and injectable faults.
-Connect → **Virtual vehicle**. Everything works: scans, live data, the agent,
-the flight recorder.
+There are virtual vehicles built in. Connect → **Virtual vehicle**, then pick
+one. Everything works: scans, live data, the agent, the flight recorder.
+
+```
+f250         2019 F-250 diesel: 11-bit CAN, a second bus, five control modules
+odyssey      2023 Honda Odyssey, petrol: 29-bit CAN
+toyota       2004 Toyota, petrol: the K-line, from before CAN
+```
+
+Each runs a scenario, with realistic sensor behaviour over time:
 
 ```
 healthy      warm engine, no codes, particulate filter loading normally
 dpf-regen    filter regeneration in progress, exhaust temperatures elevated
 bus-silent   the adapter works and the vehicle does not answer
+parked       key on, engine off: the state a setting is changed in
 ```
 
 ---
