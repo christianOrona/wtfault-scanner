@@ -681,6 +681,19 @@ impl UdsRequest {
         }
     }
 
+    /// ClearDiagnosticInformation for every group of codes (`14 FF FF FF`).
+    ///
+    /// Clears what a module has stored. Not freeze frames of another module,
+    /// not configuration, not adaptations: fault memory, which the module
+    /// rebuilds from what it sees after the next drive cycle.
+    pub fn clear_all_dtcs() -> Self {
+        UdsRequest {
+            service: UdsService::ClearDiagnosticInformation,
+            sub_function: None,
+            data: vec![0xFF, 0xFF, 0xFF],
+        }
+    }
+
     /// ReadDTCInformation, sub-function `reportDTCByStatusMask` (0x02).
     ///
     /// This is the request that makes a full-vehicle fault scan possible.

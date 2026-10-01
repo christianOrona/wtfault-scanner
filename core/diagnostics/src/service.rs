@@ -6337,6 +6337,70 @@ impl DiagnosticService {
         Ok(UdsFaultRead { reports, not_faults, evidence, cut_off })
     }
 
+    /// Clear one module's fault memory with UDS `14 FF FF FF`, on its own bus.
+    ///
+    /// Gated exactly as the service 04 clear is, by the caller: a person's
+    /// confirmation, the engine off, the vehicle stopped. A refusal says why,
+    /// and on a vehicle listed as having a security gateway, that the gateway
+    /// is the likely reason; this build does not get around one.
+    fn clear_uds_dtcs(&mut self, module: &Module) -> AimResult<Payload> {
+        let addr = Self::request_target(module)?;
+        let home = match &addr {
+            RequestTarget::Physical(a) => self.reach_module(a),
+            RequestTarget::Functional => None,
+        };
+        let request = aim_protocols::UdsRequest::clear_all_dtcs().to_bytes();
+        let replies = self.adapter.request_pdu(&request, &addr, Duration::from_millis(2500));
+        self.restore_bus(home);
+        let evidence = self.recorder.last_response_event();
+
+        let outcome = Self::first_uds_outcome(&replies?);
+        if outcome.is_positive() {
+            return Ok(Payload {
+                data: Some(serde_json::json!({
+                    "cleared_by": [module.address.clone()],
+                    "service": "uds_0x14",
+                })),
+                warnings: vec![Warning::info(
+                    "cleared_over_uds",
+                    format!(
+                        "{} does not speak the OBD-II services, so its fault memory was cleared \
+                         with UDS 0x14. A fault that is still present will be set again once the \
+                         module next sees it.",
+                        module.module_key
+                    ),
+                )],
+                evidence,
+                module: Some(module.module_key.clone()),
+                ..Default::default()
+            });
+        }
+
+        let refusal = match &outcome {
+            UdsOutcome::Refused(nrc) => Some(nrc.refusal()),
+            _ => None,
+        };
+        let gateway = self
+            .gateway()
+            .filter(|g| g.blocks(aim_decoders::gateways::GatedOperation::ClearFaultCodes))
+            .filter(|_| {
+                matches!(refusal, Some(aim_protocols::RefusalKind::SecurityRequired) | None)
+            });
+        let mut message = match &outcome {
+            UdsOutcome::Refused(nrc) => {
+                format!("{} refused to clear its faults: {}", module.module_key, nrc.description())
+            }
+            _ => format!("{} did not answer the request to clear its faults", module.module_key),
+        };
+        if let Some(g) = gateway {
+            message.push_str(&format!(". {}", g.boundary()));
+        }
+        Err(AimError::new(ErrorCode::NegativeResponse, message).with_details(serde_json::json!({
+            "module": module.module_key,
+            "refused_because": refusal.map(|r| r.code()),
+        })))
+    }
+
     /// One UDS fault as the same report type service 03 produces.
     fn uds_dtc_report(&self, d: &aim_protocols::UdsDtc, module_key: &str) -> DtcReport {
         let info = self.decoders.dtcs.describe(&d.base_code).ok();
@@ -6732,11 +6796,28 @@ impl DiagnosticService {
         let target = match module_key {
             Some(k) => {
                 let module = self.module_by_key(k)?;
+                // A module that does not speak OBD-II is cleared in the
+                // language its codes were read in. Asked with service 04, a
+                // body module says nothing and its codes stay, which is how a
+                // clear after a repair used to fail with "no data".
+                if !VehicleBus::of_module_key(&module.module_key).answers_obd2() {
+                    return self.clear_uds_dtcs(&module);
+                }
                 Self::request_target(&module).unwrap_or(RequestTarget::Functional)
             }
             None => RequestTarget::Functional,
         };
-        let messages = self.request(&request, &target)?;
+        let messages = match self.request(&request, &target) {
+            Ok(messages) => messages,
+            // A module on the primary bus that answers none of the OBD-II
+            // services is a body module reached through a gateway, and is
+            // cleared the way it was read.
+            Err(e) if e.code == ErrorCode::NoData && module_key.is_some() => {
+                let module = self.module_by_key(module_key.unwrap_or_default())?;
+                return self.clear_uds_dtcs(&module);
+            }
+            Err(e) => return Err(e),
+        };
         Ok(Payload {
             data: Some(serde_json::json!({
                 "cleared_by": messages.iter().map(|m| &m.address).collect::<Vec<_>>(),

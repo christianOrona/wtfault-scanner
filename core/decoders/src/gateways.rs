@@ -18,6 +18,8 @@ use serde::{Deserialize, Serialize};
 pub enum GatedOperation {
     /// Writing a configuration value to a module.
     WriteConfiguration,
+    /// Clearing a module's fault codes over UDS.
+    ClearFaultCodes,
 }
 
 /// One manufacturer's gateway.

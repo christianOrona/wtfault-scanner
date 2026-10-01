@@ -49,6 +49,9 @@ with the caveat that everything below 1.0 is allowed to move.
 
 ### Fixed
 
+- Clearing the codes of a body module (one that does not speak the OBD-II
+  services) works: it is cleared with UDS, on its own bus, instead of failing
+  with "no data". It still needs your confirmation and the engine off.
 - A full scan in which no module handed over its fault list no longer says
   *all clear*. It says nothing was read and shows the counts as unknown; when
   only some modules answered, *all clear* speaks only for those.

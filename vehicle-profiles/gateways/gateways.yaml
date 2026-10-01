@@ -16,7 +16,7 @@ gateways:
     name: "Secure Gateway Module (FCA / Stellantis)"
     makes: ["Stellantis", "FCA", "Chrysler", "Dodge", "Jeep", "Ram", "Fiat", "Alfa Romeo"]
     from_model_year: 2018
-    blocks: [write_configuration]
+    blocks: [write_configuration, clear_fault_codes]
     allows: >-
       Reading fault codes, live data and module identity, and the generic
       emissions services every scan tool is entitled to.

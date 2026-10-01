@@ -2104,3 +2104,39 @@ fn a_second_cold_start_on_the_same_vehicle_starts_ahead_of_the_first() {
     );
     assert!(diff.findings.lost.is_empty(), "nothing is forgotten in between: {:?}", diff.findings);
 }
+
+/// A module that speaks only UDS is cleared with UDS. Asked with service 04,
+/// the body module at 768 said nothing and the clear failed with "no data",
+/// so the codes on the screen could not be cleared after a repair.
+#[test]
+fn a_uds_only_module_is_cleared_in_its_own_language() {
+    let (mut service, _) = connected(ScenarioId::Parked);
+    assert!(service.scan_modules(USER).success);
+    assert!(service.scan_all_modules(USER).success);
+    // The preconditions are read from the vehicle, never assumed.
+    service.read_live_data("ECU_7E8", &["vehicle_speed".into(), "engine_rpm".into()], USER);
+
+    let before = service.read_dtcs(Some("ECU_768"), USER);
+    let count =
+        |r: &aim_types::ToolResult| r.data.as_ref().unwrap()["dtcs"].as_array().unwrap().len();
+    assert_eq!(count(&before), 2);
+
+    let cleared = service.clear_dtcs(Some("ECU_768"), USER, Some("the-owner"));
+    assert!(cleared.success, "{:?}", cleared.error);
+    assert_eq!(cleared.data.as_ref().unwrap()["service"], "uds_0x14");
+    assert!(cleared.warnings.iter().any(|w| w.code == "cleared_over_uds"));
+
+    assert_eq!(count(&service.read_dtcs(Some("ECU_768"), USER)), 0);
+}
+
+/// And it still takes a person's confirmation, like any clear.
+#[test]
+fn clearing_a_uds_module_still_needs_confirmation() {
+    let (mut service, _) = connected(ScenarioId::Parked);
+    assert!(service.scan_all_modules(USER).success);
+    let refused = service.clear_dtcs(Some("ECU_768"), USER, None);
+    assert!(!refused.success);
+    assert_eq!(refused.error.unwrap().code, ErrorCode::ConfirmationRequired);
+    let still = service.read_dtcs(Some("ECU_768"), USER);
+    assert_eq!(still.data.as_ref().unwrap()["dtcs"].as_array().unwrap().len(), 2);
+}

@@ -497,6 +497,12 @@ impl VirtualVehicle {
                     let did = u16::from_be_bytes([request[1], request[2]]);
                     ecus[i].config_records.insert(did, request[3..].to_vec());
                 }
+                // A UDS clear empties that module's fault memory, and only
+                // that module's: the emissions codes service 04 clears are a
+                // different store.
+                if request[0] == 0x14 && payload.first() == Some(&0x54) {
+                    ecus[i].uds_faults = Some(Vec::new());
+                }
                 replies.push(EcuReply { response_id: ecus[i].response_id, payload });
             }
         }
@@ -670,6 +676,16 @@ impl VirtualVehicle {
                 // different answer from "no faults".
                 Some(vec![0x7F, 0x19, 0x11])
             }
+            // ClearDiagnosticInformation. Three bytes of group; anything else
+            // is malformed. Cleared in `handle`, the one place that mutates.
+            None if service == 0x14 && ecu.uds_faults.is_some() => {
+                if request.len() == 4 {
+                    Some(vec![0x54])
+                } else {
+                    Some(vec![0x7F, 0x14, 0x13])
+                }
+            }
+            None if service == 0x14 => Some(vec![0x7F, 0x14, 0x11]),
             // ReadDataByIdentifier. A module that has been given no
             // configuration records answers serviceNotSupported, which is what
             // most modules on most vehicles do.
