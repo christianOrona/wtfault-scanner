@@ -393,6 +393,22 @@ fn the_freeze_frame_is_a_snapshot_from_the_past_not_a_live_reading() {
     assert_eq!(measured.len(), 1, "only the live read was recorded");
 }
 
+/// A healthy engine has no frame stored and says nothing when asked. That is
+/// an answer, not an adapter failure.
+#[test]
+fn no_freeze_frame_stored_is_an_answer_not_a_failure() {
+    let (mut service, _) = connected(ScenarioId::Healthy);
+    service.scan_modules(USER);
+
+    let frame = service.read_freeze_frame("ECU_7E8", 0, USER);
+    assert!(frame.success, "{:?}", frame.error);
+    let data = frame.data.as_ref().unwrap();
+    assert_eq!(data["stored"], false);
+    assert!(data["dtc"].is_null());
+    assert!(frame.values.is_empty());
+    assert!(frame.warnings.iter().any(|w| w.code == "no_freeze_frame_stored"));
+}
+
 #[test]
 fn clearing_codes_needs_confirmation_and_a_stopped_engine() {
     let (mut service, emulator) = connected(ScenarioId::DpfRegen);

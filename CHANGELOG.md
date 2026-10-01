@@ -52,6 +52,12 @@ with the caveat that everything below 1.0 is allowed to move.
 
 ### Fixed
 
+- **Reading a freeze frame on a healthy car says none is stored.** It used to
+  fail with "adapter answered 020200 with no_data", as if the adapter had
+  broken. A module that answers with a causing code of 0000, which also means
+  "nothing stored", is now read the same way instead of being shown as a
+  frame for P0000.
+
 - **An update is checked before it is kept.** A downloaded installer must hash
   to the SHA-256 its release states, in `SHA256SUMS.txt` and in GitHub's own
   record of the file, each where it is given; one that does not, or that

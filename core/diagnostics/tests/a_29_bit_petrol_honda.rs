@@ -135,3 +135,19 @@ fn nothing_ford_is_offered_to_it() {
         probe.warnings
     );
 }
+
+/// This engine answers a freeze frame request with a causing code of `0000`
+/// when none is stored, which J1979 defines as "no frame". Read on, it would
+/// have been reported as a frame for P0000.
+#[test]
+fn a_causing_code_of_zero_means_no_freeze_frame() {
+    let mut service = honda();
+    assert!(service.scan_modules(USER).success);
+    let frame = service.read_freeze_frame("ECU_18DAF110", 0, USER);
+    assert!(frame.success, "{:?}", frame.error);
+    let data = frame.data.as_ref().unwrap();
+    assert_eq!(data["stored"], false);
+    assert!(data["dtc"].is_null(), "{data}");
+    assert!(frame.values.is_empty());
+    assert!(frame.warnings.iter().any(|w| w.code == "no_freeze_frame_stored"));
+}

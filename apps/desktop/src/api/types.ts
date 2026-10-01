@@ -346,6 +346,8 @@ export interface ConnectData {
 export interface FreezeFrameData {
   module: string;
   frame: number;
+  /** False when the module has no frame stored, which is an answer. */
+  stored: boolean;
   dtc: string | null;
   dtc_description: string | null;
   dtc_verification: Verification | null;

@@ -202,6 +202,12 @@ export function CodesPane({
               <PaneIntro kind="concept" id="freeze_frame" />
               {!frame.success ? (
                 <FailedResult result={frame} onEvidence={onEvidence} />
+              ) : frame.data?.stored === false ? (
+                <div className="card muted">
+                  {easy
+                    ? "No snapshot is saved. The car saves one when it records an emissions fault, so a healthy car normally has none."
+                    : `${frame.data.module} holds no freeze frame ${frame.data.frame}. One is stored with an emissions fault, and clearing codes erases it.`}
+                </div>
               ) : (
                 <>
                   <div className="card">

@@ -262,6 +262,9 @@ codes:
   - id: modules_without_fault_memory
     easy: "Some of the car's computers answered but would not hand over a list of faults. That is common: not every computer keeps one in a way a scan tool can ask for. The ones that did answer are shown."
     technical: "A subset of modules answered the discovery probe but not UDS 0x19 0x02. Their fault memory is unknown, not empty."
+  - id: no_freeze_frame_stored
+    easy: "This computer has no snapshot saved. It saves one when it records an emissions fault, so with no such fault there is nothing to show. That is the normal state of a healthy car."
+    technical: "Service 02 PID 02 returned no data or DTC 0000, which SAE J1979 defines as no freeze frame stored. The frame's parameters were not requested."
   - id: fault_list_cut_off
     easy: "One of the car's computers started sending its list of faults and stopped part-way. The faults that arrived are shown. The rest never came, so this is not that computer's full list. Scanning again may get all of it."
     technical: "A UDS 0x19 0x02 reply ended before its announced length, usually in an adapter timeout. Every whole 4-byte record received was decoded; the remainder was not received. A partial reply is accepted only for fault reads, never for a read-back after a write."

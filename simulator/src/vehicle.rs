@@ -129,6 +129,10 @@ pub struct VirtualEcu {
     pub config_records: BTreeMap<u16, Vec<u8>>,
     /// How this module behaves when asked to change one of those records.
     pub config_write: ConfigWriteBehaviour,
+    /// How it answers a freeze frame request with no frame stored. SAE J1979
+    /// allows both silence and a causing code of `0000`, and real modules do
+    /// each, so the core has to take either as "nothing stored".
+    pub no_frame_as_zero_code: bool,
 }
 
 /// What a module does with a configuration write.
@@ -247,6 +251,7 @@ impl VirtualVehicle {
             uds_faults: Some(Vec::new()),
             config_records: BTreeMap::new(),
             config_write: ConfigWriteBehaviour::Accept,
+            no_frame_as_zero_code: false,
         };
         // Two further modules answer the standard broadcast. Their function is
         // not asserted: on a given vehicle 7EA and 7EB could be almost
@@ -266,6 +271,7 @@ impl VirtualVehicle {
             uds_faults: Some(Vec::new()),
             config_records: BTreeMap::new(),
             config_write: ConfigWriteBehaviour::Accept,
+            no_frame_as_zero_code: false,
         };
         let third = VirtualEcu {
             response_id: 0x7EB,
@@ -281,6 +287,7 @@ impl VirtualVehicle {
             uds_faults: None,
             config_records: BTreeMap::new(),
             config_write: ConfigWriteBehaviour::Accept,
+            no_frame_as_zero_code: false,
         };
 
         // Two modules outside the legislated emissions block, answering UDS and
@@ -325,6 +332,7 @@ impl VirtualVehicle {
             ]),
             config_records: BTreeMap::new(),
             config_write: ConfigWriteBehaviour::Accept,
+            no_frame_as_zero_code: false,
         };
         let body = VirtualEcu {
             response_id: 0x7A8,
@@ -360,6 +368,7 @@ impl VirtualVehicle {
                 (0xF195u16, b"1.2.3".to_vec()),
             ]),
             config_write: ConfigWriteBehaviour::Accept,
+            no_frame_as_zero_code: false,
         };
 
         VirtualVehicle {
@@ -388,6 +397,7 @@ impl VirtualVehicle {
                         (0xF188u16, pad_nul(b"JC3T-14C064-AA", 24)),
                     ]),
                     config_write: ConfigWriteBehaviour::Accept,
+                    no_frame_as_zero_code: false,
                 },
                 // Module at 74E - Seat module
                 VirtualEcu {
@@ -405,6 +415,7 @@ impl VirtualVehicle {
                     // A part number whose base this build does not know.
                     config_records: BTreeMap::from([(0xF113u16, pad_nul(b"HC3T-19H423-DU", 24))]),
                     config_write: ConfigWriteBehaviour::Accept,
+                    no_frame_as_zero_code: false,
                 },
             ],
             time: TimeSource::deterministic(),
@@ -444,6 +455,9 @@ impl VirtualVehicle {
             uds_faults: Some(Vec::new()),
             config_records: BTreeMap::new(),
             config_write: ConfigWriteBehaviour::Refuse,
+            // The Ford's engine stays silent; this one answers the other way
+            // J1979 allows, so both are exercised.
+            no_frame_as_zero_code: true,
         };
         let transmission = VirtualEcu {
             response_id: 0x1E,
@@ -459,6 +473,7 @@ impl VirtualVehicle {
             uds_faults: Some(Vec::new()),
             config_records: BTreeMap::new(),
             config_write: ConfigWriteBehaviour::Refuse,
+            no_frame_as_zero_code: false,
         };
         VirtualVehicle {
             vin: String::from(SIMULATED_HONDA_VIN),
@@ -644,7 +659,10 @@ impl VirtualVehicle {
                 if !ecu.reports_dtcs || frame != 0 {
                     return None;
                 }
-                let ff = self.scenario.freeze_frame.as_ref()?;
+                let Some(ff) = self.scenario.freeze_frame.as_ref() else {
+                    return (ecu.no_frame_as_zero_code && pid == 0x02)
+                        .then(|| vec![0x42, 0x02, frame, 0x00, 0x00]);
+                };
                 let mut v = vec![0x42, pid, frame];
                 if pid == 0x02 {
                     // PID 02 of a freeze frame is the DTC that caused it.

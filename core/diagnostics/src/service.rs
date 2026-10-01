@@ -4526,7 +4526,16 @@ impl DiagnosticService {
         // PID 02 of a freeze frame is the code that caused it. Without it,
         // there is no frame to read.
         let dtc_request = ObdRequest::freeze_frame(0x02, frame);
-        let (message, evidence) = self.request_module(&module, &dtc_request)?;
+        let (message, evidence) = match self.request_module(&module, &dtc_request) {
+            Ok(v) => v,
+            // A module with no frame stored may say nothing at all. That is
+            // the ordinary state of a vehicle without an emissions fault, and
+            // it is an answer, not a failure to communicate.
+            Err(e) if e.code == ErrorCode::NoData => {
+                return Ok(Self::no_freeze_frame(module_key, frame, None))
+            }
+            Err(e) => return Err(e),
+        };
         let payload = Self::payload_of(&message, &dtc_request)?;
         // Payload is <frame> <dtc hi> <dtc lo>.
         if payload.len() < 3 {
@@ -4537,6 +4546,12 @@ impl DiagnosticService {
                     payload.len()
                 ),
             ));
+        }
+        // SAE J1979: a causing code of 0000 means no frame is stored. Reading
+        // on would decode whatever the module returns for an empty frame as if
+        // it were the conditions of a fault, under the code P0000.
+        if payload[1] == 0 && payload[2] == 0 {
+            return Ok(Self::no_freeze_frame(module_key, frame, evidence));
         }
         let cause = aim_protocols::decode_dtc(payload[1], payload[2]);
         let info = self.decoders.dtcs.describe(&cause)?;
@@ -4590,6 +4605,7 @@ impl DiagnosticService {
             data: Some(serde_json::json!({
                 "module": module_key,
                 "frame": frame,
+                "stored": true,
                 "dtc": cause,
                 "dtc_description": info.description,
                 "dtc_verification": info.verification,
@@ -4598,6 +4614,31 @@ impl DiagnosticService {
             evidence,
             module: Some(module_key.to_string()),
         })
+    }
+
+    /// What reading a freeze frame returns when none is stored.
+    fn no_freeze_frame(module_key: &str, frame: u8, evidence: Option<i64>) -> Payload {
+        Payload {
+            data: Some(serde_json::json!({
+                "module": module_key,
+                "frame": frame,
+                "stored": false,
+                "dtc": null,
+                "dtc_description": null,
+                "dtc_verification": null,
+            })),
+            warnings: vec![Warning::info(
+                "no_freeze_frame_stored",
+                format!(
+                    "{module_key} holds no freeze frame {frame}. A module stores one when it \
+                     records an emissions fault, so with no such fault there is nothing to show; \
+                     clearing codes also erases it."
+                ),
+            )],
+            evidence,
+            module: Some(module_key.to_string()),
+            ..Default::default()
+        }
     }
 
     /// Read one signal by its id (`engine_rpm`) or PID (`0x0C`, `12`).
