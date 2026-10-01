@@ -64,6 +64,12 @@ with the caveat that everything below 1.0 is allowed to move.
 
 ### Fixed
 
+- **Older vehicles (before CAN, roughly pre-2008) are read correctly.** On
+  J1850, ISO 9141 and KWP, every reply's checksum byte was being read as
+  data, and replies longer than one frame (a VIN, a fault list) were joined
+  wrongly. They now follow the published ELM327 and SAE J1979 frame format.
+  Not yet checked against such a vehicle.
+
 - **"Not now" no longer hides an update you already downloaded.** The banner
   shrinks to one quiet line saying a restart will finish installing it, with
   the install button, instead of disappearing until the next launch.

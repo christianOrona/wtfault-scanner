@@ -784,7 +784,8 @@ impl Elm327Adapter {
         }
         if !self.protocol.is_can() && self.protocol != ObdProtocol::Unknown {
             self.caps.add_caveat(format!(
-                "{}: multi-line reassembly on non-CAN protocols is not validated by this project",
+                "{}: replies are read to the published ELM327 and SAE J1979 frame format, which \
+                 this project has not yet checked against a vehicle on this protocol",
                 self.protocol.label()
             ));
         }
@@ -2113,36 +2114,109 @@ fn assemble_can_with(
 
 /// Reassemble non-CAN (J1850 / ISO 9141 / KWP) responses.
 ///
-/// These protocols print a three-byte header and the adapter has already
-/// stripped the checksum. Consecutive lines from the same source are
-/// concatenated. This project has **not** validated multi-line reassembly on
-/// these protocols against real hardware, which is why
+/// With headers on, the adapter prints each frame whole: three header bytes
+/// (priority, target, source), the data, and a final checksum byte, which it
+/// has already verified (a bad one is reported as an error, not printed):
+///
+/// ```text
+/// 48 6B 13 41 00 BE 1F B8 11 AD    AD = sum of the bytes before it, mod 256
+/// ```
+///
+/// The checksum is not data. Kept as data, it was a fifth byte in every
+/// supported-PID mask and an extra one in every reading.
+///
+/// A reply longer than one frame is several frames from the same source, and
+/// is not their concatenation:
+///
+/// - Fault lists (services 03, 07, 0A) carry three codes a frame, with the
+///   service byte repeated and no count byte. They are joined after one service
+///   byte, which [`aim_protocols::obd2::strip_dtc_count`] tells apart from the
+///   CAN form by length.
+/// - Vehicle information (service 09: a VIN, calibration IDs) repeats the
+///   service and PID and numbers each frame. Frames are put in that order and
+///   joined after one service and PID; a reply missing a frame keeps only the
+///   frames before the gap, so a part of a VIN is never mistaken for the whole
+///   of one.
+/// - Any other service answers in one frame, and a second frame from the same
+///   source is the same answer again; the first is kept.
+///
+/// The frame format is the ELM327's and SAE J1979's. It has not yet been
+/// checked against a pre-CAN vehicle by this project, which is why
 /// [`Elm327Adapter::negotiate_protocol`] records a caveat when one is
 /// negotiated.
 pub fn assemble_non_can(lines: &[String]) -> Vec<EcuMessage> {
-    let mut out: Vec<EcuMessage> = Vec::new();
+    // Frames per source, in the order each source first answered.
+    let mut sources: Vec<(String, Vec<LegacyFrame>)> = Vec::new();
     for line in lines {
-        let bytes: Vec<u8> =
-            line.split_whitespace().filter_map(|p| u8::from_str_radix(p, 16).ok()).collect();
-        if bytes.len() < 4 {
+        let hex: String = line.chars().filter(|c| !c.is_whitespace()).collect();
+        if hex.is_empty() || hex.len() % 2 != 0 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+            continue;
+        }
+        let bytes: Vec<u8> = (0..hex.len())
+            .step_by(2)
+            .filter_map(|i| u8::from_str_radix(&hex[i..i + 2], 16).ok())
+            .collect();
+        // Three header bytes, at least one data byte, the checksum.
+        if bytes.len() < 5 {
             continue;
         }
         let address = format!("{:02X}", bytes[2]);
-        let payload = bytes[3..].to_vec();
-        match out.last_mut() {
-            Some(prev) if prev.address == address => {
-                prev.payload.extend_from_slice(&payload);
-                prev.raw_lines.push(line.clone());
-            }
-            _ => out.push(EcuMessage {
-                address,
-                payload,
-                raw_lines: vec![line.clone()],
-                cut_off: None,
-            }),
+        let data = bytes[3..bytes.len() - 1].to_vec();
+        match sources.iter_mut().find(|(a, _)| *a == address) {
+            Some((_, frames)) => frames.push((data, line.clone())),
+            None => sources.push((address, vec![(data, line.clone())])),
         }
     }
+
+    let mut out: Vec<EcuMessage> = sources
+        .into_iter()
+        .map(|(address, frames)| {
+            let raw_lines = frames.iter().map(|(_, l)| l.clone()).collect();
+            EcuMessage { address, payload: join_legacy_frames(frames), raw_lines, cut_off: None }
+        })
+        .collect();
+    out.sort_by(|a, b| a.address.cmp(&b.address));
     out
+}
+
+/// One pre-CAN frame's data, between the header and the checksum, and the
+/// line it was printed as.
+type LegacyFrame = (Vec<u8>, String);
+
+/// One source's frames as one payload, in the shape a CAN reply would have.
+fn join_legacy_frames(mut frames: Vec<LegacyFrame>) -> Vec<u8> {
+    if frames.len() == 1 {
+        return frames.remove(0).0;
+    }
+    let service = frames[0].0[0];
+    if matches!(service, 0x43 | 0x47 | 0x4A) {
+        let mut payload = vec![service];
+        for (data, _) in &frames {
+            payload.extend_from_slice(&data[1..]);
+        }
+        return payload;
+    }
+    // Only vehicle information (service 09) numbers its frames. Anything else
+    // that arrives twice from one source is the same answer twice, and the
+    // first is a whole one: joining them would invent a reply.
+    if service != 0x49 {
+        return frames.remove(0).0;
+    }
+    // Service, PID, then the frame's number from 1.
+    let mut numbered: Vec<&Vec<u8>> =
+        frames.iter().map(|(d, _)| d).filter(|d| d.len() >= 3).collect();
+    numbered.sort_by_key(|d| d[2]);
+    let mut payload = Vec::new();
+    for (i, data) in numbered.iter().enumerate() {
+        if usize::from(data[2]) != i + 1 {
+            break;
+        }
+        if i == 0 {
+            payload.extend_from_slice(&data[..2]);
+        }
+        payload.extend_from_slice(&data[3..]);
+    }
+    payload
 }
 
 /// Reassemble when headers are off, which the adapter only allows after it has
@@ -2462,12 +2536,81 @@ mod tests {
         assert_eq!(String::from_utf8_lossy(&msgs[0].payload[3..]), "1FTBF2B69KEC00001");
     }
 
+    /// A pre-CAN frame with headers on, as the ELM327 prints it: the last
+    /// byte is the checksum (`AD` is the sum of the bytes before it, mod 256),
+    /// not part of the reply.
     #[test]
-    fn non_can_lines_use_the_source_byte_as_the_address() {
-        let msgs = assemble_non_can(&lines(&["48 6B 10 41 00 BE 3F A8 13"]));
+    fn non_can_lines_use_the_source_byte_as_the_address_and_drop_the_checksum() {
+        let line = [0x48u8, 0x6B, 0x13, 0x41, 0x00, 0xBE, 0x1F, 0xB8, 0x11];
+        let sum = line.iter().fold(0u8, |a, b| a.wrapping_add(*b));
+        assert_eq!(sum, 0xAD);
+        let msgs = assemble_non_can(&lines(&["48 6B 13 41 00 BE 1F B8 11 AD"]));
         assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].address, "13");
+        assert_eq!(msgs[0].payload, vec![0x41, 0x00, 0xBE, 0x1F, 0xB8, 0x11]);
+        // The same frame with spaces off.
+        let unspaced = assemble_non_can(&lines(&["486B134100BE1FB811AD"]));
+        assert_eq!(unspaced[0].payload, msgs[0].payload);
+    }
+
+    /// A VIN arrives in five numbered frames, possibly out of order, each
+    /// repeating `49 02`. Joined, it decodes as the CAN form does.
+    #[test]
+    fn a_pre_can_vin_is_joined_in_frame_order() {
+        let vin = b"1G1JC5444R7252367";
+        // Three padding bytes, then the 17 characters, four bytes a frame.
+        let mut body = vec![0u8, 0, 0];
+        body.extend_from_slice(vin);
+        let frame = |n: usize| {
+            let mut f = vec![0x48u8, 0x6B, 0x10, 0x49, 0x02, n as u8];
+            f.extend_from_slice(&body[(n - 1) * 4..n * 4]);
+            let ck = f.iter().fold(0u8, |a, b| a.wrapping_add(*b));
+            f.push(ck);
+            f.iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(" ")
+        };
+        let order = [1, 3, 2, 5, 4].map(frame);
+        let msgs = assemble_non_can(&lines(&order.iter().map(String::as_str).collect::<Vec<_>>()));
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(&msgs[0].payload[..2], &[0x49, 0x02]);
+        let decoded = aim_protocols::obd2::decode_vin(&msgs[0].payload[2..]).unwrap();
+        assert_eq!(decoded, "1G1JC5444R7252367");
+
+        // The same single-frame answer twice is one answer, not a join.
+        let twice = assemble_non_can(&lines(&[
+            "48 6B 13 41 00 BE 1F B8 11 AD",
+            "48 6B 13 41 00 BE 1F B8 11 AD",
+        ]));
+        assert_eq!(twice[0].payload, vec![0x41, 0x00, 0xBE, 0x1F, 0xB8, 0x11]);
+
+        // Frame 3 lost: what is kept stops at the gap.
+        let gapped = [1, 2, 4, 5].map(frame);
+        let msgs = assemble_non_can(&lines(&gapped.iter().map(String::as_str).collect::<Vec<_>>()));
+        assert_eq!(msgs[0].payload.len(), 2 + 8);
+        assert!(aim_protocols::obd2::decode_vin(&msgs[0].payload[2..]).is_err());
+    }
+
+    /// Fault codes come three a frame with no count byte, and the frames are
+    /// joined after one service byte, so the list reads as the CAN form does.
+    #[test]
+    fn a_pre_can_fault_list_is_joined_after_one_service_byte() {
+        let msgs = assemble_non_can(&lines(&[
+            "48 6B 10 43 01 43 01 96 02 34 17",
+            "48 6B 10 43 03 00 00 00 00 00 09",
+            // A second module answering the same request.
+            "48 6B 18 43 00 00 00 00 00 00 0E",
+        ]));
+        assert_eq!(msgs.len(), 2);
         assert_eq!(msgs[0].address, "10");
-        assert_eq!(msgs[0].payload, vec![0x41, 0x00, 0xBE, 0x3F, 0xA8, 0x13]);
+        assert_eq!(msgs[0].payload[0], 0x43);
+        let (codes, count) = aim_protocols::obd2::strip_dtc_count(&msgs[0].payload[1..]);
+        assert_eq!(count, None);
+        assert_eq!(
+            aim_protocols::obd2::decode_dtc_list(codes).unwrap(),
+            ["P0143", "P0196", "P0234", "P0300"]
+        );
+        assert_eq!(msgs[1].address, "18");
+        let (codes, _) = aim_protocols::obd2::strip_dtc_count(&msgs[1].payload[1..]);
+        assert!(aim_protocols::obd2::decode_dtc_list(codes).unwrap().is_empty());
     }
 
     #[test]
