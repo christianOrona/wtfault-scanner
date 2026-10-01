@@ -99,6 +99,28 @@ pub enum SimulatedVehicle {
 }
 
 impl SimulatedVehicle {
+    /// Every vehicle the simulator can be, in the order a list shows them.
+    pub const ALL: [SimulatedVehicle; 3] =
+        [SimulatedVehicle::F250, SimulatedVehicle::Odyssey, SimulatedVehicle::Toyota2004];
+
+    /// The name a request uses.
+    pub fn id(&self) -> &'static str {
+        match self {
+            SimulatedVehicle::F250 => "f250",
+            SimulatedVehicle::Odyssey => "odyssey",
+            SimulatedVehicle::Toyota2004 => "toyota",
+        }
+    }
+
+    /// What it is, for a person picking one.
+    pub fn description(&self) -> &'static str {
+        match self {
+            SimulatedVehicle::F250 => "2019 Ford F-250 diesel: 11-bit CAN, with a second bus",
+            SimulatedVehicle::Odyssey => "2023 Honda Odyssey, petrol: 29-bit CAN",
+            SimulatedVehicle::Toyota2004 => "2004 Toyota, petrol: the K-line, from before CAN",
+        }
+    }
+
     /// The command-line spelling.
     pub fn parse(s: &str) -> Option<SimulatedVehicle> {
         match s.trim().to_ascii_lowercase().as_str() {
@@ -119,6 +141,9 @@ pub struct ConnectRequest {
     pub port: Option<String>,
     /// Simulator scenario name, e.g. `dpf-regen`.
     pub scenario: Option<String>,
+    /// Which vehicle the simulator is, e.g. `odyssey`. Defaults to how the
+    /// server was launched.
+    pub vehicle: Option<String>,
     /// Label recorded on the session.
     pub label: Option<String>,
 }
@@ -319,6 +344,15 @@ impl AppState {
             })?,
             None => config.default_scenario,
         };
+        let vehicle = match &request.vehicle {
+            Some(name) => SimulatedVehicle::parse(name).ok_or_else(|| {
+                ApiError::bad_request(format!(
+                    "unknown simulated vehicle {name:?}; known vehicles are {:?}",
+                    SimulatedVehicle::ALL.map(|v| v.id())
+                ))
+            })?,
+            None => config.simulated_vehicle,
+        };
         let port = request.port.clone().or_else(|| config.default_port.clone());
 
         // Both hints come from history and neither is trusted: a wrong one costs
@@ -326,7 +360,7 @@ impl AppState {
         let known_baud =
             port.as_deref().and_then(|p| self.store.last_baud_for_adapter(p).ok().flatten());
         let mut adapter =
-            build_adapter(transport_choice, port.clone(), scenario, &config, known_baud)?;
+            build_adapter(transport_choice, port.clone(), scenario, vehicle, &config, known_baud)?;
 
         // A protocol that answered through this adapter before is tried first.
         // Only a reordering: if it does not answer, the full sweep runs exactly
@@ -380,6 +414,7 @@ fn build_adapter(
     choice: TransportChoice,
     port: Option<String>,
     scenario: ScenarioId,
+    vehicle: SimulatedVehicle,
     config: &ServerConfig,
     known_baud: Option<u32>,
 ) -> ApiResult<Box<dyn DiagnosticAdapter>> {
@@ -397,8 +432,8 @@ fn build_adapter(
                     })?;
             Ok(Box::new(Elm327Adapter::new(Box::new(transport), Elm327Config::fast())))
         }
-        TransportChoice::Simulator if config.simulated_vehicle != SimulatedVehicle::F250 => {
-            let vehicle = match config.simulated_vehicle {
+        TransportChoice::Simulator if vehicle != SimulatedVehicle::F250 => {
+            let vehicle = match vehicle {
                 SimulatedVehicle::Toyota2004 => {
                     aim_simulator::VirtualVehicle::toyota_2004(scenario)
                 }

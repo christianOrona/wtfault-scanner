@@ -7,6 +7,10 @@ with the caveat that everything below 1.0 is allowed to move.
 
 ### Added
 
+- **Pick the virtual vehicle when connecting.** The Connect dialog offers the
+  2019 F-250, the 2023 Odyssey and the 2004 Toyota, so the app can be tried on
+  another make, or a car from before CAN, without the command line.
+
 - **A third simulated vehicle, from before CAN.** `aim-api --simulator
   --vehicle toyota` is a 2004 Toyota on the K-line (ISO 9141-2).
 

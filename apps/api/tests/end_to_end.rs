@@ -488,6 +488,28 @@ async fn a_scenario_can_be_chosen_per_connection() {
     assert_eq!(body["error"]["code"], "bad_request");
 }
 
+/// The simulated vehicle is chosen per connection too, from the list the
+/// health check publishes.
+#[tokio::test]
+async fn a_simulated_vehicle_can_be_chosen_per_connection() {
+    let h = Harness::start(ScenarioId::Healthy).await;
+    let health = h.get("/health").await;
+    let ids: Vec<&str> =
+        health["vehicles"].as_array().unwrap().iter().map(|v| v["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["f250", "odyssey", "toyota"]);
+
+    let connect = h.post("/adapter/connect", json!({ "vehicle": "toyota" })).await;
+    ok(&connect, "connect");
+    let identify = h.post("/vehicles/identify", json!({})).await;
+    assert_eq!(identify["data"]["vin"], aim_simulator::SIMULATED_TOYOTA_VIN);
+
+    let (status, body) = h.post_raw("/adapter/disconnect", json!({})).await;
+    assert_eq!(status, 200, "{body}");
+    let (status, body) = h.post_raw("/adapter/connect", json!({ "vehicle": "lada" })).await;
+    assert_eq!(status, 400);
+    assert_eq!(body["error"]["code"], "bad_request");
+}
+
 #[tokio::test]
 async fn unbuilt_features_answer_with_a_reason_rather_than_a_404() {
     let h = Harness::start(ScenarioId::Healthy).await;

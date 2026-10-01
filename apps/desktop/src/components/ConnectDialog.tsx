@@ -29,6 +29,7 @@ export function ConnectDialog({
     health?.default_transport === "serial" ? "serial" : "simulator",
   );
   const [scenario, setScenario] = useState(health?.default_scenario ?? "healthy");
+  const [vehicle, setVehicle] = useState(health?.default_vehicle ?? "f250");
   const [port, setPort] = useState("");
   const [label, setLabel] = useState("");
 
@@ -70,7 +71,7 @@ export function ConnectDialog({
     try {
       const result = await api.connect({
         transport,
-        ...(transport === "serial" ? { port } : { scenario }),
+        ...(transport === "serial" ? { port } : { scenario, vehicle }),
         ...(label.trim() ? { label: label.trim() } : {}),
       });
       // 200 only means it ran. A degraded connect still succeeds - the adapter
@@ -129,6 +130,20 @@ export function ConnectDialog({
         </div>
 
         {transport === "simulator" ? (
+          <>
+          {!!health?.vehicles?.length && (
+            <div className="field">
+              <label>Vehicle</label>
+              <select value={vehicle} onChange={(e) => setVehicle(e.target.value)}>
+                {health.vehicles.map((v) => (
+                  <option key={v.id} value={v.id}>{v.id}</option>
+                ))}
+              </select>
+              <span className="faint">
+                {health.vehicles.find((v) => v.id === vehicle)?.description}
+              </span>
+            </div>
+          )}
           <div className="field">
             <label>Scenario</label>
             <select value={scenario} onChange={(e) => setScenario(e.target.value)}>
@@ -140,6 +155,7 @@ export function ConnectDialog({
               {health?.scenarios.find((s) => s.id === scenario)?.description}
             </span>
           </div>
+          </>
         ) : (
           <div className="field">
             <label>{onAndroid ? "Paired adapter" : "Serial port"}</label>
@@ -205,8 +221,8 @@ export function ConnectDialog({
                     )}
                   </div>
                   <div style={{ marginTop: 8 }}>
-                    You do not need one to try the app. The virtual vehicle is a full 2019 F-250
-                    with real faults to find.
+                    You do not need one to try the app. The virtual vehicles (a 2019 F-250, a
+                    2023 Odyssey and a 2004 Toyota) have real faults to find.
                   </div>
                   <button
                     className="primary"

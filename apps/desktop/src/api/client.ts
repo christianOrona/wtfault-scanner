@@ -168,7 +168,7 @@ export const api = {
 
   ports: (probe = false) => request<PortsResponse>(`/adapters/ports${probe ? "?probe=true" : ""}`),
   adapter: () => request<AdapterStatus>("/adapter"),
-  connect: (body: { transport?: string; port?: string; scenario?: string; label?: string }) =>
+  connect: (body: { transport?: string; port?: string; scenario?: string; vehicle?: string; label?: string }) =>
     post<ToolResult<ConnectData>>("/adapter/connect", body),
   disconnect: () => post<ToolResult<unknown>>("/adapter/disconnect"),
 

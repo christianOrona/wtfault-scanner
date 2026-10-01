@@ -149,6 +149,9 @@ export interface Health {
   default_transport: string;
   default_scenario: string | null;
   scenarios: Scenario[];
+  /** The vehicles the simulator can be. Absent from builds older than this field. */
+  default_vehicle?: string;
+  vehicles?: { id: string; description: string }[];
   active: { session_id: string; state: ConnectionState; adapter: string } | null;
 }
 

@@ -178,6 +178,11 @@ async fn health(State(state): State<AppState>) -> ApiResult<Json<Value>> {
             .iter()
             .map(|s| json!({ "id": s.as_str(), "description": aim_simulator::Scenario::new(*s).description }))
             .collect::<Vec<_>>(),
+        "default_vehicle": state.config.simulated_vehicle.id(),
+        "vehicles": crate::state::SimulatedVehicle::ALL
+            .iter()
+            .map(|v| json!({ "id": v.id(), "description": v.description() }))
+            .collect::<Vec<_>>(),
         "active": connected,
         "busy": busy,
     })))
