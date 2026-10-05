@@ -310,13 +310,23 @@ impl ElmEmulator {
                 None => vec![String::from("AUTO")],
             },
             "PC" => {
+                // Closes the protocol; it does not choose another. The next
+                // request reopens the same channel, so an adapter on the
+                // secondary one is still there. Measured on an OBDLink MX+
+                // (2026-10-04): `3E00` answered `CAN ERROR` on the secondary
+                // channel, `ATPC` answered OK, and `3E00` answered `CAN ERROR`
+                // again, 298 times.
                 self.protocol = None;
-                self.on_secondary_bus = false;
                 vec![String::from("OK")]
             }
             "MA" => {
-                // ATMA - return traffic on secondary bus at 500kbps
-                if self.on_secondary_bus && self.secondary_baud == 500000 {
+                // ATMA - return traffic on secondary bus at 500kbps, on a
+                // vehicle that has one. With nothing on those pins there is
+                // nothing to hear at any rate.
+                if self.on_secondary_bus
+                    && self.secondary_baud == 500000
+                    && !self.vehicle.secondary_ecus.is_empty()
+                {
                     vec![
                         String::from("3B3 40 00 00 00 00 00 00 00"),
                         String::from("42C 00 00 02 00 00 00 00 00"),
@@ -374,7 +384,9 @@ impl ElmEmulator {
             .collect();
 
         let mut lines = Vec::new();
-        let searching = self.protocol.is_none();
+        // The secondary channel is a protocol that was chosen, not searched
+        // for, so closing it and asking again finds it as it was left.
+        let searching = self.protocol.is_none() && !self.on_secondary_bus;
         if searching {
             // A real search tries the non-CAN protocols first and takes several
             // seconds, longer than any discovery probe waits. Measured on a 2019
@@ -416,6 +428,14 @@ impl ElmEmulator {
         };
 
         let replies = if self.on_secondary_bus {
+            // Nothing is wired to those pins, so nothing acknowledges the
+            // frame and the adapter reports that it could not send it.
+            // Measured on a 2023 Honda Odyssey (2026-10-04): silence when
+            // listening at 500, 250 and 125 kbit/s, then `CAN ERROR` to every
+            // request, whatever address it was sent to.
+            if self.vehicle.secondary_ecus.is_empty() {
+                return vec![String::from("CAN ERROR")];
+            }
             // Check if we're on the secondary bus with a supported baud rate
             if self.secondary_baud == 500000 {
                 self.vehicle.handle_secondary(header, &request)

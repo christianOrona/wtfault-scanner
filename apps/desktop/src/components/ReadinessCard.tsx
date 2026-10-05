@@ -106,10 +106,18 @@ export function ReadinessCard({
     }
   }, []);
 
+  // Asked once there is a module to ask, not the moment the card exists.
+  //
+  // The card is on screen before the first scan has finished, and readiness
+  // is read from the modules a scan found. Asked that early the core answers
+  // "nothing scanned yet" in six milliseconds without touching the vehicle,
+  // and the card went on to say the vehicle had not reported its monitors.
+  // Seen on a 2023 Odyssey, which reports them perfectly well.
+  const hasModule = moduleKey !== null;
   useEffect(() => {
     setResult(null);
-    void read();
-  }, [read]);
+    if (hasModule) void read();
+  }, [read, hasModule]);
 
   const modules = result?.success ? (result.data?.modules ?? []) : [];
 
@@ -136,8 +144,11 @@ export function ReadinessCard({
         <div className="banner caution" style={{ marginTop: 10, marginBottom: 0 }}>
           <span className="b-code">{result.error?.code ?? "unavailable"}</span>
           <span>
-            This vehicle did not report its readiness monitors. That is unusual but not
-            alarming on older or non-compliant vehicles.
+            {result.error?.code === "no_data"
+              ? "This vehicle did not report its readiness monitors. That is unusual but not alarming on older or non-compliant vehicles."
+              : // Anything else is about the asking, not the vehicle, and the
+                // core's own words say which.
+                (result.error?.message ?? "Readiness could not be read.")}
           </span>
         </div>
       )}

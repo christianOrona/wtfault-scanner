@@ -226,6 +226,26 @@ pub trait DiagnosticAdapter: Send {
         self.request_pdu(pdu, target, timeout)
     }
 
+    /// [`DiagnosticAdapter::request_pdu`] for a discovery probe: silence is
+    /// still an empty answer, but a request the bus did not carry is an error.
+    ///
+    /// The two look alike and mean opposite things to a sweep. Silence is one
+    /// address with nobody at it. A bus error is the adapter saying the frame
+    /// was never acknowledged, so there is nobody on those wires at all and
+    /// every other address will be told the same. A sweep handed an empty
+    /// answer for both cannot stop, and on a vehicle with nothing on the
+    /// second bus it asked all 255 addresses, twice.
+    ///
+    /// The default cannot tell them apart and reports both as silence.
+    fn probe_pdu(
+        &mut self,
+        pdu: &[u8],
+        target: &RequestTarget,
+        timeout: std::time::Duration,
+    ) -> AimResult<Vec<EcuMessage>> {
+        self.request_pdu(pdu, target, timeout)
+    }
+
     /// Send a raw adapter command. Escape hatch for diagnostics and probing;
     /// the safety gate is what decides whether a caller may reach it.
     fn raw_command(&mut self, command: &str) -> AimResult<AdapterResponse>;

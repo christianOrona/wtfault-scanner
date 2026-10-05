@@ -1684,6 +1684,27 @@ impl DiagnosticAdapter for Elm327Adapter {
         Ok(self.assemble(lines).unwrap_or_default())
     }
 
+    fn probe_pdu(
+        &mut self,
+        pdu: &[u8],
+        target: &RequestTarget,
+        timeout: std::time::Duration,
+    ) -> AimResult<Vec<EcuMessage>> {
+        self.ensure_usable()?;
+        self.set_header(target)?;
+        let command = self.request_line(pdu)?;
+        let reply = self.send_with_recovery(&command, timeout)?;
+
+        let lines = match reply.ok_lines() {
+            Ok(lines) => lines,
+            // Still a bus error after the one recovery `send_with_recovery`
+            // makes: the bus is not carrying requests.
+            Err(e) if reply.class == ResponseClass::BusError => return Err(e),
+            Err(_) => return Ok(Vec::new()),
+        };
+        Ok(self.assemble(lines).unwrap_or_default())
+    }
+
     fn request_pdu_keeping_partial(
         &mut self,
         pdu: &[u8],

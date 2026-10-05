@@ -193,6 +193,36 @@ const FORD_CONFIGURATION: u16 = 0xDE00;
 /// Requesting the *default* session is the safe half of a service that can do
 /// more: it asks a module to be in the state it is already in. The programming
 /// session is never requested anywhere in this build.
+/// How long a module is given to send its whole fault memory.
+///
+/// Not the discovery deadline. A module may answer "pending" first and then
+/// send a long list a frame at a time. Measured on a 2023 Honda Odyssey
+/// (2026-10-04): the module at `18DAF128` answered pending, announced 163
+/// bytes, and had sent 97 of them when the full scan stopped listening at
+/// 1.17 s, twice running. The full scan was using the deadline it sweeps
+/// addresses with; reading one module on its own always allowed this long.
+const FAULT_MEMORY_READ: Duration = Duration::from_millis(2500);
+
+/// How many requests in a row a bus may fail to carry before a sweep of it
+/// stops.
+///
+/// `CAN ERROR` in answer to a request is not a module saying no. It is the
+/// adapter saying the frame was never acknowledged, which means nothing at all
+/// is on those wires at that bit rate, and the next address will be told the
+/// same. Measured on a 2023 Honda Odyssey (2026-10-04), which has nothing on
+/// pins 3 and 11: one module scan and two full scans sent 1,602 probes there,
+/// every one answered `CAN ERROR`, and each full scan spent about a minute of
+/// its two doing it.
+///
+/// More than one, because a single bus error does happen on a bus that is
+/// alive: ten in 12,794 replies on a 2019 F-250.
+const UNCARRIED_BEFORE_A_SWEEP_STOPS: usize = 3;
+
+/// True for the error a request gets when the bus did not carry it.
+fn bus_did_not_carry(e: &AimError) -> bool {
+    e.code == ErrorCode::AdapterError
+}
+
 fn fallback_probe() -> Vec<u8> {
     aim_protocols::UdsRequest::diagnostic_session_control(0x01).to_bytes()
 }
@@ -1695,15 +1725,31 @@ impl DiagnosticService {
         let probe = aim_protocols::UdsRequest::tester_present(false).to_bytes();
         let (budget, _) = self.calibrate_probe_budget();
         let mut found = Vec::new();
+        let mut uncarried = 0usize;
 
         for address in scan_addresses(self.adapter.protocol()) {
             let target = RequestTarget::Physical(address.clone());
-            let replies = match self.adapter.request_pdu(&probe, &target, budget) {
+            let replies = match self.adapter.probe_pdu(&probe, &target, budget) {
                 Ok(replies) => replies,
+                // The bus is not carrying requests at all, so the rest of the
+                // range would be told the same. See the constant.
+                Err(e) if bus_did_not_carry(&e) => {
+                    uncarried += 1;
+                    if uncarried >= UNCARRIED_BEFORE_A_SWEEP_STOPS {
+                        tracing::info!(
+                            stopped_at = %address,
+                            found = found.len(),
+                            "the bus is not carrying requests; the address sweep stops here"
+                        );
+                        break;
+                    }
+                    continue;
+                }
                 // Nobody there, or the bus said nothing. Either way this
                 // address is not a module and the sweep moves on.
                 Err(_) => continue,
             };
+            uncarried = 0;
             for reply in replies {
                 found.push(Responder {
                     address: reply.address.clone(),
@@ -5034,22 +5080,35 @@ impl DiagnosticService {
         // sweep reach anything" was "is `found` non-empty".
         let confirmed_from_record = found.len();
 
+        // Set when the bus turned out not to carry requests at all. Asking
+        // again with the other probe would be asking the same dead wires.
+        let mut bus_carries_nothing = false;
+
         for (attempt, probe) in [(0usize, probe.clone()), (1, fallback_probe())].into_iter() {
             let mut answered = 0usize;
             let mut errored = 0usize;
             let mut silent = 0usize;
+            let mut uncarried = 0usize;
             for addr in &addresses {
                 let target = RequestTarget::Physical(addr.clone());
-                let replies = match self.adapter.request_pdu(&probe, &target, probe_budget) {
+                let replies = match self.adapter.probe_pdu(&probe, &target, probe_budget) {
                     Ok(r) => r,
                     // A link that has genuinely fallen over should stop the
                     // sweep rather than produce 240 identical failures.
                     Err(e) if e.code == ErrorCode::TransportDisconnected => return Err(e),
-                    Err(_) => {
+                    Err(e) => {
                         errored += 1;
+                        if bus_did_not_carry(&e) {
+                            uncarried += 1;
+                            if uncarried >= UNCARRIED_BEFORE_A_SWEEP_STOPS {
+                                bus_carries_nothing = true;
+                                break;
+                            }
+                        }
                         continue;
                     }
                 };
+                uncarried = 0;
                 if replies.is_empty() {
                     silent += 1;
                 }
@@ -5070,6 +5129,19 @@ impl DiagnosticService {
                 errored,
                 "discovery sweep finished"
             );
+            if bus_carries_nothing {
+                // With modules already found on this bus it was alive a
+                // moment ago, and what stopped is the sweep, not the bus.
+                if !found.is_empty() {
+                    warnings.push(Warning::caution(
+                        "sweep_cut_short",
+                        "The adapter reported a bus error three times running partway through \
+                         the address sweep, so the sweep stopped there. Modules at addresses \
+                         it had not reached may be missing from this scan; run it again.",
+                    ));
+                }
+                break;
+            }
             if found.len() > confirmed_from_record {
                 if attempt == 1 {
                     warnings.push(Warning::info(
@@ -5083,6 +5155,12 @@ impl DiagnosticService {
             }
         }
 
+        if found.is_empty() && bus_carries_nothing {
+            return Err(AimError::no_data(
+                "the adapter could not send a request on this bus at all: nothing acknowledged \
+                 the first few, so there is nothing on these wires at this bit rate",
+            ));
+        }
         if found.is_empty() {
             return Err(AimError::no_data(
                 "no module answered on any diagnostic address, to either of the two standard \
@@ -5105,7 +5183,7 @@ impl DiagnosticService {
         for (request_addr, response_addr) in &found {
             let target = RequestTarget::Physical(request_addr.clone());
             let reply =
-                self.adapter.request_pdu_keeping_partial(&dtc_request, &target, budget.read);
+                self.adapter.request_pdu_keeping_partial(&dtc_request, &target, FAULT_MEMORY_READ);
 
             let outcome = match reply {
                 Ok(messages) => match messages.into_iter().find(|m| &m.address == response_addr) {
@@ -5806,13 +5884,15 @@ impl DiagnosticService {
         // long a deadline should be.
         const MAX_CALIBRATION_CANDIDATES: usize = 4;
 
-        let mut all: Vec<Module> = self.store.modules(&self.session.id).unwrap_or_default();
-        all.sort_by_key(|m| match VehicleBus::of_module_key(&m.module_key) {
-            VehicleBus::Primary => 0,
-            VehicleBus::Secondary => 1,
-        });
+        // Only modules on the bus being swept. A module on the other bus is
+        // not here to answer, so asking it measures nothing about this one:
+        // on a 2023 Honda Odyssey the engine and transmission were asked
+        // twenty-four times each on pins that carry nothing.
+        let bus = self.adapter.current_bus();
+        let all: Vec<Module> = self.store.modules(&self.session.id).unwrap_or_default();
         let known: Vec<(String, RequestTarget)> = all
             .into_iter()
+            .filter(|m| VehicleBus::of_module_key(&m.module_key) == bus)
             .filter_map(|m| Self::request_target(&m).ok().map(|t| (m.module_key.clone(), t)))
             .take(MAX_CALIBRATION_CANDIDATES)
             .collect();
@@ -6603,8 +6683,7 @@ impl DiagnosticService {
             RequestTarget::Functional => None,
         };
         let request = aim_protocols::UdsRequest::read_dtc_by_status_mask(0xFF).to_bytes();
-        let replies =
-            self.adapter.request_pdu_keeping_partial(&request, &addr, Duration::from_millis(2500));
+        let replies = self.adapter.request_pdu_keeping_partial(&request, &addr, FAULT_MEMORY_READ);
         self.restore_bus(home);
 
         let messages = replies?;

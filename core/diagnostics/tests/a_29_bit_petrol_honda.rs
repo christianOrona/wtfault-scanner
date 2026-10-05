@@ -168,3 +168,77 @@ fn an_empty_feature_list_says_it_is_the_catalogue_that_is_empty() {
         .expect("the empty list is explained");
     assert!(note.message.contains("Honda"), "{}", note.message);
 }
+
+/// The same Honda through an adapter that can reach pins 3 and 11, which on
+/// this vehicle carry nothing.
+fn honda_on_a_two_bus_adapter() -> DiagnosticService {
+    let transport = SimulatedTransport::with_vehicle(
+        VirtualVehicle::honda_odyssey(ScenarioId::Healthy),
+        AdapterPersonality::obdlink_mx(),
+    );
+    let adapter: Box<dyn DiagnosticAdapter> =
+        Box::new(Elm327Adapter::new(Box::new(transport), Elm327Config::fast()));
+    let mut service = DiagnosticService::start(
+        adapter,
+        SessionStore::open_in_memory().unwrap(),
+        Arc::new(DecoderSet::generic_obd().unwrap()),
+        SafetyGate::phase1(),
+        None,
+    )
+    .unwrap();
+    assert!(service.connect(USER).success);
+    assert!(service.capabilities().multiple_can_buses);
+    service
+}
+
+/// How many replies in the session were the adapter saying the bus did not
+/// carry the request.
+fn bus_errors(service: &DiagnosticService) -> usize {
+    service
+        .store()
+        .events_since(service.session_id(), 0, 100_000)
+        .unwrap()
+        .iter()
+        .filter(|e| {
+            matches!(
+                &e.kind,
+                aim_types::EventKind::AdapterResponse { classification, .. }
+                    if classification == "bus_error"
+            )
+        })
+        .count()
+}
+
+/// Measured on the real Odyssey (2026-10-04): nothing is on its second-bus
+/// pins, every request there came back `CAN ERROR`, and a module scan and two
+/// full scans sent 1,602 of them, about a minute of each full scan. A bus that
+/// does not carry the first few requests will not carry the rest.
+#[test]
+fn a_second_bus_that_carries_nothing_is_given_up_on_after_a_few_requests() {
+    let mut service = honda_on_a_two_bus_adapter();
+
+    let scan = service.scan_modules(USER);
+    assert!(scan.success, "{:?}", scan.error);
+    let after_module_scan = bus_errors(&service);
+    // Three requests, each retried once by the adapter after a bus error.
+    assert!(after_module_scan <= 6, "the module scan sent {after_module_scan} into a dead bus");
+
+    let full = service.scan_all_modules(USER);
+    assert!(full.success, "{:?}", full.error);
+    let in_full_scan = bus_errors(&service) - after_module_scan;
+    assert!(in_full_scan <= 6, "the full scan sent {in_full_scan} into a dead bus");
+
+    // The bus that is there was still read, and the one that is not is named.
+    let keys = module_keys(&service);
+    assert!(keys.iter().any(|k| k == "ECU_18DAF110"), "{keys:?}");
+    assert!(keys.iter().all(|k| !k.starts_with("BUS2_")), "{keys:?}");
+    assert!(
+        full.warnings.iter().any(|w| w.code == "second_bus_silent"),
+        "{:?}",
+        full.warnings.iter().map(|w| &w.code).collect::<Vec<_>>()
+    );
+
+    // And the adapter is back where requests are answered.
+    let read = service.read_dtcs(Some("ECU_18DAF110"), USER);
+    assert!(read.success, "{:?}", read.error);
+}

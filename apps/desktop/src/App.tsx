@@ -565,7 +565,14 @@ export default function App() {
               </div>
               {tab === "settings" && <SettingsPane onChanged={refreshAgent} health={health} />}
               {tab === "codes" && <CodesPane moduleKey={selectedModule} onEvidence={showEvidence} />}
-              {tab === "fullscan" && <FullScanPane connected={connected} />}
+              {/* A full scan takes two minutes or more and its result lives in
+                  the pane. Unmounted, a look at another tab threw the result
+                  away while the scan ran on, and came back to "Nothing scanned
+                  yet" beside a button that would start a second one. Seen on a
+                  2023 Odyssey, where it was pressed again. */}
+              <div className="tab-panel" hidden={tab !== "fullscan"}>
+                <FullScanPane connected={connected} />
+              </div>
               {tab === "tests" && <GuidedTestsPane connected={connected} onEvidence={showEvidence} />}
               {tab === "features" && <FeaturesPane connected={connected} />}
               {tab === "adapter" && <AdapterPane adapter={adapter} />}
