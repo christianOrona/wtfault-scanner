@@ -18,8 +18,12 @@ Evidence, not intention. Everything here has run against a vehicle.
 | Sessions recorded | 41 on a real adapter |
 | Adapter exchanges logged | ~54,500 |
 
-OBD-II services 01–0A, UDS 0x10/0x19/0x22/0x27/0x2E/0x3E, full-bus module sweep,
+OBD-II services 01–0A, UDS 0x10/0x19/0x22/0x2E/0x3E, full-bus module sweep,
 Mode 06, readiness, live data, session comparison, flight recorder.
+
+UDS 0x27 is sent in one form only: a seed request, to learn whether a module
+has security access at all. No key is ever sent, and nothing here unlocks a
+module.
 
 A guided procedure reached its measured state on a real engine for the first
 time on 2026-09-11: `warm_idle` went `waiting` → `holding` → `measured` at 86 °C
