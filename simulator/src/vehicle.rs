@@ -94,6 +94,12 @@ pub struct VirtualEcu {
     /// named by address because their function is vehicle-specific and
     /// unverified.
     pub label: String,
+    /// Whether the module implements ReadDataByIdentifier at all. One that
+    /// does refuses an identifier it does not hold with requestOutOfRange;
+    /// one that does not refuses the service. Measured on a 2023 Honda
+    /// Odyssey (2026-10-04): all thirteen modules answered `7F 22 31` to
+    /// every standard identification identifier.
+    pub reads_identifiers: bool,
     /// Service 09 PID 0A "ECU name", exactly 20 ASCII characters.
     pub ecu_name: Option<String>,
     /// Service 09 PID 04 calibration identifiers, 16 ASCII characters each.
@@ -261,6 +267,7 @@ impl VirtualVehicle {
             uds_faults: Some(Vec::new()),
             config_records: BTreeMap::new(),
             config_write: ConfigWriteBehaviour::Accept,
+            reads_identifiers: false,
             no_frame_as_zero_code: false,
         };
         // Two further modules answer the standard broadcast. Their function is
@@ -281,6 +288,7 @@ impl VirtualVehicle {
             uds_faults: Some(Vec::new()),
             config_records: BTreeMap::new(),
             config_write: ConfigWriteBehaviour::Accept,
+            reads_identifiers: false,
             no_frame_as_zero_code: false,
         };
         let third = VirtualEcu {
@@ -297,6 +305,7 @@ impl VirtualVehicle {
             uds_faults: None,
             config_records: BTreeMap::new(),
             config_write: ConfigWriteBehaviour::Accept,
+            reads_identifiers: false,
             no_frame_as_zero_code: false,
         };
 
@@ -342,6 +351,7 @@ impl VirtualVehicle {
             ]),
             config_records: BTreeMap::new(),
             config_write: ConfigWriteBehaviour::Accept,
+            reads_identifiers: false,
             no_frame_as_zero_code: false,
         };
         let body = VirtualEcu {
@@ -378,6 +388,7 @@ impl VirtualVehicle {
                 (0xF195u16, b"1.2.3".to_vec()),
             ]),
             config_write: ConfigWriteBehaviour::Accept,
+            reads_identifiers: false,
             no_frame_as_zero_code: false,
         };
 
@@ -407,6 +418,7 @@ impl VirtualVehicle {
                         (0xF188u16, pad_nul(b"JC3T-14C064-AA", 24)),
                     ]),
                     config_write: ConfigWriteBehaviour::Accept,
+                    reads_identifiers: false,
                     no_frame_as_zero_code: false,
                 },
                 // Module at 74E - Seat module
@@ -425,6 +437,7 @@ impl VirtualVehicle {
                     // A part number whose base this build does not know.
                     config_records: BTreeMap::from([(0xF113u16, pad_nul(b"HC3T-19H423-DU", 24))]),
                     config_write: ConfigWriteBehaviour::Accept,
+                    reads_identifiers: false,
                     no_frame_as_zero_code: false,
                 },
             ],
@@ -451,8 +464,10 @@ impl VirtualVehicle {
             response_id: 0x10,
             label: String::from("Engine control module"),
             ecu_name: Some(pad_ascii("ECM-EngineControl", 20)),
-            calibration_ids: vec![pad_ascii("37805-5MR-A120", 16)],
-            cvns: vec![0x0BAD_F00D],
+            // The identification and verification number a 2023 Odyssey's
+            // engine controller reported on 2026-10-04.
+            calibration_ids: vec![pad_ascii("37805-5MR-C120", 16)],
+            cvns: vec![0x16B6_A354],
             supported_service01: vec![
                 0x01, 0x03, 0x04, 0x05, 0x06, 0x07, 0x0B, 0x0C, 0x0D, 0x0F, 0x10, 0x11, 0x1C, 0x1F,
                 0x20, 0x21, 0x2F, 0x30, 0x31, 0x33, 0x40, 0x42, 0x45, 0x46, 0x49, 0x51,
@@ -466,6 +481,7 @@ impl VirtualVehicle {
             uds_faults: Some(Vec::new()),
             config_records: BTreeMap::new(),
             config_write: ConfigWriteBehaviour::Refuse,
+            reads_identifiers: true,
             // The Ford's engine stays silent; this one answers the other way
             // J1979 allows, so both are exercised.
             no_frame_as_zero_code: true,
@@ -474,16 +490,18 @@ impl VirtualVehicle {
             response_id: 0x1E,
             label: String::from("Transmission control module"),
             ecu_name: Some(pad_ascii("TCM-TransmisCtrl", 20)),
-            calibration_ids: Vec::new(),
-            cvns: Vec::new(),
+            // As its transmission controller reported them the same day.
+            calibration_ids: vec![pad_ascii("28102-5MX-A200", 16)],
+            cvns: vec![0x550C_681C],
             supported_service01: vec![0x01, 0x0D],
-            supported_service09: vec![0x0A],
+            supported_service09: vec![0x04, 0x06, 0x0A],
             reports_dtcs: true,
             runs_monitors: false,
             reports_vin: false,
             uds_faults: Some(Vec::new()),
             config_records: BTreeMap::new(),
             config_write: ConfigWriteBehaviour::Refuse,
+            reads_identifiers: true,
             no_frame_as_zero_code: false,
         };
         VirtualVehicle {
@@ -523,6 +541,7 @@ impl VirtualVehicle {
             uds_faults: None,
             config_records: BTreeMap::new(),
             config_write: ConfigWriteBehaviour::Refuse,
+            reads_identifiers: false,
             no_frame_as_zero_code: true,
         };
         let transmission = VirtualEcu {
@@ -539,6 +558,7 @@ impl VirtualVehicle {
             uds_faults: None,
             config_records: BTreeMap::new(),
             config_write: ConfigWriteBehaviour::Refuse,
+            reads_identifiers: false,
             no_frame_as_zero_code: false,
         };
         VirtualVehicle {
@@ -895,7 +915,9 @@ impl VirtualVehicle {
                         v.extend_from_slice(record);
                         Some(v)
                     }
-                    None if ecu.config_records.is_empty() => Some(vec![0x7F, 0x22, 0x11]),
+                    None if ecu.config_records.is_empty() && !ecu.reads_identifiers => {
+                        Some(vec![0x7F, 0x22, 0x11])
+                    }
                     // The module does configuration, but not this identifier.
                     None => Some(vec![0x7F, 0x22, 0x31]),
                 }

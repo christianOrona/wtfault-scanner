@@ -273,6 +273,7 @@ fn start_core(app: &mut tauri::App) -> tauri::Result<()> {
         profiles_dir: profiles,
         replay: None,
         simulated_vehicle: Default::default(),
+        calibrations_dir: data.as_ref().map(|dir| dir.join("calibrations")),
         // A desktop has a Downloads folder. A phone has the share sheet.
         #[cfg(target_os = "android")]
         handoff: android_share::handoff(app.handle()),

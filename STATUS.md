@@ -218,6 +218,12 @@ removed, not yet against the 2012 truck.
   finished by a later export. Measured on a copy of the development database:
   78 sessions and 177,235 events came across identical, and a second import of
   the same file added nothing. No file from a real phone has been imported.
+- **Which software a module runs, and whether a file is that software.** A
+  module's calibration identification and verification number are read with
+  their evidence, every identifier it refuses is kept as a refusal, and a
+  calibration file on the computer is judged against them: exact only when the
+  module's own identification equals one declared for the file. Nothing is
+  downloaded and nothing is written. Run against the simulated Odyssey only.
 - **Sessions replay without the vehicle.** A recorded session exports as a
   transcript with the VIN anonymised, and CI replays recorded sessions and fails
   when a replay discovers less than the original did.
@@ -320,6 +326,11 @@ Honest gaps, in the order they matter.
   On them the full scan reaches the emissions modules only, self-test results
   (whose pre-CAN layout differs) are not decoded, and nothing that needs UDS
   is offered.
+- **A calibration file has to be supplied.** No source of manufacturers'
+  files is built in, so for nearly every module the answer is that none was
+  found. A Honda `.rwd` is hashed and matched on what is declared about it and
+  is not opened. On the 2023 Odyssey only the engine and transmission say what
+  they run; its other eleven modules refuse every standard identifier.
 - **No manufacturer-specific decoding.** Everything is the public standard,
   which is why it works across brands and also why a module can answer with a
   code nobody has a description for.
@@ -371,4 +382,8 @@ Honest gaps, in the order they matter.
 Not gaps. Decisions, and no amount of evidence changes them.
 
 Anything in the braking, steering or throttle path. Immobilisers and keys.
-Firmware. Anything that defeats an emissions control. See `docs/SAFETY.md`.
+Writing firmware: programming, flashing or modifying a calibration. Anything
+that defeats an emissions control. See `docs/SAFETY.md`.
+
+Reading which software a module runs is not writing it, and is built; see
+`docs/CALIBRATION.md`.

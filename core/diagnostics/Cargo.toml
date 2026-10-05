@@ -7,6 +7,7 @@ license.workspace = true
 
 [dependencies]
 aim-adapter = { version = "0.6.0", path = "../adapter", default-features = false }
+aim-calibration = { version = "0.6.0", path = "../calibration" }
 aim-decoders = { version = "0.6.0", path = "../decoders" }
 aim-protocols = { version = "0.6.0", path = "../protocols" }
 aim-safety = { version = "0.6.0", path = "../safety" }

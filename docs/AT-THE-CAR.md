@@ -75,6 +75,27 @@ nothing is the bug to report, even if nothing crashed.
 Bring back the transcript, and a note of anything that was empty without
 saying why.
 
+## 3a. Back on the Odyssey: what was fixed after its first scan
+
+The first scan (2026-10-04) found five things; the fixes have only met the
+simulator. With the OBDLink MX+, engine running:
+
+1. Connect, *Rescan*, *Full scan*. Stay or leave the tab as you like: the
+   result should still be there. The scan should take about a minute less
+   than the 2 min 16 s it took, and the *second bus* note should say nothing
+   acknowledged the requests.
+2. In the full scan, the module at `18DAF128` should no longer be marked as
+   cut off.
+3. *Inspect*: the readiness card should fill in by itself after the scan.
+4. *Live data*, Advanced: pick `coolant_temp_sensor_1`, `odometer`,
+   `intake_air_temp_sensor_1`, `maf_sensor_a`. The odometer was 27,224 on the
+   dash that day. Note the unit the dash uses: the reading is in kilometres.
+5. *Inspect* → *Software on this module*; steps in
+   [CALIBRATION.md](CALIBRATION.md).
+
+Bring back the four readings, the scan time, and anything empty without a
+reason.
+
 ## 4. The phone as the scanner (#64)
 
 1. Install the `.apk` from the latest release.

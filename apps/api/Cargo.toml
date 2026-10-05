@@ -26,6 +26,7 @@ aim-session = { version = "0.6.0", path = "../../core/session" }
 aim-simulator = { version = "0.6.0", path = "../../simulator" }
 aim-tools = { version = "0.6.0", path = "../../core/tools", default-features = false }
 aim-transport = { version = "0.6.0", path = "../../core/transport", default-features = false }
+aim-calibration = { version = "0.6.0", path = "../../core/calibration" }
 aim-types = { version = "0.6.0", path = "../../core/types" }
 axum = { version = "0.8.7", features = ["ws"] }
 clap = { version = "4.5.53", features = ["derive"] }

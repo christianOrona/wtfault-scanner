@@ -218,6 +218,18 @@ impl ToolRegistry {
                 module_arg(true),
             ),
             ToolSchema::new(
+                "read_calibration_identity",
+                capabilities::MODULE_IDENTITY,
+                PermissionLevel::L0,
+                "Read everything one module will say about the software it runs: calibration \
+                 identification, calibration verification number, and the standard part, \
+                 hardware and software identifiers. Reads only. An identifier the module \
+                 refused is reported as refused, never filled in.",
+                "The identity, each identifier with the request it came from, the raw bytes \
+                 and an evidence reference, plus every identifier asked for and not given.",
+                module_arg(true),
+            ),
+            ToolSchema::new(
                 "read_supported_pids",
                 capabilities::READ_SUPPORTED_PIDS,
                 PermissionLevel::L0,
@@ -652,6 +664,9 @@ pub fn execute(
         "scan_modules" => service.scan_modules(initiator),
         "adapter_health" => service.adapter_health(initiator),
         "get_module_identity" => service.get_module_identity(module.unwrap_or_default(), initiator),
+        "read_calibration_identity" => {
+            service.read_calibration_identity(module.unwrap_or_default(), initiator)
+        }
         "read_supported_pids" => service.read_supported_pids(module.unwrap_or_default(), initiator),
         "read_monitor_tests" => service.read_monitor_tests(module.unwrap_or_default(), initiator),
         "scan_all_modules" => service.scan_all_modules(initiator),

@@ -117,7 +117,12 @@ by adjusting an assertion until it passes.
 These are decisions, not gaps, and no evidence changes them:
 
 - Anything in the braking, steering or throttle path.
-- Immobilisers, keys, firmware, programming or flashing.
+- Immobilisers and keys. Writing firmware in any form: programming, flashing,
+  patching or converting a calibration. Reading which software a module runs
+  is in scope and stays read-only; see
+  [docs/CALIBRATION.md](docs/CALIBRATION.md).
+- Fetching manufacturers' calibration files from anywhere the project is not
+  entitled to fetch them from.
 - Anything that defeats an emissions control.
 - Anything that gets past a vehicle's own security: key algorithms, or a way
   around a security gateway.

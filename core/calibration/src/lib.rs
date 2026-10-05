@@ -49,8 +49,15 @@ pub mod source;
 pub mod validate;
 
 pub use artifact::{ArtifactRecord, Basis, Claim, Claims, SourceRef};
+pub use cache::{Cache, Incoming};
 pub use format::ArtifactFormat;
 pub use identity::{CalibrationIdentity, Field, Identified, IdentitySource, Unanswered};
+pub use resolve::{
+    evaluate, resolve, Check, Evaluated, MatchReport, MatchStatus, Outcome, Resolution,
+    SourceReport, Verdict,
+};
+pub use source::{CalibrationSource, Candidate, DirectorySource, SourceInfo};
+pub use validate::{validate, Validation, ValidationStatus};
 
 /// SHA-256 of `bytes`, lowercase hex. The identity of an artifact.
 pub fn sha256_hex(bytes: &[u8]) -> String {

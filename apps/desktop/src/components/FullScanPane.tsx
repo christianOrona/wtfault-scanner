@@ -71,7 +71,8 @@ export function FullScanPane({ connected }: { connected: boolean }) {
           <strong>{easy ? "Check every computer" : "Full vehicle scan"}</strong>
           <div className="faint">
             Asks every control module on the vehicle for its faults, not just the two the
-            emissions rules cover.
+            emissions rules cover. The app does this itself: no AI model is involved and
+            nothing is spent.
           </div>
         </div>
         <div className="row">

@@ -336,8 +336,11 @@ Not a limitation to work around — a design decision:
 - **Nothing in the braking, steering or throttle path.** Refused by risk class,
   permanently, whatever evidence exists. A tool you run in your own driveway on
   a vehicle you then drive on a road should not change how it stops.
-- **Nothing to do with immobilisers, keys or firmware.** Not implemented, and
-  a verified mapping would not change that.
+- **Nothing to do with immobilisers or keys, and no writing of firmware.** Not
+  implemented, and a verified mapping would not change that. The app reads
+  which software a module says it runs and can tell you whether a file is that
+  software ([docs/CALIBRATION.md](docs/CALIBRATION.md)). It never programs or
+  flashes one.
 - **Nothing that defeats an emissions control.** Illegal in most places, and
   refused with a reason rather than silently missing.
 - **No invented repair costs.** Ranges only, always labelled as the model's
@@ -475,6 +478,7 @@ faults in the cars:
 | `CONTRIBUTING.md` | how to help: a recording from your car, a profile, or code |
 | `docs/ARCHITECTURE.md` | crate map and design decisions |
 | `docs/SAFETY.md` | the two ceilings, and what has to be true before a write |
+| `docs/CALIBRATION.md` | which software a module runs, and matching a calibration file to it, read-only |
 | `docs/SECURITY.md` | threat model, credentials, and where your data goes |
 | `docs/CODE_SIGNING.md` | how releases are built and signed, and the privacy policy |
 | `docs/RELEASING.md` | cutting a release: what to bump, in what order, and the traps |

@@ -764,27 +764,28 @@ function openRouterModels(probe: ProbeResult | "running" | undefined): string[] 
 }
 
 /**
- * A link out of the app, with a fallback for when that is not possible.
+ * A link out of the app.
  *
- * A webview is not a browser: `target="_blank"` can silently do nothing, which
- * is exactly how the export button failed earlier in this project. So the click
- * is attempted, and if the window does not open the URL goes to the clipboard
- * instead and the button says so. Either way the person ends up able to reach
- * the page, and neither path lies about which one happened.
+ * A webview is not a browser: `target="_blank"` can silently do nothing. The
+ * first fallback was to copy the address, and that was worse than it sounds:
+ * before copying, the webview asks whether `127.0.0.1` may use the clipboard,
+ * so pressing "The author" produced a permission prompt about a number.
+ *
+ * So the core opens it, in the default browser, which is what a person
+ * pressing a link expects. Where it cannot (a phone, or no browser to start),
+ * the address is shown to be read and typed, and nothing asks for anything.
  */
 function ExternalLink({ href, label }: { href: string | null; label: string }) {
-  const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
+  const [state, setState] = useState<"idle" | "opened" | "failed">("idle");
   if (!href) {
     return <span className="faint">{label}: not set yet</span>;
   }
 
   const click = async (e: React.MouseEvent) => {
     e.preventDefault();
-    const w = window.open(href, "_blank", "noopener,noreferrer");
-    if (w) return;
     try {
-      await navigator.clipboard.writeText(href);
-      setState("copied");
+      await api.openLink(href);
+      setState("opened");
     } catch {
       setState("failed");
     }
@@ -792,7 +793,7 @@ function ExternalLink({ href, label }: { href: string | null; label: string }) {
 
   return (
     <a href={href} onClick={click} className="about-link" title={href}>
-      {state === "copied" ? "Link copied — paste it in your browser" : null}
+      {state === "opened" ? `${label}: opened in your browser` : null}
       {state === "failed" ? `${label}: ${href}` : null}
       {state === "idle" ? `${label} ↗` : null}
     </a>

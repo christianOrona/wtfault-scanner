@@ -203,6 +203,45 @@ const FORD_CONFIGURATION: u16 = 0xDE00;
 /// addresses with; reading one module on its own always allowed this long.
 const FAULT_MEMORY_READ: Duration = Duration::from_millis(2500);
 
+/// How long a module is given to answer one identification identifier.
+const IDENTITY_READ: Duration = Duration::from_millis(1000);
+
+/// The identifiers a module is asked for when its software identity is read,
+/// and what each one is.
+///
+/// These are the identification identifiers ISO 14229-1 itself defines
+/// (Annex C), the same on every manufacturer, read with service 0x22 in the
+/// session the module is already in. Nothing here is a manufacturer's own
+/// identifier: those are not guessed at, and a module that keeps its software
+/// identity somewhere else is reported as not having given one.
+///
+/// `F18C`, the module's serial number, is left out on purpose. It names one
+/// physical unit, nothing is matched on it, and it is not this app's to
+/// collect.
+const SOFTWARE_IDENTITY_DIDS: [(u16, aim_calibration::Field); 13] = {
+    use aim_calibration::Field::*;
+    [
+        (0xF180, BootSoftwareId),
+        (0xF181, SoftwareNumber),
+        (0xF182, ApplicationDataId),
+        (0xF187, PartNumber),
+        (0xF188, SoftwareNumber),
+        (0xF189, SoftwareVersion),
+        (0xF18A, Supplier),
+        (0xF191, HardwareNumber),
+        (0xF192, HardwareNumber),
+        (0xF193, HardwareVersion),
+        (0xF194, SoftwareNumber),
+        (0xF195, SoftwareVersion),
+        (0xF197, ModuleName),
+    ]
+};
+
+/// Bytes as lowercase hex, for keeping beside whatever was read out of them.
+fn hex_of(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 /// How many requests in a row a bus may fail to carry before a sweep of it
 /// stops.
 ///
@@ -1889,6 +1928,292 @@ impl DiagnosticService {
             .find_map(|v| v.value.as_str().map(|s| s.trim().to_string()))
             .filter(|s| !s.is_empty())
             .ok_or_else(|| AimError::no_data("module reported an empty ECU name"))
+    }
+
+    /// Read everything a module will say about the software it runs.
+    ///
+    /// Reads only. The requests are OBD-II service 09 (name, calibration
+    /// identification, calibration verification number) and UDS service 0x22
+    /// for the standard identification identifiers, in whatever session the
+    /// module is already in. No session is opened, no security access is
+    /// asked for, and nothing is written, reset or programmed.
+    ///
+    /// Every identifier comes back with the flight-recorder row it was read
+    /// from and the bytes themselves. Every identifier asked for and not
+    /// given comes back too, with the refusal: "the module would not say" is
+    /// a fact about the vehicle, and an identifier nobody made up.
+    pub fn read_calibration_identity(&mut self, module_key: &str, initiator: &str) -> ToolResult {
+        let t0 = Instant::now();
+        self.record_invocation(
+            "read_calibration_identity",
+            initiator,
+            serde_json::json!({ "module": module_key }),
+        );
+        let outcome = self
+            .authorize(capabilities::MODULE_IDENTITY, initiator, None)
+            .and_then(|_| self.calibration_identity_inner(module_key));
+        self.finish("read_calibration_identity", capabilities::MODULE_IDENTITY, t0, outcome)
+    }
+
+    /// What is established about the vehicle itself, for an identity.
+    ///
+    /// Only what is settled: a field two sources disagree about is left out,
+    /// because a calibration must not be matched against a guess.
+    fn vehicle_facts_into(&self, id: &mut aim_calibration::CalibrationIdentity) {
+        use aim_calibration::{Field, Identified, IdentitySource};
+        let vehicle = self.identity();
+        let source_of = |evidence: &[crate::identity::Evidence]| {
+            if evidence.iter().any(|e| e.source != crate::identity::EvidenceSource::Vpic) {
+                IdentitySource::VinStructure
+            } else {
+                IdentitySource::Lookup { name: String::from("NHTSA vPIC") }
+            }
+        };
+        for (name, field) in [
+            ("vin", Field::Vin),
+            ("make", Field::Make),
+            ("model", Field::Model),
+            ("model_year", Field::ModelYear),
+        ] {
+            let Some(found) = vehicle.fields.iter().find(|f| f.field == name) else { continue };
+            if let [only] = found.candidates.as_slice() {
+                id.record(
+                    field,
+                    Identified {
+                        value: only.value.clone(),
+                        source: source_of(&only.evidence),
+                        evidence_ref: None,
+                        raw_hex: None,
+                    },
+                );
+            }
+        }
+        for observed in &vehicle.observations {
+            if observed.about == "engine"
+                && observed.source == crate::identity::EvidenceSource::Vpic
+            {
+                id.record(
+                    Field::Engine,
+                    Identified {
+                        value: observed.value.clone(),
+                        source: IdentitySource::Lookup { name: String::from("NHTSA vPIC") },
+                        evidence_ref: None,
+                        raw_hex: None,
+                    },
+                );
+            }
+        }
+    }
+
+    fn calibration_identity_inner(&mut self, module_key: &str) -> AimResult<Payload> {
+        use aim_calibration::{CalibrationIdentity, Field, Identified, IdentitySource, Unanswered};
+
+        self.require_usable()?;
+        let mut module = self.module_by_key(module_key)?;
+        let mut id = CalibrationIdentity::for_module(&module.module_key, &module.address);
+        id.protocol = Some(self.adapter.protocol().label().to_string());
+        self.vehicle_facts_into(&mut id);
+
+        // ---- the legislated identification, service 09 ----------------------
+        for (info_type, field) in [
+            (0x0Au8, Field::ModuleName),
+            (0x04, Field::CalibrationId),
+            (0x06, Field::CalibrationVerificationNumber),
+        ] {
+            let source = IdentitySource::ObdInfoType { info_type };
+            let request = ObdRequest::vehicle_info(info_type);
+            match self.request_module(&module, &request) {
+                Ok((message, evidence)) => {
+                    let raw = hex_of(&message.payload);
+                    let decoded = Self::payload_of(&message, &request)
+                        .and_then(|p| self.decoders.pids.decode(0x09, info_type, &p, now()));
+                    match decoded {
+                        Ok(values) => {
+                            let before = id.values(field).len();
+                            for v in values {
+                                let text = match &v.value {
+                                    Value::Text(s) => s.trim().to_string(),
+                                    Value::Raw(s) => s.clone(),
+                                    _ => continue,
+                                };
+                                id.record(
+                                    field,
+                                    Identified {
+                                        value: text,
+                                        source: source.clone(),
+                                        evidence_ref: evidence,
+                                        raw_hex: Some(raw.clone()),
+                                    },
+                                );
+                            }
+                            if id.values(field).len() == before {
+                                id.unanswered.push(Unanswered {
+                                    field: Some(field),
+                                    source,
+                                    reason: String::from("the module answered with nothing in it"),
+                                    evidence_ref: evidence,
+                                    raw_hex: Some(raw),
+                                });
+                            }
+                        }
+                        // Kept whole. A reply that cannot be read is not
+                        // turned into a value.
+                        Err(e) => id.unanswered.push(Unanswered {
+                            field: Some(field),
+                            source,
+                            reason: format!("the reply could not be read: {}", e.message),
+                            evidence_ref: evidence,
+                            raw_hex: Some(raw),
+                        }),
+                    }
+                }
+                Err(e) => id.unanswered.push(Unanswered {
+                    field: Some(field),
+                    source,
+                    reason: if e.code == ErrorCode::NoData {
+                        String::from("the module did not answer")
+                    } else {
+                        e.message.clone()
+                    },
+                    evidence_ref: self.recorder.last_response_event(),
+                    raw_hex: None,
+                }),
+            }
+        }
+
+        // ---- the standard identification identifiers, service 0x22 ----------
+        if let Ok(target) = Self::request_target(&module) {
+            let home = match &target {
+                RequestTarget::Physical(a) => self.reach_module(a),
+                RequestTarget::Functional => None,
+            };
+            // Why the rest were not asked, once there is a reason not to.
+            let mut not_asking: Option<&'static str> = None;
+            for (did, field) in SOFTWARE_IDENTITY_DIDS {
+                let source = IdentitySource::UdsDid { did };
+                if let Some(why) = not_asking {
+                    id.unanswered.push(Unanswered {
+                        field: Some(field),
+                        source,
+                        reason: format!("not asked: {why}"),
+                        evidence_ref: None,
+                        raw_hex: None,
+                    });
+                    continue;
+                }
+                let request = aim_protocols::UdsRequest::read_data_by_identifier(did).to_bytes();
+                let replies = self.adapter.request_pdu(&request, &target, IDENTITY_READ);
+                let evidence = self.recorder.last_response_event();
+                let reply =
+                    replies.ok().and_then(|r| r.into_iter().find(|m| m.address == module.address));
+                let Some(reply) = reply else {
+                    id.unanswered.push(Unanswered {
+                        field: Some(field),
+                        source,
+                        reason: String::from("the module did not answer"),
+                        evidence_ref: evidence,
+                        raw_hex: None,
+                    });
+                    not_asking = Some("the module did not answer the identifier before it");
+                    continue;
+                };
+                let raw = hex_of(&reply.payload);
+                let p = &reply.payload;
+                let reason = if p.len() >= 3
+                    && p[0] == 0x62
+                    && u16::from_be_bytes([p[1], p[2]]) == did
+                {
+                    match aim_protocols::identification_text(&p[3..]) {
+                        Some(text) => {
+                            id.record(
+                                field,
+                                Identified {
+                                    value: text,
+                                    source: source.clone(),
+                                    evidence_ref: evidence,
+                                    raw_hex: Some(raw.clone()),
+                                },
+                            );
+                            continue;
+                        }
+                        None => String::from("the module answered with bytes that are not text"),
+                    }
+                } else if p.len() >= 3 && p[0] == 0x7F && p[1] == 0x22 {
+                    if p[2] == 0x11 {
+                        not_asking = Some("the module does not support reading identifiers");
+                    }
+                    format!(
+                        "the module refused: {}",
+                        aim_protocols::NegativeResponseCode::from_byte(p[2]).description()
+                    )
+                } else {
+                    String::from("the module answered with something other than the identifier")
+                };
+                id.unanswered.push(Unanswered {
+                    field: Some(field),
+                    source,
+                    reason,
+                    evidence_ref: evidence,
+                    raw_hex: Some(raw),
+                });
+            }
+            self.restore_bus(home);
+        }
+
+        // ---- kept against the module and the vehicle ------------------------
+        // The calibration identification was read at identification time and
+        // then kept nowhere a module's record could show it. Measured on a
+        // 2023 Honda Odyssey (2026-10-04): both modules reported one, and both
+        // were stored with an empty list.
+        let calibrations: Vec<String> =
+            id.values(Field::CalibrationId).into_iter().map(String::from).collect();
+        let cvns: Vec<String> =
+            id.values(Field::CalibrationVerificationNumber).into_iter().map(String::from).collect();
+        if !calibrations.is_empty() {
+            module.identity.calibration_ids = calibrations.clone();
+        }
+        if !cvns.is_empty() {
+            module.identity.calibration_verification_numbers = cvns.clone();
+        }
+        if let Some(found) = id.fields.get(&Field::ModuleName).and_then(|v| {
+            v.iter().find(|i| i.source == IdentitySource::ObdInfoType { info_type: 0x0A })
+        }) {
+            module.identity.ecu_name = Some(found.value.clone());
+        }
+        self.store.upsert_module(&module)?;
+
+        if !calibrations.is_empty() {
+            let checksum = if cvns.is_empty() {
+                String::new()
+            } else {
+                format!(", verification number {}", cvns.join(", "))
+            };
+            self.learned(
+                &format!("module.{module_key}.calibration"),
+                aim_session::FindingOutcome::Observed,
+                format!("{module_key} reports calibration {}{checksum}.", calibrations.join(", ")),
+                "Read from OBD-II service 09, information types 04 and 06.",
+            );
+        }
+
+        let mut warnings = Vec::new();
+        if !id.names_its_software() {
+            warnings.push(Warning::info(
+                "software_identity_not_reported",
+                "This module did not report anything that identifies its software: no \
+                 calibration identification, and none of the standard identification \
+                 identifiers. That is common outside the engine and transmission, and it means \
+                 no calibration file can be matched to it.",
+            ));
+        }
+
+        Ok(Payload {
+            data: Some(serde_json::json!({ "identity": id })),
+            warnings,
+            evidence: self.recorder.last_response_event(),
+            module: Some(module_key.to_string()),
+            ..Default::default()
+        })
     }
 
     /// Read a module's identity: ECU name, calibration ids, CVNs.

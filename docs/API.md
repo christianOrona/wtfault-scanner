@@ -2587,6 +2587,20 @@ Opens the log folder in the desktop's file manager. A `POST` because it starts a
 program; it takes no path, since the folder is this process's own.
 → `{ "opened": "C:/Users/you/AppData/Roaming/ai-mechanic/logs" }`
 
+#### `POST /support/open`
+
+Open one of the app's own links in the default browser: the project's pages on
+GitHub or the author's profile, and nothing else.
+
+```json
+{ "url": "https://github.com/christianOrona/wtfault-scanner/issues" }
+```
+
+→ `{ "opened": "https://github.com/christianOrona/wtfault-scanner/issues" }`
+
+`400` for any other address. The page inside the app is a webview, where a
+link that should open a new window opens nothing.
+
 #### `POST /export`
 
 Write a file the user asked to keep into their Downloads folder.
@@ -2703,6 +2717,102 @@ session is far past what `POST /export` accepts as a body.
 ```
 
 → the same answer as `POST /export`. `redact` is on unless set to `false`.
+
+---
+
+### Calibration identity and files
+
+Which software a module runs, and whether a file on this computer is that
+software. Read-only throughout; `docs/CALIBRATION.md` has the rules.
+
+#### `GET /modules/{key}/calibration`
+
+A **tool endpoint**: it reads the vehicle. Only reads are sent: OBD-II service
+09 (types 0A, 04, 06) and UDS `0x22` for the standard identification
+identifiers, in the session the module is already in.
+
+```jsonc
+{
+  "tool": "read_calibration_identity", "success": true, "module": "ECU_18DAF110",
+  "data": { "identity": {
+    "module_key": "ECU_18DAF110", "address": "18DAF110",
+    "protocol": "ISO 15765-4 CAN 29/500",
+    "fields": {
+      "calibration_id": [{
+        "value": "37805-5MR-C120",
+        "source": { "kind": "obd_info_type", "info_type": 4 },
+        "evidence_ref": 52,
+        "raw_hex": "490401" /* ...the bytes it was read from */
+      }],
+      "calibration_verification_number": [ /* ... */ ],
+      "module_name": [ /* ... */ ], "vin": [ /* ... */ ], "make": [ /* ... */ ]
+    },
+    "unanswered": [{
+      "field": "hardware_number",
+      "source": { "kind": "uds_did", "did": 61841 },
+      "reason": "the module refused: requestOutOfRange",
+      "evidence_ref": 1034, "raw_hex": "7f2231"
+    }]
+  } }
+}
+```
+
+`fields` holds only what was read; every key is optional and a field may hold
+several values. `unanswered` holds every identifier asked for and not given,
+with the reply's bytes when there was one. Nothing is filled in. `source.kind`
+is `obd_info_type`, `uds_did`, `vin_structure` or `lookup`.
+
+A module that reports nothing identifying its software succeeds, with a
+`software_identity_not_reported` warning.
+
+#### `GET /calibration`
+
+Where calibration files are looked for and which have been kept. Reads this
+computer's disk only.
+
+→ `{ "folder": "…/calibrations/files", "sources": [ … ], "kept": [ … ], "formats": ["rwd","bin","gz","hex","s19"], "uses_network": false, "writes_to_vehicle": false }`
+
+Each source has `id`, `name`, `location`, `uses_network` and `enabled`. No
+source uses a network.
+
+#### `POST /calibration/find`
+
+Judge the files in the calibration folder, and the kept ones, against an
+identity. **Does not touch the vehicle**, so an identity read earlier works.
+
+```json
+{ "identity": { "module_key": "ECU_18DAF110", "address": "18DAF110", "protocol": null, "fields": {}, "unanswered": [] } }
+```
+
+```jsonc
+{
+  "module": "ECU_18DAF110",
+  "folder": "…/calibrations/files",
+  "resolution": {
+    "outcome": "ARTIFACT_FOUND",            // or NO_ARTIFACT_FOUND
+    "matches": [{
+      "artifact": { "sha256": "…", "size": 38, "format": "bin", "filename": "pcm.bin", "sources": [ … ], "claims": { … } },
+      "matching": {
+        "status": "EXACT_MATCH",            // PARTIAL_MATCH | NO_MATCH | UNKNOWN
+        "reason": "The module reports the calibration identification this file is declared to be…",
+        "checks": [{ "field": "calibration_id", "verdict": "confirmed",
+                     "reported": ["37805-5MR-C120"], "claimed": [["37805-5MR-C120", "declared"]], "note": "…" }]
+      },
+      "validation": { "status": "VALID", "sha256": "…", "checks": [ … ] },
+      "cached": true
+    }],
+    "set_aside": [ /* looked at and not this module's */ ],
+    "sources": [{ "source": { … }, "searched": true, "offered": 2, "error": null }]
+  }
+}
+```
+
+`NO_ARTIFACT_FOUND` is a `200`: for most modules it is the true answer. A
+check's `verdict` is `confirmed`, `conflict`, `name_agrees`, `name_differs` or
+`unknown`; a claim's basis is `declared` or `filename`. `EXACT_MATCH` requires
+`calibration_id` to be `confirmed` and no `conflict` anywhere. A validation
+status is `VALID`, `INVALID`, `PARTIALLY_VALIDATED` or `UNKNOWN`, and is about
+the file, not about whether it fits the module.
 
 ---
 

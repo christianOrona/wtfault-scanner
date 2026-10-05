@@ -127,6 +127,79 @@ export interface Exported {
   shared: boolean;
 }
 
+/** How one identifier was obtained. */
+export interface IdentitySource {
+  kind: "obd_info_type" | "uds_did" | "vin_structure" | "lookup";
+  info_type?: number;
+  did?: number;
+  name?: string;
+}
+
+/** What a module said about the software it runs. Each identifier keeps the
+ *  request it came from, the raw bytes and an evidence reference. */
+export interface CalibrationIdentity {
+  module_key: string;
+  address: string;
+  protocol: string | null;
+  fields: Record<
+    string,
+    { value: string; source: IdentitySource; evidence_ref: number | null; raw_hex: string | null }[]
+  >;
+  /** Asked for and not given, with the refusal. */
+  unanswered: {
+    field: string | null;
+    source: IdentitySource;
+    reason: string;
+    evidence_ref: number | null;
+    raw_hex: string | null;
+  }[];
+}
+
+/** A calibration file judged two ways: against the module, and as a file. */
+export interface Evaluated {
+  artifact: {
+    sha256: string;
+    size: number;
+    format: string;
+    filename: string;
+    sources: { source: string; reference: string; found_at: string }[];
+  };
+  matching: {
+    status: "EXACT_MATCH" | "PARTIAL_MATCH" | "NO_MATCH" | "UNKNOWN";
+    reason: string;
+    checks: {
+      field: string;
+      verdict: "confirmed" | "conflict" | "name_agrees" | "name_differs" | "unknown";
+      reported: string[];
+      claimed: [string, "declared" | "filename"][];
+      note: string;
+    }[];
+  };
+  validation: {
+    status: "VALID" | "INVALID" | "PARTIALLY_VALIDATED" | "UNKNOWN";
+    sha256: string | null;
+    checks: { what: string; passed: boolean | null; detail: string }[];
+  };
+  cached: boolean;
+}
+
+/** The result of looking for a module's calibration on this computer. */
+export interface CalibrationFound {
+  module: string;
+  folder: string;
+  resolution: {
+    outcome: "ARTIFACT_FOUND" | "NO_ARTIFACT_FOUND";
+    matches: Evaluated[];
+    set_aside: Evaluated[];
+    sources: {
+      source: { id: string; name: string; location: string; uses_network: boolean; enabled: boolean };
+      searched: boolean;
+      offered: number;
+      error: string | null;
+    }[];
+  };
+}
+
 /** What importing another install's database added, or would add. */
 export interface ImportSummary {
   /** False for a preview: nothing was kept. */
@@ -182,9 +255,19 @@ export const api = {
   contribution: () => request<Contribution>("/vehicles/contribution"),
   /** Open the log folder in the desktop's own file manager. */
   supportReveal: () => post<{ opened: string }>("/support/reveal", {}),
+  /** Open one of the app's own links in the default browser. The core
+   *  refuses anything that is not one. */
+  openLink: (url: string) => post<{ opened: string }>("/support/open", { url }),
   exportFile: (body: { filename: string; content: string }) => post<Exported>("/export", body),
   /** A copy of everything this install has recorded, as one database file. */
   exportDatabase: (filename: string) => post<Exported>("/export/database", { filename }),
+  /** Ask a module which software it runs. Reads the vehicle, and only reads. */
+  calibrationIdentity: (key: string) =>
+    request<ToolResult<{ identity: CalibrationIdentity }>>(`/modules/${enc(key)}/calibration`),
+  /** Look on this computer for a file that is that software. Does not touch
+   *  the vehicle and fetches nothing. Finding none is an answer. */
+  findCalibration: (identity: CalibrationIdentity) =>
+    post<CalibrationFound>("/calibration/find", { identity }),
   /** Merge a database exported by another install into this one. With
    *  `dryRun` the answer is what would be added and nothing is kept. */
   importDatabase: (file: Blob, dryRun: boolean) =>

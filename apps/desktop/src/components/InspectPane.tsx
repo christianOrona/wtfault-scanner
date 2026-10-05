@@ -19,6 +19,7 @@ import { ErrorBanner, Spinner } from "./primitives";
 import { useAgentProgress, type ProgressLine } from "../hooks/useAgentProgress";
 import { reportToText } from "./reportText";
 import { saveFile, scanFilename, whereSaved } from "./exportFile";
+import { CalibrationCard } from "./CalibrationCard";
 import { ModuleProbeCard } from "./ModuleProbeCard";
 import { MonitorTestsCard } from "./MonitorTestsCard";
 import { ReadinessCard } from "./ReadinessCard";
@@ -178,11 +179,16 @@ export function InspectPane({
       <PaneIntro kind="concept" id="inspection" />
       <div className="row" style={{ justifyContent: "space-between", marginBottom: 14 }}>
         <div>
-          <strong>Full inspection</strong>
+          {/* This was "Full inspection", two tabs along from "Full vehicle
+              scan", and nothing said which one spends AI requests. They are
+              different things: the scan is the app reading the car, this is a
+              model reading it and writing about it. */}
+          <strong>AI inspection</strong>
           <div className="faint">
-            The assistant decides which tests to run, reads the vehicle, and explains what it
-            found. Set whether this is your vehicle or one you are considering in Settings -
-            it changes what the report is written for.
+            Your AI model reads the vehicle and writes up what it found in plain words. It
+            spends AI requests, usually 10 to 30. You do not need it to see faults: the Full
+            scan tab reads every computer with no AI at all. Set whether this is your vehicle
+            or one you are considering in Settings - it changes what the report is written for.
           </div>
         </div>
         <div className="row">
@@ -285,6 +291,7 @@ function QuickChecks({
     <>
       <ReadinessCard moduleKey={moduleKey} onEvidence={onEvidence} />
       <MonitorTestsCard moduleKey={moduleKey} onEvidence={onEvidence} />
+      <CalibrationCard moduleKey={moduleKey} onEvidence={onEvidence} />
       <ModuleProbeCard moduleKey={moduleKey} />
     </>
   );

@@ -47,6 +47,7 @@ version = "0.6.0"
 dependencies = [
  "aim-adapter",
  "aim-agent",
+ "aim-calibration",
  "aim-decoders",
  "aim-diagnostics",
  "aim-protocols",
@@ -102,6 +103,7 @@ name = "aim-diagnostics"
 version = "0.6.0"
 dependencies = [
  "aim-adapter",
+ "aim-calibration",
  "aim-decoders",
  "aim-protocols",
  "aim-safety",

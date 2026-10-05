@@ -77,6 +77,12 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/modules/{key}/signals", get(module_signals))
         .route("/api/v1/modules/{key}/monitor-tests", get(module_monitor_tests))
         .route("/api/v1/modules/{key}/capabilities", get(module_capabilities))
+        .route(
+            "/api/v1/modules/{key}/calibration",
+            get(crate::calibration_routes::module_calibration),
+        )
+        .route("/api/v1/calibration", get(crate::calibration_routes::calibration_status))
+        .route("/api/v1/calibration/find", post(crate::calibration_routes::find_calibration))
         .route("/api/v1/modules/{key}/read", post(module_read))
         .route("/api/v1/dtcs/clear", post(clear_dtcs))
         .route("/api/v1/readiness", get(readiness))
@@ -98,6 +104,7 @@ pub fn router(state: AppState) -> Router {
         // ---- reporting a problem ----
         .route("/api/v1/support/report", get(support_report))
         .route("/api/v1/support/reveal", post(support_reveal))
+        .route("/api/v1/support/open", post(support_open))
         .route("/api/v1/support/send", post(support_send))
         .route("/api/v1/modules/{key}/freeze-frame", get(freeze_frame))
         .route("/api/v1/modules/{key}/tests/{test_id}/run", post(run_module_test))
@@ -1782,6 +1789,23 @@ async fn support_send(Json(body): Json<SupportSendBody>) -> Json<Value> {
 async fn support_reveal() -> ApiResult<Json<Value>> {
     match crate::support::reveal_logs() {
         Ok(dir) => Ok(Json(serde_json::json!({ "opened": dir }))),
+        Err(e) => Err(ApiError::bad_request(e)),
+    }
+}
+
+/// Which of the app's own links to open.
+#[derive(Debug, Deserialize)]
+struct OpenBody {
+    url: String,
+}
+
+/// Open one of the app's own links in the default browser.
+///
+/// Only the project's pages and the author's profile are accepted; see
+/// [`crate::support::is_openable`]. Anything else is a `400`.
+async fn support_open(Json(body): Json<OpenBody>) -> ApiResult<Json<Value>> {
+    match crate::support::open_link(&body.url) {
+        Ok(()) => Ok(Json(serde_json::json!({ "opened": body.url }))),
         Err(e) => Err(ApiError::bad_request(e)),
     }
 }

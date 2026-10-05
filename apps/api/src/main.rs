@@ -165,6 +165,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         simulated_vehicle: aim_api::state::SimulatedVehicle::parse(&args.vehicle).ok_or_else(
             || format!("unknown vehicle {:?}; known: f250, odyssey, toyota", args.vehicle),
         )?,
+        // Beside the database, like everything else a person might look for.
+        calibrations_dir: args
+            .db
+            .as_ref()
+            .and_then(|db| std::path::Path::new(db).parent().map(|d| d.join("calibrations"))),
         handoff: None,
     };
 

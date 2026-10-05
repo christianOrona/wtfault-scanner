@@ -63,6 +63,7 @@ impl Phone {
             profiles_dir: None,
             replay: None,
             simulated_vehicle: Default::default(),
+            calibrations_dir: None,
             handoff: Some(sheet.clone()),
         };
         let app = aim_api::router(AppState::new(store, DecoderSet::generic_obd().unwrap(), config));

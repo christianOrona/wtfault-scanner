@@ -3,6 +3,41 @@
 Notable changes, newest first. Versions follow [semantic versioning](https://semver.org),
 with the caveat that everything below 1.0 is allowed to move.
 
+## [Unreleased]
+
+### Added
+
+- **See which software a module runs.** *Inspect* has a *Software on this
+  module* card: the calibration identification and its checksum, and any part,
+  hardware and software numbers the module will give, each with a link to the
+  reply it was read from. What the module refuses to say is listed as refused.
+- **Check whether a file is that software.** *Find calibration file* looks in
+  a folder on your computer and says whether a file there is the module's
+  calibration: exact, partial, not, or cannot tell, with every comparison
+  shown. A file's name alone is never enough for exact. The app downloads no
+  calibration files and never writes one to a vehicle;
+  `docs/CALIBRATION.md` has the whole of it.
+- **Coolant temperature, intake air temperature, air flow and the odometer on
+  newer cars.** Some engines, a 2023 Honda Odyssey among them, report these
+  only on newer PIDs. They are read now, marked unverified until checked
+  against a car.
+
+### Fixed
+
+- **A scan no longer spends a minute on a bus the car does not have.** On a
+  vehicle with nothing on the second bus, every request there went
+  unacknowledged and the scan asked all 255 addresses anyway. It stops after
+  three.
+- **The Full scan screen keeps its result when you look at another tab.** It
+  used to forget the scan was running and offer to start another.
+- **A module with a long fault list is given time to send it.** The full scan
+  cut one off at about a second.
+- **The readiness card no longer blames the car for being asked too early.**
+- **Links in the About box open your browser.** They used to ask for
+  clipboard permission and copy the address.
+- **The AI inspection says that it spends AI requests,** and the full scan
+  says that it does not. They were both called "Full".
+
 ## [0.6.0] — 2026-10-04
 
 The scanner now runs on an Android phone, so the thing that goes to the car

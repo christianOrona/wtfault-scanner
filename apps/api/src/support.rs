@@ -511,9 +511,83 @@ pub fn reveal_logs() -> Result<String, String> {
     Ok(dir.display().to_string())
 }
 
+/// The only places this app will open a browser at: its own project pages and
+/// its author's profile. A link in the About box, nothing else.
+const OPENABLE: [&str; 2] =
+    ["https://github.com/christianOrona/wtfault-scanner", "https://www.linkedin.com/in/"];
+
+/// Whether `url` is one of the app's own links, written plainly.
+///
+/// The check is a prefix and an alphabet. The prefix keeps this from being a
+/// way to send a browser anywhere; the alphabet keeps the string from being
+/// anything but an address when it is handed to another program.
+pub fn is_openable(url: &str) -> bool {
+    let plain = url
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~' | b'/' | b':'));
+    let ours = OPENABLE.iter().any(|p| {
+        // The prefix, then nothing or a path under it: not a longer host or
+        // account that merely starts the same way.
+        url.strip_prefix(p)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with('/') || p.ends_with('/'))
+    });
+    plain && ours && url.len() <= 200
+}
+
+/// Open one of the app's own links in the person's default browser.
+///
+/// The page inside the app is a webview, not a browser: a link that should
+/// open a new window opens nothing there. Its fallback was to copy the address,
+/// which first put up a prompt asking whether `127.0.0.1` may use the
+/// clipboard. The core can simply ask the operating system to open the page.
+pub fn open_link(url: &str) -> Result<(), String> {
+    if !is_openable(url) {
+        return Err(String::from("that is not one of this app's own links"));
+    }
+
+    #[cfg(target_os = "windows")]
+    let program = "explorer.exe";
+    #[cfg(target_os = "macos")]
+    let program = "open";
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let program = "xdg-open";
+
+    // Explorer answers 1 for a successful open; only failing to start counts.
+    std::process::Command::new(program)
+        .arg(url)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("cannot open a browser: {e}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_apps_own_links_can_be_opened() {
+        for ok in [
+            "https://github.com/christianOrona/wtfault-scanner",
+            "https://github.com/christianOrona/wtfault-scanner/issues",
+            "https://github.com/christianOrona/wtfault-scanner/releases",
+            "https://www.linkedin.com/in/christian-orona-30957335/",
+        ] {
+            assert!(is_openable(ok), "{ok}");
+        }
+        for no in [
+            "https://example.com/",
+            "http://github.com/christianOrona/wtfault-scanner",
+            "https://github.com/christianOrona/wtfault-scanner-evil",
+            "https://github.com/christianOrona-evil/wtfault-scanner",
+            "https://github.com/christianOrona/wtfault-scanner/issues?q=x&y=\"z\"",
+            "https://github.com/christianOrona/wtfault-scanner/ & calc.exe",
+            "file:///C:/Windows/System32/calc.exe",
+            "",
+        ] {
+            assert!(!is_openable(no), "{no:?} was accepted");
+            assert!(open_link(no).is_err());
+        }
+    }
 
     #[test]
     fn a_tail_returns_the_end_of_a_file_not_the_start() {

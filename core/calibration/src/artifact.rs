@@ -74,6 +74,12 @@ pub struct ArtifactRecord {
     pub declared_sha256: Option<String>,
     /// When it was first kept, RFC 3339.
     pub added_at: String,
+    /// Why the metadata file found beside it could not be used, when one was
+    /// there and could not. Nothing from such a file is taken, and saying so
+    /// is the difference between "nothing was declared" and "what was
+    /// declared could not be read".
+    #[serde(default)]
+    pub metadata_problem: Option<String>,
 }
 
 impl ArtifactRecord {
@@ -109,6 +115,9 @@ impl ArtifactRecord {
         if self.declared_sha256.is_none() {
             self.declared_sha256 = other.declared_sha256.clone();
         }
+        if self.metadata_problem.is_none() {
+            self.metadata_problem = other.metadata_problem.clone();
+        }
     }
 }
 
@@ -130,6 +139,7 @@ mod tests {
             claims: Claims::new(),
             declared_sha256: None,
             added_at: "2026-10-04T00:00:00Z".into(),
+            metadata_problem: None,
         }
     }
 
