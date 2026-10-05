@@ -18,6 +18,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api/client";
+import { savedNote } from "./exportFile";
 import type { SupportReport } from "../api/types";
 
 /** Filename for a saved report. Dated, because the second one matters most. */
@@ -118,7 +119,7 @@ export function ProblemReportPanel({ report }: { report: SupportReport }) {
   const save = useCallback(async () => {
     try {
       const saved = await api.exportFile({ filename: reportFilename(), content: shown.text });
-      setSaid({ kind: "done", message: `Saved to ${saved.path}` });
+      setSaid({ kind: "done", message: savedNote(saved) });
     } catch (e) {
       setSaid({
         kind: "failed",

@@ -2595,7 +2595,7 @@ Write a file the user asked to keep into their Downloads folder.
 { "filename": "inspection-1FT7W2BT6KEC00001.md", "content": "# Inspection\n..." }
 ```
 
-→ `{ "path": "C:/Users/you/Downloads/inspection-1FT7W2BT6KEC00001.md", "directory": "C:/Users/you/Downloads", "filename": "inspection-1FT7W2BT6KEC00001.md" }`
+→ `{ "path": "C:/Users/you/Downloads/inspection-1FT7W2BT6KEC00001.md", "directory": "C:/Users/you/Downloads", "filename": "inspection-1FT7W2BT6KEC00001.md", "bytes": 1840, "shared": false }`
 
 Server-side because a Tauri webview has no download manager: a blob link does
 nothing there, silently, and this can say where the file went. The name is
@@ -2603,6 +2603,106 @@ reduced to a bare filename (letters, digits, `-`, `_`, `.`, space; at most 120
 characters) and the content is capped at 256 KB, so a bug upstream can neither
 write outside Downloads nor fill a disk. Empty content or an unusable name is
 `400`.
+
+**On a phone** there is no Downloads folder an app may write to. The file is
+written to the app's cache and handed to the share sheet, and the answer has
+`"shared": true`. `path` is then inside the app and means nothing to a person:
+say that the file was offered, not that it was saved. The answer comes back
+when the sheet opens; nothing reports what was picked. This holds for all
+three export routes.
+
+#### `POST /export/database`
+
+A copy of the whole session database as one file: every session with its
+timestamps, readings and raw exchanges, and what has been learned about each
+vehicle. It is how a session recorded on a phone gets read somewhere else.
+
+```json
+{ "filename": "wtfault-database-20261004-1530.sqlite" }
+```
+
+→ the same answer as `POST /export`.
+
+The copy is taken with `VACUUM INTO`, so it is consistent while the app keeps
+writing and needs no log file beside it. Bring it into another install with
+`POST /import/database`, or open it by itself with
+`scripts\dev-core.ps1 -Db <file>`. **Nothing in it is withheld, VINs
+included.** Provider API keys are not in this database. An export under a name
+already used replaces that file.
+
+#### `POST /import/database`
+
+Merge a database exported by another install into this one, so that what a
+phone recorded at the car becomes part of what this install knows about that
+vehicle. The body is the file itself, sent as
+`Content-Type: application/octet-stream`, up to 512 MB.
+
+`?dry_run=true` works the merge out in full and keeps none of it. The answer
+is the same either way:
+
+```json
+{
+  "committed": true,
+  "sessions_added": 1,
+  "sessions_extended": 0,
+  "sessions_already_here": 0,
+  "sessions_skipped": [],
+  "vehicles_added": 0,
+  "vehicles": ["1FT7W2BT6KEC00001"],
+  "events_added": 183,
+  "measurements_added": 18,
+  "dtcs_added": 0,
+  "captures_added": 0,
+  "findings_added": 2,
+  "findings_updated": 0,
+  "findings_kept": 0,
+  "vehicle_records_taken": 0
+}
+```
+
+What it promises:
+
+- **A vehicle is its VIN.** Sessions from the file are filed under the vehicle
+  already here, so its modules, its findings and its scorecard count them.
+- **Nothing here is replaced by anything older.** A session already held in
+  full is left alone (`sessions_already_here`). A finding, an as-built file or
+  a VIN lookup is replaced only by one observed later (`findings_updated`);
+  otherwise the one here stays (`findings_kept`).
+- **Importing twice adds nothing the second time.**
+- **A session exported while still open can be finished later.** A later
+  export of the same session adds only the part this database lacks
+  (`sessions_extended`).
+- **The recorded exchanges are copied as they are.** A reference to one by row
+  number, such as a code's freeze frame, is pointed at the same exchange here.
+- **All or nothing.** The merge is one transaction, and it cannot be undone.
+
+A session whose recording here differs from the file's under the same id is
+left out and named in `sessions_skipped`, with the reason.
+
+`400` when the body is not one of this app's databases, when it was written by
+a newer version of the app (update, then import again), and when the content
+type is anything else. That last check is what stops a web page open on the
+same machine from posting a database here: a page on another origin can send
+`text/plain` or a form without asking, and cannot send this type.
+
+#### `GET /sessions/{id}/transcript`
+
+A session's adapter exchanges as replay transcript text (`> command`,
+`< line`), the format the simulator replays and CI holds the core to. The VIN
+is replaced with an anonymous one unless `?redact=false`; if the replacement
+cannot be made completely, the request fails instead of returning the real VIN
+labelled as redacted.
+
+#### `POST /sessions/{id}/transcript`
+
+The same text, written to a file and delivered like any other export. A long
+session is far past what `POST /export` accepts as a body.
+
+```json
+{ "filename": "wtfault-replay-20261004-1530.transcript", "redact": true }
+```
+
+→ the same answer as `POST /export`. `redact` is on unless set to `false`.
 
 ---
 

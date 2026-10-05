@@ -16,6 +16,7 @@
 pub mod agent;
 pub mod agent_routes;
 pub mod error;
+pub mod handoff;
 pub mod routes;
 pub mod state;
 pub mod support;

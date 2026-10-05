@@ -165,6 +165,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         simulated_vehicle: aim_api::state::SimulatedVehicle::parse(&args.vehicle).ok_or_else(
             || format!("unknown vehicle {:?}; known: f250, odyssey, toyota", args.vehicle),
         )?,
+        handoff: None,
     };
 
     tracing::info!(

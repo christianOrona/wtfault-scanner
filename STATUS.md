@@ -207,6 +207,12 @@ removed, not yet against the 2012 truck.
   shared; a Kotlin plugin reaches a paired adapter over Bluetooth Classic and is
   listed and opened like a port. CI builds a debug APK on every push and a
   signed one for every release.
+- **What one device records, another can take in.** A database export from
+  one install merges into another's: sessions are filed under the vehicle by
+  its VIN, the newer finding wins, and a session exported while still open is
+  finished by a later export. Measured on a copy of the development database:
+  78 sessions and 177,235 events came across identical, and a second import of
+  the same file added nothing. No file from a real phone has been imported.
 - **Sessions replay without the vehicle.** A recorded session exports as a
   transcript with the VIN anonymised, and CI replays recorded sessions and fails
   when a replay discovers less than the original did.
@@ -244,7 +250,9 @@ Desk work that is ready to pick up:
 Needs the vehicle or the owner (steps in `docs/AT-THE-CAR.md`):
 - #54 cold-start baseline on the F-250 (`dev-core.ps1 -Db` is ready).
 - #39 a second make end to end (Mazda 3 or Odyssey), then export its replay (#59).
-- #64 the Android build against the paired adapter.
+- #64 the Android build against the paired adapter, then the screen staying
+  on and a database export through the share sheet. A recorded drive waits on
+  all three.
 - #65 one inspection on a real OpenRouter key.
 - #50 host the report endpoint, then build a release with `AIM_REPORT_ENDPOINT`.
 - #62 SignPath approval, then #48's unattended install.
@@ -258,7 +266,11 @@ Honest gaps, in the order they matter.
 - **The Android app has never met a real adapter.** It builds in CI, installs,
   and runs the whole core in the emulator against the virtual vehicle. The
   Bluetooth link to a paired ELM327 is written but unverified until a phone
-  connects to one in the driveway (#64).
+  connects to one in the driveway (#64). The same goes for the two things a
+  drive needs from the phone: the screen staying on while an adapter is
+  connected, and a session leaving through the share sheet. The export itself
+  is tested and has been run on the desktop; its Android half has not run
+  anywhere yet.
 
 - **Both outside sources have been used from a driveway once** (2026-09-28,
   the 2019 F-250). vPIC decoded it as a 6.7 L V8 diesel F-250 and settled the

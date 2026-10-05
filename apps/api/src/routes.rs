@@ -85,6 +85,11 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/procedures/{id}/run", post(run_procedure))
         .route("/api/v1/modules/scan-all", post(scan_all_modules))
         .route("/api/v1/export", post(export_file))
+        .route("/api/v1/export/database", post(export_database))
+        .route(
+            "/api/v1/import/database",
+            post(import_database).layer(axum::extract::DefaultBodyLimit::max(MAX_IMPORT_BYTES)),
+        )
         // ---- updates ----
         .route("/api/v1/update/check", get(update_check))
         .route("/api/v1/update/apply", post(update_apply))
@@ -100,7 +105,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/sessions", get(list_sessions))
         .route("/api/v1/sessions/{id}", get(session_detail))
         .route("/api/v1/sessions/{id}/events", get(session_events))
-        .route("/api/v1/sessions/{id}/transcript", get(session_transcript))
+        .route(
+            "/api/v1/sessions/{id}/transcript",
+            get(session_transcript).post(export_session_transcript),
+        )
         .route("/api/v1/sessions/{id}/modules", get(session_modules))
         .route("/api/v1/sessions/{id}/dtcs", get(session_dtcs))
         .route("/api/v1/sessions/{id}/measurements", get(session_measurements))
@@ -1166,16 +1174,25 @@ async fn session_transcript(
     Path(id): Path<String>,
     Query(q): Query<TranscriptQuery>,
 ) -> Result<axum::response::Response, ApiError> {
-    let id = SessionId::from_string(id);
-    let session = state.store.get_session(&id)?;
+    let text = transcript_text(&state, &SessionId::from_string(id), q.redact)?;
 
-    let mut text = aim_diagnostics::transcript::export_transcript(
-        &state.store,
-        &id,
-        &format!("session {id}"),
-    )?;
+    use axum::body::Body;
+    let response = axum::response::Response::builder()
+        .header(axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8")
+        .body(Body::from(text))
+        .map_err(|e| ApiError::internal(format!("failed to build response: {e}")))?;
 
-    if q.redact {
+    Ok(response)
+}
+
+/// A session's transcript, with the VIN anonymised when `redact` is set.
+fn transcript_text(state: &AppState, id: &SessionId, redact: bool) -> ApiResult<String> {
+    let session = state.store.get_session(id)?;
+
+    let mut text =
+        aim_diagnostics::transcript::export_transcript(&state.store, id, &format!("session {id}"))?;
+
+    if redact {
         if let Some(ref vin_id) = session.vehicle_id {
             if let Some(vehicle) = state.store.get_vehicle(vin_id)? {
                 if let Some(vin) = vehicle.vin {
@@ -1186,14 +1203,35 @@ async fn session_transcript(
             }
         }
     }
+    Ok(text)
+}
 
-    use axum::body::Body;
-    let response = axum::response::Response::builder()
-        .header(axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8")
-        .body(Body::from(text))
-        .map_err(|e| ApiError::internal(format!("failed to build response: {e}")))?;
+/// A transcript to keep as a file.
+#[derive(Debug, Deserialize)]
+struct TranscriptExportBody {
+    /// Base file name; see [`crate::handoff::safe_name`].
+    filename: String,
+    /// Replace the VIN with an anonymous one. On unless set to false.
+    #[serde(default = "yes")]
+    redact: bool,
+}
 
-    Ok(response)
+/// Write a session's replay transcript to a file and hand it to the person.
+///
+/// The same text `GET` answers with, as a file: a recorded drive is far past
+/// what `POST /export` accepts as a body, and a phone has to be handed the
+/// file to get it off the phone at all.
+async fn export_session_transcript(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<TranscriptExportBody>,
+) -> ApiResult<Json<crate::handoff::Delivered>> {
+    let outbox = crate::handoff::Outbox::open(state.config.handoff.as_deref())?;
+    // Named before the transcript is assembled: a refused name should not
+    // cost a walk through the whole event log first.
+    outbox.path(&body.filename)?;
+    let text = transcript_text(&state, &SessionId::from_string(id), body.redact)?;
+    Ok(Json(outbox.deliver_text(&body.filename, &text)?))
 }
 
 async fn session_modules(
@@ -1235,13 +1273,14 @@ async fn session_measurements(
 /// A file the user asked to keep.
 #[derive(Debug, Deserialize)]
 struct ExportBody {
-    /// Base file name. Path separators are stripped; see `safe_name`.
+    /// Base file name. Path separators are stripped; see
+    /// [`crate::handoff::safe_name`].
     filename: String,
     /// The whole file, as text.
     content: String,
 }
 
-/// Write an export to the user's Downloads folder and say where it went.
+/// Write an export where the person can get at it, and say where it went.
 ///
 /// The obvious implementation — a blob URL and an `<a download>` — does nothing
 /// inside the desktop shell. A Tauri webview has no download manager, so the
@@ -1250,11 +1289,13 @@ struct ExportBody {
 ///
 /// Doing it server-side sidesteps the whole problem and is better anyway,
 /// because it can report the actual path. The UI shows where the file is rather
-/// than leaving the user to guess which folder their browser chose.
+/// than leaving the user to guess which folder their browser chose. On a phone
+/// there is no such folder, and the file is handed to the share sheet instead;
+/// see [`crate::handoff`].
 async fn export_file(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Json(body): Json<ExportBody>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<crate::handoff::Delivered>> {
     if body.content.is_empty() {
         return Err(ApiError::bad_request("nothing to export"));
     }
@@ -1268,43 +1309,130 @@ async fn export_file(
         )));
     }
 
-    let name = safe_name(&body.filename)?;
-    let dir = directories::UserDirs::new()
-        .and_then(|d| d.download_dir().map(|p| p.to_path_buf()))
-        .ok_or_else(|| ApiError::internal("cannot locate the Downloads folder"))?;
-    std::fs::create_dir_all(&dir)
-        .map_err(|e| ApiError::internal(format!("cannot create {}: {e}", dir.display())))?;
-
-    let path = dir.join(&name);
-    std::fs::write(&path, body.content.as_bytes())
-        .map_err(|e| ApiError::internal(format!("cannot write {}: {e}", path.display())))?;
-
-    tracing::info!(path = %path.display(), "wrote an export");
-    Ok(Json(json!({
-        "path": path.display().to_string(),
-        "directory": dir.display().to_string(),
-        "filename": name,
-    })))
+    let outbox = crate::handoff::Outbox::open(state.config.handoff.as_deref())?;
+    Ok(Json(outbox.deliver_text(&body.filename, &body.content)?))
 }
 
-/// Reduce a caller-supplied name to a bare filename inside the target folder.
+/// A database copy to keep as a file.
+#[derive(Debug, Deserialize)]
+struct DatabaseExportBody {
+    /// Base file name; see [`crate::handoff::safe_name`].
+    filename: String,
+}
+
+/// Write a copy of the whole session database to a file and hand it over.
 ///
-/// The caller is this app's own UI, but that is not a reason to trust the
-/// string: a path traversal here writes anywhere the user can write, and the
-/// check is three lines.
-fn safe_name(raw: &str) -> ApiResult<String> {
-    let base = raw.rsplit(['/', '\\']).next().unwrap_or("").trim();
-    let ok = !base.is_empty()
-        && base != "."
-        && base != ".."
-        && !base.contains("..")
-        && base.len() <= 120
-        && base.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ' '));
-    if ok {
-        Ok(base.to_string())
-    } else {
-        Err(ApiError::bad_request(format!("unusable file name {raw:?}")))
+/// Everything this install has recorded, in one file another install can
+/// open: every session, with its timestamps, readings and the raw exchanges
+/// behind them, and what has been learned about each vehicle. That is what
+/// makes a drive recorded on a phone readable on a desk afterwards.
+///
+/// Nothing in it is withheld, VINs included, which is why it is only ever
+/// handed to the person and never sent anywhere by the app. Provider API keys
+/// are not in this database.
+async fn export_database(
+    State(state): State<AppState>,
+    Json(body): Json<DatabaseExportBody>,
+) -> ApiResult<Json<crate::handoff::Delivered>> {
+    let handoff = state.config.handoff.clone();
+    let store = state.store.clone();
+    // Copying a database that has seen a few dozen scans takes seconds, and
+    // the store is busy for all of them.
+    tokio::task::spawn_blocking(move || {
+        let outbox = crate::handoff::Outbox::open(handoff.as_deref())?;
+        let path = outbox.path(&body.filename)?;
+        // An export under the same name is being replaced by this one.
+        if path.exists() {
+            std::fs::remove_file(&path).map_err(|e| {
+                ApiError::internal(format!("cannot replace {}: {e}", path.display()))
+            })?;
+        }
+        store.snapshot_to(&path)?;
+        outbox.deliver(&path)
+    })
+    .await
+    .map_err(|e| ApiError::internal(format!("the database copy did not finish: {e}")))?
+    .map(Json)
+}
+
+/// The largest database an import accepts. One that has seen a few dozen
+/// full scans is under a hundred megabytes.
+const MAX_IMPORT_BYTES: usize = 512 * 1024 * 1024;
+
+/// How to import a database.
+#[derive(Debug, Deserialize)]
+struct ImportQuery {
+    /// Work out what would be added and keep none of it.
+    #[serde(default)]
+    dry_run: bool,
+}
+
+/// Merge a database exported by another install into this one.
+///
+/// The other half of `POST /export/database`: what a phone recorded at the
+/// car becomes part of what this install knows about that vehicle. The body
+/// is the file itself. With `?dry_run=true` the answer is what would be
+/// added, exactly, and nothing is kept.
+///
+/// What is and is not replaced is [`aim_session::import`]'s to say; in short,
+/// nothing here is replaced by anything older, and importing twice adds
+/// nothing the second time.
+///
+/// # Why the content type is checked
+///
+/// Every other route that changes anything takes JSON, which a web page on
+/// another origin cannot send here without asking first, and this server
+/// never says yes. A bare upload has no such protection unless it insists on
+/// a type a page may not send unasked either, so it does: without that, any
+/// site open in a browser on this machine could write sessions and findings
+/// into this database.
+async fn import_database(
+    State(state): State<AppState>,
+    Query(q): Query<ImportQuery>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> ApiResult<Json<aim_session::ImportSummary>> {
+    let content_type = headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+    if content_type != "application/octet-stream" {
+        return Err(ApiError::bad_request(
+            "send the database file as the body, with Content-Type: application/octet-stream",
+        ));
     }
+    if body.is_empty() {
+        return Err(ApiError::bad_request("nothing to import"));
+    }
+
+    // Written out beside nothing else of ours: the store reads a file, and
+    // brings an older one up to date in place, so it has to be a copy.
+    let dir = match state.config.handoff.as_deref() {
+        Some(h) => h.staging_dir(),
+        None => std::env::temp_dir(),
+    };
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or_default();
+    let path = dir.join(format!("wtfault-import-{}-{nonce}.sqlite", std::process::id()));
+    let store = state.store.clone();
+
+    tokio::task::spawn_blocking(move || {
+        std::fs::create_dir_all(&dir)
+            .and_then(|()| std::fs::write(&path, &body))
+            .map_err(|e| ApiError::internal(format!("cannot stage the import: {e}")))?;
+        drop(body);
+        let summary = store.import_database(&path, q.dry_run);
+        for suffix in ["", "-wal", "-shm", "-journal"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+        }
+        let summary = summary?;
+        tracing::info!(?summary, "imported a database");
+        Ok(Json(summary))
+    })
+    .await
+    .map_err(|e| ApiError::internal(format!("the import did not finish: {e}")))?
 }
 
 /// What changed between two recorded scans of the same vehicle.

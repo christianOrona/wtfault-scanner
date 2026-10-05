@@ -117,6 +117,37 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 const post = <T>(path: string, body?: unknown) =>
   request<T>(path, { method: "POST", body: body === undefined ? undefined : JSON.stringify(body) });
 
+/** Where an export went. On a phone it is handed to the share sheet
+ *  (`shared`) and `path` is inside the app, which is no use to a person. */
+export interface Exported {
+  path: string;
+  directory: string;
+  filename: string;
+  bytes: number;
+  shared: boolean;
+}
+
+/** What importing another install's database added, or would add. */
+export interface ImportSummary {
+  /** False for a preview: nothing was kept. */
+  committed: boolean;
+  sessions_added: number;
+  sessions_extended: number;
+  sessions_already_here: number;
+  sessions_skipped: { id: string; reason: string }[];
+  vehicles_added: number;
+  /** VINs of the sessions added or extended; null for one that never gave a VIN. */
+  vehicles: (string | null)[];
+  events_added: number;
+  measurements_added: number;
+  dtcs_added: number;
+  captures_added: number;
+  findings_added: number;
+  findings_updated: number;
+  findings_kept: number;
+  vehicle_records_taken: number;
+}
+
 export const api = {
   health: () => request<Health>("/health"),
   capabilities: () => request<CapabilitiesResponse>("/capabilities"),
@@ -151,8 +182,21 @@ export const api = {
   contribution: () => request<Contribution>("/vehicles/contribution"),
   /** Open the log folder in the desktop's own file manager. */
   supportReveal: () => post<{ opened: string }>("/support/reveal", {}),
-  exportFile: (body: { filename: string; content: string }) =>
-    post<{ path: string; directory: string; filename: string }>("/export", body),
+  exportFile: (body: { filename: string; content: string }) => post<Exported>("/export", body),
+  /** A copy of everything this install has recorded, as one database file. */
+  exportDatabase: (filename: string) => post<Exported>("/export/database", { filename }),
+  /** Merge a database exported by another install into this one. With
+   *  `dryRun` the answer is what would be added and nothing is kept. */
+  importDatabase: (file: Blob, dryRun: boolean) =>
+    request<ImportSummary>(`/import/database${dryRun ? "?dry_run=true" : ""}`, {
+      method: "POST",
+      body: file,
+      // Not JSON, and the core refuses anything else: see the route for why.
+      headers: { "content-type": "application/octet-stream" },
+    }),
+  /** One session's adapter exchanges as a replay transcript, VIN anonymised. */
+  exportTranscript: (id: string, filename: string) =>
+    post<Exported>(`/sessions/${enc(id)}/transcript`, { filename }),
   setVoice: (body: { purpose?: ScanPurpose; tone?: Tone }) =>
     post<{ purpose: ScanPurpose; tone: Tone }>("/settings/voice", body),
   features: () => request<ToolResult<FeaturesData>>("/features"),

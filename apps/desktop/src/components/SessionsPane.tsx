@@ -2,11 +2,11 @@
 // persisted at all when the server was started with --db, which is worth
 // saying out loud rather than showing an empty list.
 
-import { useCallback, useEffect, useState } from "react";
-import { api, describeError, type SessionDetail } from "../api/client";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { api, describeError, type ImportSummary, type SessionDetail } from "../api/client";
 import type { Health, Measurement, SessionSummary } from "../api/types";
 import { ErrorBanner, Spinner, localTime } from "./primitives";
-import { saveFile, scanFilename, toCsv } from "./exportFile";
+import { saveFile, savedNote, scanFilename, toCsv } from "./exportFile";
 import { PaneIntro } from "../explain";
 import { CompareSessions } from "./CompareSessions";
 
@@ -34,9 +34,61 @@ export function SessionsPane({ health }: { health: Health | null }) {
 
   const [measurements, setMeasurements] = useState<Measurement[] | null>(null);
   const [savedTo, setSavedTo] = useState<string | null>(null);
+  const [copying, setCopying] = useState(false);
+
+  // Bringing in what another device recorded. Two steps on purpose: the file
+  // is read and the person is told exactly what it would add before any of it
+  // is kept, because a merge into the history cannot be taken back out.
+  const filePicker = useRef<HTMLInputElement>(null);
+  const [incoming, setIncoming] = useState<{ file: File; preview: ImportSummary } | null>(null);
+  const [importing, setImporting] = useState(false);
+
+  const previewImport = useCallback(async (file: File) => {
+    setImporting(true);
+    setSavedTo(null);
+    setIncoming(null);
+    try {
+      setIncoming({ file, preview: await api.importDatabase(file, true) });
+    } catch (e) {
+      setSavedTo(`Could not read ${file.name}: ${describeError(e).message}`);
+    } finally {
+      setImporting(false);
+    }
+  }, []);
+
+  const confirmImport = useCallback(async () => {
+    if (!incoming) return;
+    setImporting(true);
+    try {
+      const done = await api.importDatabase(incoming.file, false);
+      setSavedTo(`Imported ${incoming.file.name}: ${importLines(done).join("; ")}.`);
+      setIncoming(null);
+      await load();
+    } catch (e) {
+      setSavedTo(`Nothing was imported: ${describeError(e).message}`);
+    } finally {
+      setImporting(false);
+    }
+  }, [incoming, load]);
+
+  // The whole database, not one session: it is the one file another install
+  // opens as-is, and what was learned about the vehicle travels with it.
+  const exportDatabase = useCallback(async () => {
+    setCopying(true);
+    setSavedTo(null);
+    try {
+      const r = await api.exportDatabase(scanFilename("database", null, "sqlite"));
+      setSavedTo(`${savedNote(r)} (${megabytes(r.bytes)})`);
+    } catch (e) {
+      setSavedTo(`Could not export the database: ${describeError(e).message}`);
+    } finally {
+      setCopying(false);
+    }
+  }, []);
 
   useEffect(() => {
-    if (!selected) { setDetail(null); setMeasurements(null); setSavedTo(null); return; }
+    setSavedTo(null);
+    if (!selected) { setDetail(null); setMeasurements(null); return; }
     api.session(selected).then(setDetail).catch((e) => setError(describeError(e)));
     // Readings were never shown at all - the old view reported a count of
     // events and left it there, which is most of why it read as a summary.
@@ -60,12 +112,24 @@ export function SessionsPane({ health }: { health: Health | null }) {
           </div>
           <div className="row" style={{ gap: 8 }}>
             <button
+              title="Every command sent to the adapter and every reply, with the VIN replaced. Replays without the vehicle."
+              onClick={() =>
+                // No VIN in the name: the point of this file is that it has none.
+                void api
+                  .exportTranscript(detail.session.id, scanFilename("replay", null, "transcript"))
+                  .then((r) => setSavedTo(savedNote(r)))
+                  .catch((e) => setSavedTo(`Could not export the transcript: ${describeError(e).message}`))
+              }
+            >
+              Export transcript
+            </button>
+            <button
               onClick={() =>
                 void saveFile(
                   scanFilename("session", detail.vehicle?.vin ?? null, "csv"),
                   sessionCsv(detail, measurements ?? []),
                 )
-                  .then((r) => setSavedTo(r.path))
+                  .then((r) => setSavedTo(savedNote(r)))
                   .catch(() => setSavedTo("could not save"))
               }
             >
@@ -74,9 +138,7 @@ export function SessionsPane({ health }: { health: Health | null }) {
           </div>
         </div>
         {savedTo && (
-          <div className="faint" style={{ marginBottom: 10 }}>
-            {savedTo === "could not save" ? savedTo : `Saved to ${savedTo}`}
-          </div>
+          <div className="faint" style={{ marginBottom: 10 }}>{savedTo}</div>
         )}
         <ErrorBanner error={error} />
         <SessionDetailView detail={detail} measurements={measurements} />
@@ -89,8 +151,81 @@ export function SessionsPane({ health }: { health: Health | null }) {
       <PaneIntro kind="concept" id="session" />
       <div className="row" style={{ justifyContent: "space-between", marginBottom: 12 }}>
         <strong>Sessions</strong>
-        <button onClick={() => void load()} disabled={busy}>{busy ? <Spinner /> : "Refresh"}</button>
+        <div className="row" style={{ gap: 8 }}>
+          <input
+            ref={filePicker}
+            type="file"
+            accept=".sqlite,application/octet-stream"
+            style={{ display: "none" }}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              // Cleared so that choosing the same file again still fires.
+              e.target.value = "";
+              if (file) void previewImport(file);
+            }}
+          />
+          <button
+            title="Bring in a database exported from another device. You are shown what it would add first."
+            onClick={() => filePicker.current?.click()}
+            disabled={importing}
+          >
+            {importing && !incoming ? <Spinner /> : "Import database"}
+          </button>
+          <button
+            title="One file holding every session here, with timestamps, readings and the raw exchanges. Another install can open it."
+            onClick={() => void exportDatabase()}
+            disabled={copying || !sessions?.length}
+          >
+            {copying ? <Spinner /> : "Export database"}
+          </button>
+          <button onClick={() => void load()} disabled={busy}>{busy ? <Spinner /> : "Refresh"}</button>
+        </div>
       </div>
+      {savedTo && (
+        <div className="faint" style={{ marginBottom: 10 }}>
+          {savedTo}
+        </div>
+      )}
+      {incoming && (
+        <div className="card">
+          <strong>{incoming.file.name}</strong>
+          {isNothingNew(incoming.preview) ? (
+            <div style={{ marginTop: 6 }}>Nothing in this file is new here.</div>
+          ) : (
+            <>
+              <div style={{ marginTop: 6 }}>Importing it would add:</div>
+              <ul style={{ margin: "6px 0 0 18px" }}>
+                {importLines(incoming.preview).map((line) => <li key={line}>{line}</li>)}
+              </ul>
+            </>
+          )}
+          {incoming.preview.sessions_skipped.map((s) => (
+            <div key={s.id} className="faint" style={{ marginTop: 6 }}>
+              Left out, <span className="mono">{s.id}</span>: {s.reason}.
+            </div>
+          ))}
+          <div className="faint" style={{ fontSize: 12, marginTop: 8 }}>
+            Nothing already here is replaced by anything older, and importing the same file twice
+            adds nothing the second time. An import cannot be undone.
+          </div>
+          <div className="row" style={{ gap: 8, marginTop: 10 }}>
+            {!isNothingNew(incoming.preview) && (
+              <button className="primary" onClick={() => void confirmImport()} disabled={importing}>
+                {importing ? <Spinner /> : "Add to this device"}
+              </button>
+            )}
+            <button onClick={() => setIncoming(null)} disabled={importing}>
+              {isNothingNew(incoming.preview) ? "Close" : "Cancel"}
+            </button>
+          </div>
+        </div>
+      )}
+      {!!sessions?.length && (
+        <div className="faint" style={{ fontSize: 12, marginBottom: 10 }}>
+          The database export is everything recorded on this device, VINs included. Keep it to
+          yourself; a session's transcript is the one made to pass on.
+        </div>
+      )}
 
       <ErrorBanner error={error} />
 
@@ -141,6 +276,57 @@ export function SessionsPane({ health }: { health: Health | null }) {
 
     </div>
   );
+}
+
+/** `3 sessions`, `1 session`. */
+function some(n: number, one: string): string {
+  return `${n.toLocaleString()} ${one}${n === 1 ? "" : "s"}`;
+}
+
+/** True when a file holds nothing this device lacks. The same test the core
+ *  applies; sessions already here and findings kept are not news. */
+function isNothingNew(s: ImportSummary): boolean {
+  return (
+    !s.sessions_added && !s.sessions_extended && !s.vehicles_added && !s.captures_added &&
+    !s.findings_added && !s.findings_updated && !s.vehicle_records_taken
+  );
+}
+
+/** What an import adds, as a list a person can agree to. */
+function importLines(s: ImportSummary): string[] {
+  const out: string[] = [];
+  const vins = s.vehicles.map((v) => v ?? "a vehicle that gave no VIN").join(", ");
+  if (s.sessions_added) out.push(`${some(s.sessions_added, "session")} this device does not have`);
+  if (s.sessions_extended) {
+    out.push(`the rest of ${some(s.sessions_extended, "session")} it has the start of`);
+  }
+  if (s.sessions_added || s.sessions_extended) {
+    out.push(
+      `with ${some(s.events_added, "recorded exchange")}, ${some(s.measurements_added, "reading")}` +
+        ` and ${some(s.dtcs_added, "fault code record")}, for ${vins}`,
+    );
+  }
+  if (s.vehicles_added) out.push(`${some(s.vehicles_added, "vehicle")} it has never seen`);
+  if (s.findings_added) out.push(`${some(s.findings_added, "finding")} about a vehicle`);
+  if (s.findings_updated) {
+    out.push(`${some(s.findings_updated, "finding")} newer than the one here, which it replaces`);
+  }
+  if (s.captures_added) out.push(some(s.captures_added, "configuration capture"));
+  if (s.vehicle_records_taken) {
+    out.push(`${some(s.vehicle_records_taken, "vehicle record")} (as-built file or VIN lookup)`);
+  }
+  if (s.sessions_already_here) {
+    out.push(`${some(s.sessions_already_here, "session")} already here, left as they are`);
+  }
+  if (s.findings_kept) {
+    out.push(`${some(s.findings_kept, "finding")} here that are as new as the file's, kept`);
+  }
+  return out.length ? out : ["nothing new"];
+}
+
+/** A file size a person can weigh against their data plan. */
+function megabytes(bytes: number): string {
+  return bytes < 100_000 ? `${Math.max(1, Math.round(bytes / 1000))} kB` : `${(bytes / 1_000_000).toFixed(1)} MB`;
 }
 
 function Field({ k, v }: { k: string; v: string | null }) {

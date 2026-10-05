@@ -8,7 +8,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { SessionEvent } from "../api/types";
-import { saveFile, scanFilename, toCsv } from "./exportFile";
+import { saveFile, savedNote, scanFilename, toCsv } from "./exportFile";
 import { Spinner, localTime } from "./primitives";
 
 const KINDS = [
@@ -93,7 +93,7 @@ export function RecorderPane({
                   shown.map((e) => [e.seq, e.timestamp, e.kind.kind, plain(e), raw(e)]),
                 ),
               )
-                .then((r) => setSavedTo(r.path))
+                .then((r) => setSavedTo(savedNote(r)))
                 .catch(() => setSavedTo("could not save"))
             }
           >
@@ -103,7 +103,7 @@ export function RecorderPane({
       </div>
       {savedTo && (
         <div className="faint" style={{ padding: "6px 16px" }}>
-          {savedTo === "could not save" ? savedTo : `Saved to ${savedTo}`}
+          {savedTo}
           {filter !== "all" && savedTo !== "could not save" && ` — ${filter} events only`}
         </div>
       )}

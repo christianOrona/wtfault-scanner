@@ -13,7 +13,7 @@ import type { ClearResult, Dtc, DtcData, FreezeFrameData, ToolResult } from "../
 import { VehicleMap } from "./VehicleMap";
 import { ErrorBanner, FailedResult, Spinner, Value, Warnings } from "./primitives";
 import { PaneIntro, useExplain } from "../explain";
-import { saveFile, scanFilename, toCsv } from "./exportFile";
+import { saveFile, scanFilename, toCsv, whereSaved } from "./exportFile";
 import { ClearCodesDialog } from "./ClearCodesDialog";
 
 export function CodesPane({
@@ -102,7 +102,7 @@ export function CodesPane({
                     d.structural_summary ?? "",
                   ]),
                 ),
-              ).then((r) => setSavedTo(r.path)).catch(() => setSavedTo("could not save"))
+              ).then((r) => setSavedTo(whereSaved(r))).catch(() => setSavedTo("could not save"))
             }
           >
             Export

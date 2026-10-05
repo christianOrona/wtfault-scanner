@@ -532,3 +532,45 @@ fn vehicle_is_found_by_vin_regardless_of_case() {
     assert_eq!(s.vehicle_by_vin("1ft7w2bt6kec00001 ").unwrap().map(|x| x.id), Some(v.id));
     assert!(s.vehicle_by_vin("3MZBPABL2KM000001").unwrap().is_none());
 }
+
+/// The copy is the whole database as it is now, in one file that opens on its
+/// own: what a phone hands over so a session can be read somewhere else.
+#[test]
+fn a_snapshot_is_a_complete_database_in_one_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = SessionStore::open(dir.path().join("sessions.sqlite")).unwrap();
+    let session = s.create_session(Some("a drive".into())).unwrap();
+    for pid in ["010C", "010D", "0105"] {
+        s.append_event(&session.id, EventKind::AdapterRequest { command: pid.into() }).unwrap();
+    }
+
+    let copy = dir.path().join("out").join("copy.sqlite");
+    std::fs::create_dir_all(copy.parent().unwrap()).unwrap();
+    let bytes = s.snapshot_to(&copy).unwrap();
+    assert_eq!(bytes, std::fs::metadata(&copy).unwrap().len());
+    assert!(bytes > 0);
+
+    // Written after the copy was taken: the copy must not have it.
+    s.append_event(&session.id, EventKind::AdapterRequest { command: "0142".into() }).unwrap();
+
+    let files: Vec<_> = std::fs::read_dir(copy.parent().unwrap()).unwrap().collect();
+    assert_eq!(files.len(), 1, "the copy must not need a log beside it");
+
+    let opened = SessionStore::open(&copy).unwrap();
+    assert_eq!(opened.integrity_check().unwrap(), "ok");
+    assert_eq!(opened.event_count(&session.id).unwrap(), 4);
+    assert_eq!(s.event_count(&session.id).unwrap(), 5);
+}
+
+/// Which file to replace is the caller's decision, not the store's.
+#[test]
+fn a_snapshot_refuses_to_overwrite_a_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = store();
+    let target = dir.path().join("already-here.sqlite");
+    std::fs::write(&target, b"somebody's file").unwrap();
+
+    let err = s.snapshot_to(&target).unwrap_err();
+    assert_eq!(err.code, ErrorCode::StorageError);
+    assert_eq!(std::fs::read(&target).unwrap(), b"somebody's file");
+}

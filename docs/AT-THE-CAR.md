@@ -79,10 +79,20 @@ saying why.
 
 1. Install the `.apk` from the latest release.
 2. Pair the ELM327 in Android's Bluetooth settings.
-3. Open the app, pick the adapter, connect, full scan.
+3. Open the app, pick the adapter, connect, full scan. Leave the phone alone
+   for a minute past its usual screen timeout: the screen should stay on.
+4. *Sessions* → *Export database*, and send it to your Drive from the share
+   sheet.
+5. On the laptop, download it, then *Sessions* → *Import database*. The
+   preview should list the phone's session under the truck's VIN.
 
-Bring back whether the full scan finished, and anything that differed from
-the laptop.
+Bring back whether the full scan finished, whether the screen stayed on,
+whether the file reached Drive, what the import preview said, and anything
+that differed from the laptop.
+
+Only once that works, a drive: mount the phone, start *Live data* before
+moving, drive, stop, and export the database again. Nothing on the screen
+needs touching while the vehicle moves.
 
 ## No car needed, but needs you
 

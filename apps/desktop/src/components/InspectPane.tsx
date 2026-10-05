@@ -18,7 +18,7 @@ import type {
 import { ErrorBanner, Spinner } from "./primitives";
 import { useAgentProgress, type ProgressLine } from "../hooks/useAgentProgress";
 import { reportToText } from "./reportText";
-import { saveFile, scanFilename } from "./exportFile";
+import { saveFile, scanFilename, whereSaved } from "./exportFile";
 import { ModuleProbeCard } from "./ModuleProbeCard";
 import { MonitorTestsCard } from "./MonitorTestsCard";
 import { ReadinessCard } from "./ReadinessCard";
@@ -325,7 +325,7 @@ function ShareReport({
     setSaveError(null);
     try {
       const r = await saveFile(scanFilename("report", vin, "txt"), text());
-      setSaved(r.path);
+      setSaved(whereSaved(r));
     } catch (e) {
       // Said out loud. The previous version failed silently, which is the one
       // outcome a save button must never have.

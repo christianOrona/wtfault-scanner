@@ -249,7 +249,39 @@ impl SessionStore {
         conn.query_row("PRAGMA integrity_check(20)", [], |r| r.get::<_, String>(0)).map_err(storage)
     }
 
-    fn lock(&self) -> AimResult<MutexGuard<'_, Connection>> {
+    /// Write a complete copy of this database to `path` and return its size
+    /// in bytes.
+    ///
+    /// `VACUUM INTO`, not a file copy. The app is usually writing while this
+    /// runs, and a copied file without its write-ahead log is an older
+    /// database than the one on screen. The copy is one file with nothing
+    /// beside it, so it can be sent somewhere and opened there.
+    ///
+    /// Refuses a `path` that already exists: SQLite will not vacuum into one,
+    /// and which file to replace is the caller's decision.
+    pub fn snapshot_to(&self, path: impl AsRef<Path>) -> AimResult<u64> {
+        let p = path.as_ref();
+        let target = p.to_str().ok_or_else(|| {
+            AimError::new(
+                ErrorCode::StorageError,
+                format!("cannot copy the database to {}: the path is not UTF-8", p.display()),
+            )
+        })?;
+        self.lock()?.execute("VACUUM INTO ?1", [target]).map_err(|e| {
+            AimError::new(
+                ErrorCode::StorageError,
+                format!("cannot copy the database to {}: {e}", p.display()),
+            )
+        })?;
+        std::fs::metadata(p).map(|m| m.len()).map_err(|e| {
+            AimError::new(
+                ErrorCode::StorageError,
+                format!("the database copy at {} cannot be read back: {e}", p.display()),
+            )
+        })
+    }
+
+    pub(crate) fn lock(&self) -> AimResult<MutexGuard<'_, Connection>> {
         self.conn.lock().map_err(|_| {
             AimError::new(
                 ErrorCode::StorageError,
@@ -1574,7 +1606,7 @@ fn row_to_capture(r: &Row<'_>) -> rusqlite::Result<AimResult<StoredCapture>> {
     }))
 }
 
-fn storage(e: rusqlite::Error) -> AimError {
+pub(crate) fn storage(e: rusqlite::Error) -> AimError {
     AimError::new(ErrorCode::StorageError, e.to_string())
 }
 

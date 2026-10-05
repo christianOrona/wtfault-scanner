@@ -25,7 +25,7 @@ import { api, describeError } from "../api/client";
 import type { FullScanData, ScannedModule, ToolResult, UdsFault } from "../api/types";
 import { ErrorBanner, FailedResult, Spinner, Warnings } from "./primitives";
 import { PaneIntro, useExplain } from "../explain";
-import { saveFile, scanFilename, toCsv } from "./exportFile";
+import { saveFile, scanFilename, toCsv, whereSaved } from "./exportFile";
 
 export function FullScanPane({ connected }: { connected: boolean }) {
   const [result, setResult] = useState<ToolResult<FullScanData> | null>(null);
@@ -94,7 +94,7 @@ export function FullScanPane({ connected }: { connected: boolean }) {
                     ),
                   ),
                 )
-                  .then((r) => setSavedTo(r.path))
+                  .then((r) => setSavedTo(whereSaved(r)))
                   .catch((e) => setSavedTo(`could not save: ${describeError(e).message}`))
               }
             >

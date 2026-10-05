@@ -42,6 +42,8 @@ const PREFERRED_PORT: u16 = 8787;
 
 #[cfg(target_os = "android")]
 mod android;
+#[cfg(target_os = "android")]
+mod android_share;
 
 /// The one directory this application keeps anything in.
 ///
@@ -172,7 +174,7 @@ pub fn run() {
     // Registered before `setup`, so its links are installed by the time the
     // core first lists ports.
     #[cfg(target_os = "android")]
-    let builder = builder.plugin(android::init());
+    let builder = builder.plugin(android::init()).plugin(android_share::init());
 
     builder
         .setup(|app| {
@@ -271,6 +273,11 @@ fn start_core(app: &mut tauri::App) -> tauri::Result<()> {
         profiles_dir: profiles,
         replay: None,
         simulated_vehicle: Default::default(),
+        // A desktop has a Downloads folder. A phone has the share sheet.
+        #[cfg(target_os = "android")]
+        handoff: android_share::handoff(app.handle()),
+        #[cfg(not(target_os = "android"))]
+        handoff: None,
     };
 
     let state = AppState::new(store, decoders, config);

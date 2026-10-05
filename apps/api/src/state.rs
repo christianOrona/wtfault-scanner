@@ -84,6 +84,9 @@ pub struct ServerConfig {
     /// Which vehicle the simulator is: the 2019 F-250 it was built on, or a
     /// petrol Honda on 29-bit CAN, so a change can be seen against both.
     pub simulated_vehicle: SimulatedVehicle,
+    /// How an export reaches the person on a shell with no Downloads folder,
+    /// which is a phone. `None` writes exports to Downloads.
+    pub handoff: Option<Arc<dyn crate::handoff::FileHandoff>>,
 }
 
 /// The vehicles the simulator can be.

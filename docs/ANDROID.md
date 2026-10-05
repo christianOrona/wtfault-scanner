@@ -53,8 +53,54 @@ not supported yet.
 | Updates | Downloads and runs the installer | Says a new version exists; install the APK from the release page |
 | Probe button | Opens each port and sends `ATZ`/`ATI` | Lists without probing: opening a Bluetooth link is slow and visible |
 
+| Export buttons | Write to Downloads and say where | Open the share sheet; the file goes where you send it |
+| Screen | Sleeps as Windows is set to | Stays on while an adapter is connected |
+
 Sessions do not move between the two by themselves. They are separate
 databases on separate devices.
+
+## Getting a session off the phone
+
+Everything the app records is in private storage that no other app, and no
+file manager, can open. So a file leaves through Android's share sheet: the
+app offers it, and you pick Drive, mail or anything else installed. The app
+uploads nothing itself.
+
+- **Sessions → Export database** is everything recorded on the phone as one
+  file: every session with its timestamps, readings and raw exchanges. It is
+  the one to send yourself after a drive. Your VIN is in it, so keep it to
+  yourself.
+- **Sessions → a session → Export transcript** is that session's exchanges
+  with the VIN replaced. It is the one made to pass on, and what CI replays.
+
+On the laptop, **Sessions → Import database** and pick the file. The app
+shows what it would add before keeping any of it, then merges it: the phone's
+sessions are filed under the same vehicle by its VIN, so the truck's history,
+its findings and its scorecard include what the phone saw. It is safe to
+import the same file twice, or a later export from the same phone; only what
+is missing is added. A session exported while still connected can be finished
+by a later export.
+
+To look at a copy without merging it, open it by itself:
+
+```powershell
+scripts\dev-core.ps1 -Db C:\path\to\wtfault-database-....sqlite
+```
+
+The phone has the same Import button, for going the other way. It has not
+been tried there: whether Android's file picker opens from the app is unknown
+until a phone runs it.
+
+A copy offered to the share sheet stays in the app's cache for a day, so that
+whatever you picked can finish reading it, and is then removed.
+
+## Recording while driving
+
+The screen stays on for as long as an adapter is connected. Android stops an
+app whose screen has locked, which would end a recording with nothing to say
+so. Mount the phone, start the recording before you move, and leave the app
+on screen: switching to another app still stops it. Plug the phone in for a
+long drive.
 
 ## Building it
 
@@ -130,8 +176,11 @@ losing it means everyone has to uninstall and reinstall.
 | | |
 |---|---|
 | `apps/desktop/src-tauri/gen/android/` | The Gradle project. Generated once by `tauri android init`, then edited and committed |
-| `…/java/com/wtfault/scanner/BluetoothClassicPlugin.kt` | The Bluetooth socket: list, open, write, read, close |
+| `…/java/com/wtfault/scanner/BluetoothClassicPlugin.kt` | The Bluetooth socket: list, open, write, read, close. Keeps the screen on while one is open |
 | `apps/desktop/src-tauri/src/android.rs` | The core's `Transport` over that plugin, and the link provider |
+| `…/java/com/wtfault/scanner/SharePlugin.kt` | Opens the share sheet for one file in the app's cache |
+| `apps/desktop/src-tauri/src/android_share.rs` | The core's file handoff over that plugin |
+| `apps/api/src/handoff.rs` | The seam: how a shell with no Downloads folder hands a file over |
 | `core/transport/src/platform.rs` | The seam: how a shell offers links the OS does not expose as ports |
 | `…/res/xml/network_security_config.xml` | Plain HTTP to `127.0.0.1` only, which the interface needs to reach the core |
 | `scripts/build-android.ps1` | The Windows build, with or without Developer Mode |

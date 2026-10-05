@@ -14,7 +14,7 @@ import type { Sample } from "../hooks/useLive";
 import { ErrorBanner, FailedResult, Spinner, Value, Warnings } from "./primitives";
 import { Explain, PaneIntro, useExplain } from "../explain";
 import { Sparkline } from "./Sparkline";
-import { saveFile, scanFilename, toCsv } from "./exportFile";
+import { saveFile, scanFilename, toCsv, whereSaved } from "./exportFile";
 
 const MAX_SIGNALS = 32;
 
@@ -264,7 +264,7 @@ export function LivePane({
                   ),
                 ),
               )
-                .then((r) => setSavedTo(r.path))
+                .then((r) => setSavedTo(whereSaved(r)))
                 .catch((e) => setSavedTo(`could not save: ${describeError(e).message}`))
             }
           >

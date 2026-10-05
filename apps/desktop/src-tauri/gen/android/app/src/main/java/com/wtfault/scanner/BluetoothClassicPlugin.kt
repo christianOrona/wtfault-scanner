@@ -10,6 +10,7 @@ import android.bluetooth.BluetoothSocket
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import android.view.WindowManager
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import app.tauri.annotation.Command
@@ -127,9 +128,10 @@ class BluetoothClassicPlugin(private val activity: Activity) : Plugin(activity) 
                 // asks for because it never starts discovery.
                 if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) adapter.cancelDiscovery()
                 links.remove(args.address)?.close()
-                val link = Link(connect(device))
+                val link = Link(connect(device)) { keepAwakeWhileLinked() }
                 links[args.address] = link
                 link.start()
+                keepAwakeWhileLinked()
                 invoke.resolve(JSObject())
             } catch (e: Exception) {
                 invoke.reject("could not connect to ${args.address}: ${e.message ?: e.javaClass.simpleName}")
@@ -207,11 +209,37 @@ class BluetoothClassicPlugin(private val activity: Activity) : Plugin(activity) 
     fun close(invoke: Invoke) {
         val args = invoke.parseArgs(AddressArgs::class.java)
         links.remove(args.address)?.close()
+        keepAwakeWhileLinked()
         invoke.resolve(JSObject())
     }
 
-    /** One open socket and the bytes its reader thread has collected. */
-    private class Link(val socket: BluetoothSocket) {
+    /**
+     * Keep the screen on for as long as an adapter is connected.
+     *
+     * A phone left alone locks its screen, and Android then stops the app: a
+     * scan or a recording simply ends, with nothing on screen to say so when
+     * the phone is next picked up. A drive is exactly when nobody is touching
+     * it. The flag belongs to the window, so it lapses by itself when the app
+     * is closed or sent to the background.
+     */
+    private fun keepAwakeWhileLinked() {
+        activity.runOnUiThread {
+            // Looked up here, not by the caller: two threads report changes,
+            // and the last one to run has to be the one that is right.
+            if (links.values.any { it.open }) {
+                activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            } else {
+                activity.window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            }
+        }
+    }
+
+    /**
+     * One open socket and the bytes its reader thread has collected.
+     * [onClosed] runs when the reader stops, which is how an adapter that
+     * went away by itself is noticed.
+     */
+    private class Link(val socket: BluetoothSocket, private val onClosed: () -> Unit) {
         private val buffer = ByteArrayOutputStream()
 
         @Volatile
@@ -230,6 +258,7 @@ class BluetoothClassicPlugin(private val activity: Activity) : Plugin(activity) 
                 // Closed by us or by the adapter; `open` says which half knows.
             }
             open = false
+            onClosed()
         }
 
         fun start() {

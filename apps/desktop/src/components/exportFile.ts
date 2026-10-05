@@ -20,12 +20,25 @@
 // harder to paste from than the text it was made out of. Print-to-PDF is one
 // keystroke away and produces a better result than anything this app would.
 
-import { api } from "../api/client";
+// A phone has no Downloads folder an app may write to. There the core hands
+// the file to the share sheet and the person picks where it goes, so what the
+// app can truthfully say is that it offered the file, not that it is saved.
+
+import { api, type Exported } from "../api/client";
 
 /** Where a saved file ended up, for telling the user. */
-export interface Saved {
-  path: string;
-  filename: string;
+export type Saved = Exported;
+
+/** Where it went, as the words after a "saved" label. */
+export function whereSaved(s: Saved): string {
+  return s.shared ? `the share sheet, as ${s.filename}` : s.path;
+}
+
+/** Where it went, as a sentence. */
+export function savedNote(s: Saved): string {
+  return s.shared
+    ? `Opened the share sheet for ${s.filename}. It is kept wherever you send it.`
+    : `Saved to ${s.path}`;
 }
 
 /** Ask the core to write a file, and return where it put it. */

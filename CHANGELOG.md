@@ -7,6 +7,19 @@ with the caveat that everything below 1.0 is allowed to move.
 
 ### Added
 
+- **Get a session off the phone.** *Sessions* has *Export database*: one file
+  with everything recorded, which another install opens as it is. A session
+  has *Export transcript*: its exchanges with the VIN replaced. On Android
+  both open the share sheet, as every other export button now does: a phone
+  has no Downloads folder for them to write to.
+- **Bring another device's sessions in.** *Sessions* → *Import database* takes
+  a database export and merges it: its sessions are filed under the same
+  vehicle by VIN, so what the phone saw counts toward what the laptop knows
+  about the truck. It shows what it would add first, never replaces anything
+  with something older, and adds nothing when the same file is imported twice.
+- **The phone's screen stays on while an adapter is connected**, so a scan or
+  a recording is not ended by the screen locking.
+
 - **Oxygen sensor voltages.** The narrowband sensors nearly every petrol engine
   from before wideband sensors reports (PIDs 14 to 1B) are read as volts, with
   an explanation of what a healthy one does.
