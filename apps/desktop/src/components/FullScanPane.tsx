@@ -19,6 +19,11 @@
 //    single red list makes an old fault look like an emergency.
 //  * A module with no fault service is not a module with no faults. Both show
 //    zero, and they mean entirely different things.
+//  * An empty fault memory is not an engine with no codes. This scan asks each
+//    module for its own list. The trouble codes the Codes tab reads are a
+//    separate read and are not asked for here, so a module that may keep some
+//    is never called clean on the strength of this scan: it is listed with
+//    what was read and a way to the read that was not made.
 
 import { useCallback, useEffect, useState } from "react";
 import { api, describeError } from "../api/client";
@@ -27,7 +32,16 @@ import { ErrorBanner, FailedResult, Spinner, Warnings, localTime } from "./primi
 import { PaneIntro, useExplain } from "../explain";
 import { saveFile, scanFilename, toCsv, whereSaved } from "./exportFile";
 
-export function FullScanPane({ connected, active }: { connected: boolean; active: boolean }) {
+export function FullScanPane({
+  connected,
+  active,
+  onReadCodes,
+}: {
+  connected: boolean;
+  active: boolean;
+  /** Open the Codes tab on one module. */
+  onReadCodes: (moduleKey: string) => void;
+}) {
   const [result, setResult] = useState<ToolResult<FullScanData> | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<{ code: string; message: string } | null>(null);
@@ -89,6 +103,13 @@ export function FullScanPane({ connected, active }: { connected: boolean; active
   // unknown, not clean, and "all clear" may only speak for the rest.
   const unread = modules.filter((m) => m.note);
   const read = modules.length - unread.length;
+  // Modules that may keep trouble codes this scan did not ask for. Seen on the
+  // simulated F-250 (2026-10-05): an engine module holding three codes was
+  // listed as "answered, no faults stored", because its own fault memory was
+  // empty and that was all it had been asked for.
+  const codesElsewhere = modules.filter(keepsCodesElsewhere);
+  const quiet = modules.filter((m) => m.fault_count === 0 && !m.cut_off);
+  const quietWithCodesElsewhere = quiet.filter(keepsCodesElsewhere).length;
   const failingNow = modules.flatMap((m) => m.faults.filter((f) => f.failing_now));
   // Faults whose module's protocol does not say whether they are failing now.
   // "Nothing is failing" may only be said when every fault was asked.
@@ -184,7 +205,13 @@ export function FullScanPane({ connected, active }: { connected: boolean; active
             <Stat
               label="Faults stored"
               value={read === 0 ? "unknown" : String(data.fault_count)}
-              tone={data.fault_count ? "var(--caution)" : read === 0 ? undefined : "var(--ok)"}
+              tone={
+                data.fault_count
+                  ? "var(--caution)"
+                  : read === 0 || codesElsewhere.length
+                    ? undefined
+                    : "var(--ok)"
+              }
             />
             <Stat
               label="Failing right now"
@@ -196,7 +223,7 @@ export function FullScanPane({ connected, active }: { connected: boolean; active
               tone={
                 failingNow.length
                   ? "var(--serious)"
-                  : read === 0 || notReported.length
+                  : read === 0 || notReported.length || codesElsewhere.length
                     ? undefined
                     : "var(--ok)"
               }
@@ -220,6 +247,19 @@ export function FullScanPane({ connected, active }: { connected: boolean; active
                 {cutOff.length === 1 ? "one module" : `${cutOff.length} modules`} stopped partway
                 through {cutOff.length === 1 ? "its" : "their"} fault list, so this is not a clean
                 bill of health. Scanning again may get the rest.
+              </span>
+            </div>
+          ) : data.fault_count === 0 && codesElsewhere.length > 0 ? (
+            <div className="banner info">
+              <span className="b-code">no faults here</span>
+              <span>
+                {read} module{read === 1 ? "" : "s"} handed over {read === 1 ? "its" : "their"}{" "}
+                fault list and none of them is holding a fault. Trouble codes are not part of
+                that. They are a separate read, and this scan did not make it for{" "}
+                {named(codesElsewhere)}. {codesElsewhere.length === 1 ? "It is" : "Each is"} in
+                the list below, with a button that does.
+                {unread.length > 0 &&
+                  ` ${unread.length} more answered but would not hand one over, so nothing is known about them.`}
               </span>
             </div>
           ) : data.fault_count === 0 ? (
@@ -260,7 +300,12 @@ export function FullScanPane({ connected, active }: { connected: boolean; active
                   </>
                 ) : (
                   <>
-                    <strong>Nothing is failing at this moment.</strong>
+                    <strong>
+                      {/* "Nothing" would speak for codes this scan did not read. */}
+                      {codesElsewhere.length > 0
+                        ? "None of these faults is failing at this moment."
+                        : "Nothing is failing at this moment."}
+                    </strong>
                     <div style={{ marginTop: 6 }}>
                       Every fault found is stored from an earlier drive. Worth understanding, not
                       worth panicking about.
@@ -272,28 +317,41 @@ export function FullScanPane({ connected, active }: { connected: boolean; active
           )}
 
           {withFaults.map((m) => (
-            <ModuleCard key={m.address} module={m} easy={easy} />
+            <ModuleCard key={m.address} module={m} easy={easy} onReadCodes={onReadCodes} />
           ))}
 
-          <details style={{ marginTop: 12 }}>
+          {/* Open when it is where the banner above sends the reader. */}
+          <details
+            style={{ marginTop: 12 }}
+            open={data.fault_count === 0 && quietWithCodesElsewhere > 0}
+          >
             <summary className="faint" style={{ cursor: "pointer", fontSize: 12 }}>
-              {unread.length > 0
-                ? `modules with no faults or no fault list (${modules.length - withFaults.length})`
-                : `modules with nothing to report (${modules.length - withFaults.length})`}
+              {quietWithCodesElsewhere > 0
+                ? `modules with no faults in this scan${unread.length > 0 ? " or no fault list" : ""} (${quiet.length}) · trouble codes of ${quietWithCodesElsewhere} are read separately`
+                : unread.length > 0
+                  ? `modules with no faults or no fault list (${quiet.length})`
+                  : `modules with nothing to report (${quiet.length})`}
             </summary>
             <table style={{ marginTop: 8 }}>
               <tbody>
-                {modules
-                  .filter((m) => m.fault_count === 0 && !m.cut_off)
-                  .map((m) => (
-                    <tr key={m.address}>
-                      <td>{m.name}</td>
-                      <td className="faint">
-                        {/* The distinction that a bare zero would lose. */}
-                        {m.note ?? "answered, no faults stored"}
-                      </td>
-                    </tr>
-                  ))}
+                {quiet.map((m) => (
+                  <tr key={m.address}>
+                    <td>{m.name}</td>
+                    <td className="faint">
+                      {/* The distinctions that a bare zero would lose. */}
+                      {m.note ??
+                        (keepsCodesElsewhere(m)
+                          ? "nothing in its own fault list"
+                          : "answered, no faults stored")}
+                      {keepsCodesElsewhere(m) && (
+                        <>
+                          {". "}
+                          <CodesElsewhere module={m} onReadCodes={onReadCodes} />
+                        </>
+                      )}
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </details>
@@ -309,7 +367,54 @@ export function FullScanPane({ connected, active }: { connected: boolean; active
   );
 }
 
-function ModuleCard({ module: m, easy }: { module: ScannedModule; easy: boolean }) {
+/** Whether a module may keep trouble codes this scan did not ask for. */
+function keepsCodesElsewhere(m: ScannedModule): boolean {
+  return m.emissions_codes_read === false;
+}
+
+/** "A", "A and B", "A, B and C", or a count when that would be a paragraph. */
+function named(modules: ScannedModule[]): string {
+  const names = modules.map((m) => m.name);
+  if (names.length > 3) return `${names.length} of these modules`;
+  if (names.length === 1) return names[0];
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+/**
+ * What this scan did not read from a module, and the way to read it.
+ *
+ * The button changes which module is selected and opens the Codes tab, which
+ * reads on arrival. It asks the vehicle nothing from here.
+ */
+function CodesElsewhere({
+  module: m,
+  onReadCodes,
+}: {
+  module: ScannedModule;
+  onReadCodes: (moduleKey: string) => void;
+}) {
+  const key = m.module_key;
+  return (
+    <>
+      Its trouble codes are a separate read, which this scan did not make.
+      {key && (
+        <button className="mini" style={{ marginLeft: 8 }} onClick={() => onReadCodes(key)}>
+          Read its codes
+        </button>
+      )}
+    </>
+  );
+}
+
+function ModuleCard({
+  module: m,
+  easy,
+  onReadCodes,
+}: {
+  module: ScannedModule;
+  easy: boolean;
+  onReadCodes: (moduleKey: string) => void;
+}) {
   return (
     <div className="card">
       <div className="row" style={{ gap: 8 }}>
@@ -340,6 +445,12 @@ function ModuleCard({ module: m, easy }: { module: ScannedModule; easy: boolean 
             ))}
           </tbody>
         </table>
+      )}
+
+      {keepsCodesElsewhere(m) && (
+        <div className="faint" style={{ marginTop: 8, fontSize: 12 }}>
+          <CodesElsewhere module={m} onReadCodes={onReadCodes} />
+        </div>
       )}
     </div>
   );

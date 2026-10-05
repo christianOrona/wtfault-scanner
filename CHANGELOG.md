@@ -60,6 +60,13 @@ with the caveat that everything below 1.0 is allowed to move.
   trouble codes were not read for it is also held back until they are, and if
   the model says it again anyway the answer opens with a note that they were
   not read.
+- **The Full scan screen no longer calls an engine clean because its fault
+  list is empty.** The same truck's engine module was listed as "answered, no
+  faults stored", and a scan that found nothing said "all clear". A module
+  that may keep trouble codes now says that this scan does not read them,
+  with a *Read its codes* button that opens *Codes* on that module. "All
+  clear" is kept for a scan that left nothing unread. The note at the top of
+  the scan says the same in plain language.
 - **A file declared to be two calibrations is no longer an exact match.** If
   one of the two was the module's, the file was called exact. It is now
   *conflicting evidence* and is not judged either way.
