@@ -127,6 +127,21 @@ export interface Exported {
   shared: boolean;
 }
 
+/** What importing a settings profile would do, before it does any of it. */
+export interface ProfilePreview {
+  source: string;
+  acceptable: boolean;
+  changes: {
+    id: string;
+    name: string;
+    overrides_existing: boolean;
+    overrides_measured: boolean;
+    claimed_verification: string;
+    verification_on_import: string;
+  }[];
+  findings: { code: string; feature_id: string | null; detail: string; severity: string }[];
+}
+
 /** How one identifier was obtained. */
 export interface IdentitySource {
   kind: "obd_info_type" | "uds_did" | "vin_structure" | "lookup";
@@ -261,6 +276,21 @@ export const api = {
   exportFile: (body: { filename: string; content: string }) => post<Exported>("/export", body),
   /** A copy of everything this install has recorded, as one database file. */
   exportDatabase: (filename: string) => post<Exported>("/export/database", { filename }),
+  /** What a settings profile would add or replace. Changes nothing. */
+  previewProfile: (text: string, source: string) =>
+    post<{ preview: ProfilePreview }>("/profiles/preview", { text, source }),
+  /** Add a settings profile. It is in force from the next connection. */
+  importProfile: (text: string, source: string) =>
+    post<{ imported: boolean; features: number; reconnect_to_use: boolean; note: string }>(
+      "/profiles/import",
+      { text, source },
+    ),
+  /** Read the profiles folder again, for a file put there by hand. */
+  reloadProfiles: () =>
+    post<{ settings_before: number; settings_now: number; reconnect_to_use: boolean }>(
+      "/profiles/reload",
+      {},
+    ),
   /** Ask a module which software it runs. Reads the vehicle, and only reads. */
   calibrationIdentity: (key: string) =>
     request<ToolResult<{ identity: CalibrationIdentity }>>(`/modules/${enc(key)}/calibration`),
@@ -333,6 +363,16 @@ export const api = {
     request<ToolResult<ModuleProbeData>>(`/modules/${enc(key)}/capabilities`),
   readiness: () => request<ToolResult<ReadinessData>>("/readiness"),
   scanAllModules: () => post<ToolResult<FullScanData>>("/modules/scan-all"),
+  /** The last full scan this session finished, whoever ran it. Asks the
+   *  vehicle nothing; asked during a scan, it answers when that scan ends. */
+  lastFullScan: () =>
+    request<{
+      scan: {
+        result: ToolResult<FullScanData>;
+        by: "assistant" | "person";
+        age_seconds: number;
+      } | null;
+    }>("/modules/scan-all"),
   /** The guided tests this build ships. Touches no vehicle. */
   procedures: () => request<{ procedures: ProcedureInfo[] }>("/procedures"),
   /** Read whether the vehicle is in the state a test needs. Read-only. */

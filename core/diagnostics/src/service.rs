@@ -203,6 +203,37 @@ const FORD_CONFIGURATION: u16 = 0xDE00;
 /// addresses with; reading one module on its own always allowed this long.
 const FAULT_MEMORY_READ: Duration = Duration::from_millis(2500);
 
+/// How long a finished full scan is handed to the assistant instead of being
+/// run again.
+///
+/// A full scan takes a minute or two and asks every module on the vehicle.
+/// The assistant's inspection used to run its own, whether or not the person
+/// had just run one on the Full scan screen, and the screen never saw the
+/// assistant's. Two scans of the same parked car a few minutes apart say the
+/// same thing. Half an hour is long enough to cover a sitting at the car and
+/// short enough that a scan from before a drive is not passed off as current.
+/// Clearing codes ends it at once, because that is the one thing here that
+/// changes what a scan would find.
+const FULL_SCAN_STAYS_FRESH: Duration = Duration::from_secs(30 * 60);
+
+/// A full scan this session finished, kept so it is done once and seen
+/// everywhere.
+#[derive(Debug, Clone)]
+pub struct FinishedScan {
+    /// The scan, exactly as it was returned to whoever ran it.
+    pub result: ToolResult,
+    /// Who ran it: `user:...` for a person, `agent:...` for the assistant.
+    pub by: String,
+    taken: Instant,
+}
+
+impl FinishedScan {
+    /// How long ago it finished.
+    pub fn age(&self) -> Duration {
+        self.taken.elapsed()
+    }
+}
+
 /// How long a module is given to answer one identification identifier.
 const IDENTITY_READ: Duration = Duration::from_millis(1000);
 
@@ -526,6 +557,8 @@ pub struct DiagnosticService {
     /// the fuel does not change in between.
     fuel_types: BTreeMap<String, Option<String>>,
     reference_year: u16,
+    /// The last full scan that succeeded in this session.
+    last_full_scan: Option<FinishedScan>,
 }
 
 impl DiagnosticService {
@@ -562,6 +595,7 @@ impl DiagnosticService {
             signal_timeouts: BTreeMap::new(),
             fuel_types: BTreeMap::new(),
             reference_year: 2026,
+            last_full_scan: None,
         })
     }
 
@@ -5319,10 +5353,62 @@ impl DiagnosticService {
     pub fn scan_all_modules(&mut self, initiator: &str) -> ToolResult {
         let t0 = Instant::now();
         self.record_invocation("scan_all_modules", initiator, serde_json::json!({}));
+
+        // The assistant is handed a scan that is already here. A person who
+        // presses the button is asking for a new one, and gets it.
+        let reusable = self
+            .last_full_scan
+            .as_ref()
+            .filter(|s| initiator.starts_with("agent") && s.age() < FULL_SCAN_STAYS_FRESH)
+            .cloned();
+        if let Some(prior) = reusable {
+            let minutes = prior.age().as_secs() / 60;
+            let who = if prior.by.starts_with("agent") { "the assistant" } else { "the person" };
+            let outcome =
+                self.authorize(capabilities::SCAN_ALL_MODULES, initiator, None).map(|_| {
+                    let mut warnings = prior.result.warnings.clone();
+                    warnings.push(Warning::info(
+                        "full_scan_reused",
+                        format!(
+                            "This is the full scan {who} ran {} in this session, not a new one: \
+                         nothing was asked of the vehicle again. It is everything a new scan \
+                         would report unless something has changed on the vehicle since.",
+                            match minutes {
+                                0 => String::from("less than a minute ago"),
+                                1 => String::from("a minute ago"),
+                                n => format!("{n} minutes ago"),
+                            }
+                        ),
+                    ));
+                    Payload {
+                        values: prior.result.values.clone(),
+                        data: prior.result.data.clone(),
+                        warnings,
+                        evidence: prior.result.raw_evidence_ref,
+                        module: None,
+                    }
+                });
+            return self.finish("scan_all_modules", capabilities::SCAN_ALL_MODULES, t0, outcome);
+        }
+
         let outcome = self
             .authorize(capabilities::SCAN_ALL_MODULES, initiator, None)
             .and_then(|_| self.scan_all_inner());
-        self.finish("scan_all_modules", capabilities::SCAN_ALL_MODULES, t0, outcome)
+        let result = self.finish("scan_all_modules", capabilities::SCAN_ALL_MODULES, t0, outcome);
+        if result.success {
+            self.last_full_scan = Some(FinishedScan {
+                result: result.clone(),
+                by: initiator.to_string(),
+                taken: Instant::now(),
+            });
+        }
+        result
+    }
+
+    /// The last full scan this session finished, if there is one. Asks the
+    /// vehicle nothing.
+    pub fn last_full_scan(&self) -> Option<&FinishedScan> {
+        self.last_full_scan.as_ref()
     }
 
     /// Everything that answers on the bus currently selected.
@@ -7523,6 +7609,9 @@ impl DiagnosticService {
         let outcome = self
             .authorize(capabilities::CLEAR_DTCS, initiator, confirmation)
             .and_then(|_| self.clear_dtcs_inner(module_key));
+        // Whatever it did, a scan from before an attempt to clear is not a
+        // description of the vehicle any more.
+        self.last_full_scan = None;
         self.finish("clear_dtcs", capabilities::CLEAR_DTCS, t0, outcome)
     }
 

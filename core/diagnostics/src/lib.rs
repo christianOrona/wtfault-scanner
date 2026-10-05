@@ -38,4 +38,4 @@ pub use identity::{Candidate, Evidence, EvidenceSource, IdentityField, VehicleId
 pub use procedure::{ConditionCheck, Precondition, Procedure, ProcedureRun, ProcedureState};
 pub use recorder::SessionRecorder;
 pub use scorecard::{Scorecard, ScorecardDiff, SectionDiff};
-pub use service::{capabilities, DiagnosticService, DtcReport};
+pub use service::{capabilities, DiagnosticService, DtcReport, FinishedScan};

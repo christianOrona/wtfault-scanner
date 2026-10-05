@@ -17,6 +17,16 @@ with the caveat that everything below 1.0 is allowed to move.
   shown. A file's name alone is never enough for exact. The app downloads no
   calibration files and never writes one to a vehicle;
   `docs/CALIBRATION.md` has the whole of it.
+- **One full scan, used everywhere.** The AI inspection reads the full scan
+  you already ran instead of running its own, for half an hour or until codes
+  are cleared, and says that it did. A scan the inspection ran shows on the
+  *Full scan* tab without pressing anything. Pressing *Scan again* always
+  scans.
+- **Add settings for a car from the app.** *Settings on the car* has *Add a
+  profile file*: it shows what the file would add, then adds it. A profile, or
+  a file you put in the profiles folder yourself (*Check the folder again*),
+  now applies the next time you connect. It used to need the app restarted,
+  and no screen offered the import at all.
 - **Coolant temperature, intake air temperature, air flow and the odometer on
   newer cars.** Some engines, a 2023 Honda Odyssey among them, report these
   only on newer PIDs. They are read now, marked unverified until checked

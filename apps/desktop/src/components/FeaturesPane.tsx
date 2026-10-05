@@ -16,8 +16,8 @@
 // person who sees "your adapter cannot reach the second CAN bus" knows what to
 // buy, and a person who sees a grey button knows nothing.
 
-import { useCallback, useEffect, useState } from "react";
-import { api, describeError } from "../api/client";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { api, describeError, type ProfilePreview } from "../api/client";
 import { VehicleKnowledgePanel } from "./VehicleKnowledgePanel";
 import type { FeatureView, FeaturesData, ToolResult } from "../api/types";
 import { ChangeFlow } from "./ChangeFlow";
@@ -180,6 +180,12 @@ export function FeaturesPane({ connected }: { connected: boolean }) {
           module rather than only the ones awake on the bus. Placed above the
           list because it changes what the list can answer. */}
       <AsBuiltPanel connected={connected} />
+
+      {/* The way a setting gets onto this list. The API could take a profile
+          from the start and no screen offered it, so somebody who had a
+          mapping for their car had nowhere to put it, and anything dropped in
+          the folder needed the app restarted before it showed. */}
+      <AddSettings connected={connected} onAdded={() => void load()} />
 
       {features.map((f) => (
         <FeatureCard
@@ -369,4 +375,154 @@ function FeatureCard({
  * line beats burying it under the reasoning. */
 function countOf(features: FeatureView[], support: FeatureView["support"]): number {
   return features.filter((f) => f.support === support).length;
+}
+
+/**
+ * Add settings for a car from a profile file, and see them without a restart.
+ *
+ * Two steps, like every import here: the file is read and what it would add
+ * is shown, and nothing is kept until that is agreed to. A setting from a
+ * file arrives unverified whatever the file says about itself, which is the
+ * core's rule and not this screen's to soften.
+ */
+function AddSettings({ connected, onAdded }: { connected: boolean; onAdded: () => void }) {
+  const picker = useRef<HTMLInputElement>(null);
+  const [pending, setPending] = useState<{ name: string; text: string; preview: ProfilePreview } | null>(null);
+  const [said, setSaid] = useState<string | null>(null);
+  const [working, setWorking] = useState(false);
+
+  async function chosen(file: File) {
+    setWorking(true);
+    setSaid(null);
+    setPending(null);
+    try {
+      const text = await file.text();
+      const { preview } = await api.previewProfile(text, file.name);
+      setPending({ name: file.name, text, preview });
+    } catch (e) {
+      setSaid(`Could not read ${file.name}: ${describeError(e).message}`);
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function add() {
+    if (!pending) return;
+    setWorking(true);
+    try {
+      const done = await api.importProfile(pending.text, pending.name);
+      setSaid(
+        `Added ${done.features} ${done.features === 1 ? "setting" : "settings"} from ${pending.name}. ` +
+          (done.reconnect_to_use
+            ? "Press Disconnect and connect again to see them: the vehicle connected now keeps the list it started with."
+            : "They are listed the next time you connect."),
+      );
+      setPending(null);
+      onAdded();
+    } catch (e) {
+      setSaid(`Nothing was added: ${describeError(e).message}`);
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function checkFolder() {
+    setWorking(true);
+    setSaid(null);
+    try {
+      const r = await api.reloadProfiles();
+      const gained = r.settings_now - r.settings_before;
+      setSaid(
+        (gained > 0
+          ? `Found ${gained} more ${gained === 1 ? "setting" : "settings"} in the profiles folder.`
+          : "Nothing new in the profiles folder.") +
+          (gained > 0 && r.reconnect_to_use ? " Press Disconnect and connect again to see them." : ""),
+      );
+      onAdded();
+    } catch (e) {
+      setSaid(`Could not check the folder: ${describeError(e).message}`);
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  const blocking = pending?.preview.findings.filter((f) => f.severity === "blocking") ?? [];
+  const worth = pending?.preview.findings.filter((f) => f.severity !== "blocking") ?? [];
+
+  return (
+    <div className="card">
+      <div className="row" style={{ justifyContent: "space-between", gap: 12 }}>
+        <div>
+          <strong>Add settings for this car</strong>
+          <div className="faint">
+            Have a mapping, yours or somebody else's? Add its profile file and its settings are
+            listed here. {connected ? "" : "You do not need to be connected to add one. "}
+            A setting from a file arrives unverified, whatever the file says about itself.
+          </div>
+        </div>
+        <div className="row" style={{ gap: 8 }}>
+          <input
+            ref={picker}
+            type="file"
+            accept=".yaml,.yml"
+            style={{ display: "none" }}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              e.target.value = "";
+              if (file) void chosen(file);
+            }}
+          />
+          <button onClick={() => picker.current?.click()} disabled={working}>
+            {working && !pending ? <Spinner /> : "Add a profile file"}
+          </button>
+          <button
+            title="For a file you put in the profiles folder yourself. Settings shows where the folder is."
+            onClick={() => void checkFolder()}
+            disabled={working}
+          >
+            Check the folder again
+          </button>
+        </div>
+      </div>
+
+      {pending && (
+        <div style={{ marginTop: 10 }}>
+          <strong>{pending.name}</strong>
+          {pending.preview.changes.length > 0 && (
+            <ul style={{ margin: "6px 0 0 18px" }}>
+              {pending.preview.changes.map((c) => (
+                <li key={c.id}>
+                  {c.name}
+                  {c.overrides_measured
+                    ? " — replaces a setting measured on this vehicle"
+                    : c.overrides_existing
+                      ? " — replaces the one already listed"
+                      : ""}
+                </li>
+              ))}
+            </ul>
+          )}
+          {blocking.map((f, i) => (
+            <div key={i} className="banner caution" style={{ marginTop: 8, marginBottom: 0 }}>
+              <span className="b-code">cannot be added</span>
+              <span>{f.detail}</span>
+            </div>
+          ))}
+          {worth.map((f, i) => (
+            <div key={i} className="faint" style={{ marginTop: 6 }}>{f.detail}</div>
+          ))}
+          <div className="row" style={{ gap: 8, marginTop: 10 }}>
+            {pending.preview.acceptable && (
+              <button className="primary" onClick={() => void add()} disabled={working}>
+                {working ? <Spinner /> : `Add ${pending.preview.changes.length === 1 ? "this setting" : `these ${pending.preview.changes.length} settings`}`}
+              </button>
+            )}
+            <button onClick={() => setPending(null)} disabled={working}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {said && <div className="faint" style={{ marginTop: 8 }}>{said}</div>}
+    </div>
+  );
 }

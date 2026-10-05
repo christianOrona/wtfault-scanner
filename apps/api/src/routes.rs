@@ -38,6 +38,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/profiles", get(profiles))
         .route("/api/v1/profiles/preview", post(preview_profile))
         .route("/api/v1/profiles/import", post(import_profile))
+        .route("/api/v1/profiles/reload", post(reload_profiles))
         .route("/api/v1/features", get(features))
         .route("/api/v1/features/{id}", get(read_feature))
         .route("/api/v1/config/capture", post(capture_configuration))
@@ -89,7 +90,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/procedures", get(list_procedures))
         .route("/api/v1/procedures/{id}", get(check_procedure))
         .route("/api/v1/procedures/{id}/run", post(run_procedure))
-        .route("/api/v1/modules/scan-all", post(scan_all_modules))
+        .route("/api/v1/modules/scan-all", post(scan_all_modules).get(last_full_scan))
         .route("/api/v1/export", post(export_file))
         .route("/api/v1/export/database", post(export_database))
         .route(
@@ -210,7 +211,8 @@ async fn health(State(state): State<AppState>) -> ApiResult<Json<Value>> {
 /// that has it can explain anything on screen without another round trip.
 async fn explanations(State(state): State<AppState>) -> ApiResult<Json<Value>> {
     use aim_decoders::ExplainKind;
-    let c = &state.decoders.explanations;
+    let decoders = state.decoders();
+    let c = &decoders.explanations;
     let bucket = |k: ExplainKind| -> Vec<Value> {
         c.all(k).map(|e| json!({ "id": e.id, "easy": e.easy, "technical": e.technical })).collect()
     };
@@ -332,16 +334,37 @@ async fn probe_feature_write_gate(
 /// Reported rather than silent: a user who cannot see what got loaded cannot
 /// tell an app that read their file from one that ignored it.
 async fn profiles(State(state): State<AppState>) -> Json<Value> {
-    Json(json!({
-        "report": state.decoders.profiles,
-        "feature_count": state.decoders.features.len(),
-        "features_from_profiles": state
-            .decoders
+    Json(profiles_report(&state))
+}
+
+/// What the profiles folder contributed to the definitions in force.
+fn profiles_report(state: &AppState) -> Value {
+    let decoders = state.decoders();
+    json!({
+        "report": decoders.profiles,
+        "feature_count": decoders.features.len(),
+        "features_from_profiles": decoders
             .features
             .all()
             .filter(|f| f.source.as_deref().is_some_and(|s| s.starts_with("user:")))
             .count(),
-    }))
+    })
+}
+
+/// `POST /api/v1/profiles/reload`
+///
+/// Read the profiles folder again. For somebody who has just put a file in it:
+/// what is there is in force from the next connection, without restarting the
+/// app. A session already connected keeps what it started with, and the answer
+/// says whether one is.
+async fn reload_profiles(State(state): State<AppState>) -> ApiResult<Json<Value>> {
+    let (before, after) = state.reload_profiles()?;
+    let connected = state.peek_service(|s| s.state().is_usable()).await?.unwrap_or(false);
+    let mut report = profiles_report(&state);
+    report["settings_before"] = json!(before);
+    report["settings_now"] = json!(after);
+    report["reconnect_to_use"] = json!(connected);
+    Ok(Json(report))
 }
 
 async fn capabilities(State(state): State<AppState>) -> ApiResult<Json<Value>> {
@@ -1002,6 +1025,31 @@ async fn scan_all_modules(State(state): State<AppState>) -> ApiResult<Json<ToolR
             .with_service_named("a full scan of every module", |s| s.scan_all_modules("user:api"))
             .await?,
     ))
+}
+
+/// The last full scan this session finished, without asking the vehicle.
+///
+/// A full scan is done once and seen everywhere: the assistant's inspection
+/// is handed one that is already here, and this is how the Full scan screen
+/// shows one the assistant ran. `scan` is `null` when none has been run since
+/// connecting, or since codes were last cleared.
+///
+/// Asked while a scan is running, it answers when that scan has finished,
+/// with that scan. So a screen that lost track of a scan it started, or was
+/// opened in the middle of somebody else's, ends up showing the result.
+async fn last_full_scan(State(state): State<AppState>) -> ApiResult<Json<Value>> {
+    let last = state
+        .peek_service(|s| {
+            s.last_full_scan().map(|scan| {
+                json!({
+                    "result": scan.result,
+                    "by": if scan.by.starts_with("agent") { "assistant" } else { "person" },
+                    "age_seconds": scan.age().as_secs(),
+                })
+            })
+        })
+        .await?;
+    Ok(Json(json!({ "scan": last.flatten() })))
 }
 
 /// Emissions readiness from every module that keeps it.
@@ -2042,7 +2090,7 @@ async fn preview_profile(
     Json(body): Json<ImportBody>,
 ) -> ApiResult<Json<Value>> {
     let (text, source) = profile_text(&body).await?;
-    let preview = aim_decoders::import::preview(&text, &source, &state.decoders.features);
+    let preview = aim_decoders::import::preview(&text, &source, &state.decoders().features);
     Ok(Json(json!({ "preview": preview })))
 }
 
@@ -2061,7 +2109,7 @@ async fn import_profile(
         ));
     };
     let (text, source) = profile_text(&body).await?;
-    let preview = aim_decoders::import::preview(&text, &source, &state.decoders.features);
+    let preview = aim_decoders::import::preview(&text, &source, &state.decoders().features);
     if !preview.acceptable {
         return Err(ApiError::bad_request(format!(
             "this profile was not accepted: {}",
@@ -2098,14 +2146,24 @@ async fn import_profile(
     std::fs::write(&path, yaml.as_bytes())
         .map_err(|e| ApiError::bad_request(format!("could not write {}: {e}", path.display())))?;
 
+    // In force now, for the next connection. It used to wait for a restart.
+    state.reload_profiles()?;
+    let connected = state.peek_service(|s| s.state().is_usable()).await?.unwrap_or(false);
+
     Ok(Json(json!({
         "imported": true,
         "path": path.display().to_string(),
         "features": preview.changes.len(),
         "preview": preview,
-        "note": "Imported unverified, whatever the file claimed about itself. It takes effect \
-                 when the app next starts: swapping definitions under a live session would \
-                 change what a reading means halfway through one.",
+        "reconnect_to_use": connected,
+        "note": if connected {
+            "Imported unverified, whatever the file claimed about itself. It is loaded, and \
+             the vehicle connected now keeps the definitions it started with: disconnect and \
+             connect again to see these settings."
+        } else {
+            "Imported unverified, whatever the file claimed about itself. It is loaded and \
+             applies the next time you connect."
+        },
     })))
 }
 

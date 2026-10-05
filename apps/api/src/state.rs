@@ -202,7 +202,7 @@ pub struct AppState {
     /// Session history. Available whether or not an adapter is connected.
     pub store: SessionStore,
     /// Decoder set, shared by every session.
-    pub decoders: Arc<DecoderSet>,
+    decoders: Arc<std::sync::RwLock<Arc<DecoderSet>>>,
     /// Tool schemas.
     pub tools: Arc<ToolRegistry>,
     /// Launch configuration.
@@ -221,11 +221,46 @@ impl AppState {
             busy: Arc::new(Mutex::new(None)),
             last_adapter: Arc::new(Mutex::new(None)),
             store,
-            decoders: Arc::new(decoders),
+            decoders: Arc::new(std::sync::RwLock::new(Arc::new(decoders))),
             tools: Arc::new(ToolRegistry::phase1()),
             settings: Arc::new(aim_agent::SettingsStore::new(config.settings_path.clone())),
             config: Arc::new(config),
         }
+    }
+
+    /// The definitions in force: decoders, code descriptions, the settings
+    /// catalogue and whatever profiles were loaded over them.
+    pub fn decoders(&self) -> Arc<DecoderSet> {
+        match self.decoders.read() {
+            Ok(set) => Arc::clone(&set),
+            Err(poisoned) => Arc::clone(&poisoned.into_inner()),
+        }
+    }
+
+    /// Read the profiles folder again and put what is there in force.
+    ///
+    /// A profile used to take effect only when the app next started, so
+    /// somebody who had just added a mapping for their car was told to close
+    /// the app to see it. Now it is in force for the next connection.
+    ///
+    /// **A session already connected keeps the definitions it started with.**
+    /// That part of the old rule stands: swapping definitions under a live
+    /// session would change what a reading means halfway through its record.
+    /// Returns how many settings the catalogue held before and holds now.
+    pub fn reload_profiles(&self) -> ApiResult<(usize, usize)> {
+        let fresh = match &self.config.profiles_dir {
+            Some(dir) => DecoderSet::with_profiles(dir),
+            None => DecoderSet::generic_obd(),
+        }
+        .map_err(ApiError::new)?;
+        let mut slot = self
+            .decoders
+            .write()
+            .map_err(|_| ApiError::internal("the definitions lock was poisoned"))?;
+        let before = slot.features.len();
+        let after = fresh.features.len();
+        *slot = Arc::new(fresh);
+        Ok((before, after))
     }
 
     /// Run `f` against the active service on a blocking thread.
@@ -380,7 +415,7 @@ impl AppState {
         }
 
         let store = self.store.clone();
-        let decoders = Arc::clone(&self.decoders);
+        let decoders = self.decoders();
         let label = request.label.clone();
 
         let service_slot = Arc::clone(&self.service);

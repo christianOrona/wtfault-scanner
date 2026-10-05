@@ -20,18 +20,21 @@
 //  * A module with no fault service is not a module with no faults. Both show
 //    zero, and they mean entirely different things.
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api, describeError } from "../api/client";
 import type { FullScanData, ScannedModule, ToolResult, UdsFault } from "../api/types";
-import { ErrorBanner, FailedResult, Spinner, Warnings } from "./primitives";
+import { ErrorBanner, FailedResult, Spinner, Warnings, localTime } from "./primitives";
 import { PaneIntro, useExplain } from "../explain";
 import { saveFile, scanFilename, toCsv, whereSaved } from "./exportFile";
 
-export function FullScanPane({ connected }: { connected: boolean }) {
+export function FullScanPane({ connected, active }: { connected: boolean; active: boolean }) {
   const [result, setResult] = useState<ToolResult<FullScanData> | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<{ code: string; message: string } | null>(null);
   const [savedTo, setSavedTo] = useState<string | null>(null);
+  // Who ran the scan on screen. The assistant's inspection runs one too, and
+  // it is the same scan: shown here rather than run a second time.
+  const [ranBy, setRanBy] = useState<"assistant" | "person" | null>(null);
   const { easy } = useExplain();
 
   const run = useCallback(async () => {
@@ -39,12 +42,41 @@ export function FullScanPane({ connected }: { connected: boolean }) {
     setError(null);
     try {
       setResult(await api.scanAllModules());
+      setRanBy("person");
     } catch (e) {
       setError(describeError(e));
     } finally {
       setBusy(false);
     }
   }, []);
+
+  // A scan is done once per sitting and seen everywhere. Each time this tab
+  // is opened it asks the core for the session's last one, so a scan the
+  // assistant ran during an inspection is here without pressing anything, and
+  // one that was still running when the tab was left arrives when it ends.
+  useEffect(() => {
+    if (!active || !connected) return;
+    let stale = false;
+    api
+      .lastFullScan()
+      .then(({ scan }) => {
+        if (stale || !scan) return;
+        setResult((shown) =>
+          // Never replace a newer scan with an older one.
+          shown && shown.timestamp >= scan.result.timestamp ? shown : scan.result,
+        );
+        setRanBy((who) => who ?? scan.by);
+      })
+      .catch(() => {
+        // Nothing connected, or the core went away: the pane says so itself.
+      });
+    return () => { stale = true; };
+  }, [active, connected]);
+
+  // A new vehicle is a new scan.
+  useEffect(() => {
+    if (!connected) { setResult(null); setRanBy(null); }
+  }, [connected]);
 
   const data = result?.success ? result.data : null;
   const modules = data?.modules ?? [];
@@ -103,7 +135,7 @@ export function FullScanPane({ connected }: { connected: boolean }) {
             </button>
           )}
           <button className="primary" onClick={() => void run()} disabled={busy || !connected}>
-            {busy ? <Spinner label="Scanning every module…" /> : "Scan the whole vehicle"}
+            {busy ? <Spinner label="Scanning every module…" /> : result ? "Scan again" : "Scan the whole vehicle"}
           </button>
         </div>
       </div>
@@ -116,6 +148,14 @@ export function FullScanPane({ connected }: { connected: boolean }) {
       )}
 
       <ErrorBanner error={error} />
+
+      {result?.success && ranBy && (
+        <div className="faint" style={{ marginBottom: 10 }}>
+          {ranBy === "assistant" ? "This is the scan the AI inspection ran" : "Scanned"}{" "}
+          at {localTime(result.timestamp)}. It is one scan, used everywhere: for the next half
+          hour the AI inspection reads this one instead of running its own.
+        </div>
+      )}
       {savedTo && (
         <div className="banner info">
           <span className="b-code">saved</span>

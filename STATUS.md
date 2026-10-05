@@ -375,6 +375,12 @@ Honest gaps, in the order they matter.
 - **No manufacturer-specific decoding.** Everything is the public standard,
   which is why it works across brands and also why a module can answer with a
   code nobody has a description for.
+- **A setting from a profile cannot be changed until it has been verified on
+  the vehicle.** A profile can be added from the Settings screen and is listed
+  on the next connection, but its mappings arrive unverified whatever the file
+  claims, and only a verified mapping permits a write. Verifying one is still
+  the hand procedure: capture, change the setting some other way, capture,
+  compare. Nothing finds a mapping for you, online or otherwise.
 - **Profile import has never been used with a real shared profile.** A YAML
   file can be dropped in the folder, pasted, or fetched from an `https://`
   address after a preview of what it would change; nobody has published one.

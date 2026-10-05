@@ -82,8 +82,8 @@ with a paid scan tool.
 ### It gets smarter without a new version
 
 Everything it knows about vehicles is **data, not code** — sensor scaling, code
-descriptions, plain-language explanations, configurable features. Drop a YAML
-file in a folder, restart, done. No rebuild, no update, no waiting for a vendor
+descriptions, plain-language explanations, configurable features. Add a YAML
+file from the app, or drop one in a folder, and reconnect. No rebuild, no update, no waiting for a vendor
 to decide your car is worth supporting.
 
 That is also the honest answer to the manufacturer paywall. Nobody can

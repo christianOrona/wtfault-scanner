@@ -440,14 +440,17 @@ finding, or when the build has no profiles directory.
   "path": "C:/Users/you/AppData/Roaming/ai-mechanic/profiles/imported-example-yaml.yaml",
   "features": 1,
   "preview": { "...": "as above" },
-  "note": "Imported unverified, whatever the file claimed about itself. It takes effect when the app next starts: ..."
+  "reconnect_to_use": false,
+  "note": "Imported unverified, whatever the file claimed about itself. It is loaded and applies the next time you connect."
 }
 ```
 
 Every verification claim in the file is stripped before it is written, so no
-trusted-looking definition ever exists on disk. It loads on the **next start**,
-deliberately: swapping definitions under a live session would change what a
-reading means halfway through one.
+trusted-looking definition ever exists on disk. It is in force from the **next
+connection**, without restarting the app. A session connected at the time
+keeps what it started with (`reconnect_to_use` is then `true`), deliberately:
+swapping definitions under a live session would change what a reading means
+halfway through one.
 
 #### `GET /tools`
 
@@ -2717,6 +2720,37 @@ session is far past what `POST /export` accepts as a body.
 ```
 
 → the same answer as `POST /export`. `redact` is on unless set to `false`.
+
+---
+
+### One full scan, and reloading profiles
+
+#### `GET /modules/scan-all`
+
+The last full scan this session finished, without asking the vehicle anything.
+
+→ `{ "scan": { "result": { /* the ToolResult POST returned */ }, "by": "person", "age_seconds": 212 } }`,
+or `{ "scan": null }` when none has been run since connecting or since codes
+were cleared. `by` is `person` or `assistant`.
+
+A full scan is done once and used everywhere. `POST /modules/scan-all` from a
+person always scans. The assistant's `scan_all_modules` tool call is answered
+with this scan when it is under thirty minutes old, with a `full_scan_reused`
+warning saying so. Clearing codes, or trying to, discards it.
+
+Asked while a scan is running, this waits and answers with that scan.
+
+#### `POST /profiles/reload`
+
+Read the profiles folder again, for a file put there by hand.
+
+→ the same object as `GET /profiles`, plus `settings_before`, `settings_now`
+and `reconnect_to_use`.
+
+Profiles are in force from the **next connection**. A session already
+connected keeps the definitions it started with, and `reconnect_to_use` is
+`true` when one is. `POST /profiles/import` reloads by itself and answers with
+the same flag; neither needs the app restarted.
 
 ---
 

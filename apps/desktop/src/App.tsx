@@ -571,7 +571,7 @@ export default function App() {
                   yet" beside a button that would start a second one. Seen on a
                   2023 Odyssey, where it was pressed again. */}
               <div className="tab-panel" hidden={tab !== "fullscan"}>
-                <FullScanPane connected={connected} />
+                <FullScanPane connected={connected} active={tab === "fullscan"} />
               </div>
               {tab === "tests" && <GuidedTestsPane connected={connected} onEvidence={showEvidence} />}
               {tab === "features" && <FeaturesPane connected={connected} />}
