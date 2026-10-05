@@ -14,6 +14,7 @@
 //!   is the single most common thing that happens in a garage. The model has to
 //!   see it, say so, and carry on with what it can read.
 
+use crate::claims::FaultReads;
 use crate::error::AgentError;
 use crate::provider::{
     ChatRequest, Content, LlmProvider, Message, Role, StopReason, ToolSpec, Usage,
@@ -172,6 +173,12 @@ impl<'a> Agent<'a> {
         // Code -> catalog description, for the evidence-only fallback report.
         let mut code_details: std::collections::BTreeMap<String, Option<String>> =
             std::collections::BTreeMap::new();
+        // Which modules had their trouble codes read this run, so a chat
+        // answer that says there are no faults can be held to it.
+        let mut fault_reads = FaultReads::default();
+        // An answer is handed back for a missing read once. A model that says
+        // it again has been told, and a second round would only spend a turn.
+        let mut handed_back = false;
 
         while steps < self.max_steps {
             steps += 1;
@@ -228,7 +235,8 @@ impl<'a> Agent<'a> {
             usage.cache_read_tokens += response.usage.cache_read_tokens;
 
             let said = response.text();
-            if !said.is_empty() {
+            let spoke = !said.is_empty();
+            if spoke {
                 sink.emit(AgentEvent::Thinking(said.clone()));
                 text = said;
             }
@@ -253,6 +261,23 @@ impl<'a> Agent<'a> {
                         report::SUBMIT_TOOL
                     )));
                     continue;
+                }
+                // A chat answer that says there are no faults, when the
+                // trouble codes were not read this run, is not the answer.
+                //
+                // Reproduced on 2026-10-05 against the simulated F-250 with
+                // three codes in its engine module: one read, the full scan,
+                // and then "No engine or airbag faults anywhere". The same
+                // failure `submit_report` is refused for, in prose. It is
+                // handed back like an incoherent report so the model can make
+                // the read, rather than the person receiving the claim.
+                if !expect_report && spoke && !handed_back && steps < self.max_steps {
+                    if let Some(claim) = fault_reads.unread_claim(&text) {
+                        handed_back = true;
+                        messages.push(Message { role: Role::Assistant, content: response.content });
+                        messages.push(Message::user(claim.handed_back()));
+                        continue;
+                    }
                 }
                 break;
             }
@@ -372,6 +397,7 @@ impl<'a> Agent<'a> {
                 seen.insert(key, summary.clone());
                 if success {
                     ran_tools.insert(name.clone());
+                    fault_reads.note(&name, &raw);
                     if let Some(list) =
                         raw.get("data").and_then(|d| d.get("dtcs")).and_then(|d| d.as_array())
                     {
@@ -421,6 +447,16 @@ impl<'a> Agent<'a> {
             // descriptions this build ships.
             let codes: Vec<(String, Option<String>)> = code_details.into_iter().collect();
             report = Some(Report::from_evidence(&codes, steps));
+        }
+
+        // Said again after being handed back, or said with no turn left to
+        // hand it back in. The claim does not go out on its own: the
+        // application says, ahead of it and in its own words, what was not
+        // read. The model's answer is left as it wrote it.
+        if !expect_report {
+            if let Some(claim) = fault_reads.unread_claim(&text) {
+                text = format!("{}\n\n{text}", claim.correction());
+            }
         }
 
         sink.emit(AgentEvent::Finished);

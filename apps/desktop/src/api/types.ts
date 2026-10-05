@@ -817,6 +817,8 @@ export interface UdsFault {
 }
 
 export interface ScannedModule {
+  /** The name every other module endpoint takes, e.g. `ECU_7E8`. */
+  module_key?: string;
   /** Null on a pre-CAN vehicle, where modules are not addressed one at a time. */
   request_address: string | null;
   address: string;
@@ -825,6 +827,12 @@ export interface ScannedModule {
   in_legislated_range: boolean;
   faults: UdsFault[];
   fault_count: number;
+  /**
+   * False when the module may keep emissions codes and the scan did not ask
+   * for them: an empty `faults` is then not a clean module. Null when it keeps
+   * none. True on a pre-CAN vehicle, where those codes are the scan.
+   */
+  emissions_codes_read?: boolean | null;
   /** Why this module produced no faults, when that needs explaining. */
   note: string | null;
   /**

@@ -126,6 +126,52 @@ fn a_scan_from_before_codes_were_cleared_is_not_handed_on() {
     assert!(!codes(&again.warnings).contains(&"full_scan_reused"));
 }
 
+/// The scan asks each module for its UDS fault memory and nothing else. This
+/// truck's engine module keeps its codes where a code reader looks and none
+/// where the scan looks, so its entry has to say which of the two was read.
+///
+/// Reproduced on 2026-10-05: handed this scan and nothing else, the assistant
+/// told an owner there was nothing in the engine module.
+#[test]
+fn an_engine_with_codes_and_an_empty_fault_memory_is_not_listed_as_clean() {
+    let mut service = connected();
+
+    let read = service.read_dtcs(Some("ECU_7E8"), PERSON);
+    let stored: Vec<String> = read.data.unwrap()["dtcs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| d["code"].as_str().unwrap().to_string())
+        .collect();
+    for code in ["P2463", "P242F", "P2002"] {
+        assert!(stored.iter().any(|c| c == code), "{code} is stored: {stored:?}");
+    }
+
+    let scan = service.scan_all_modules(PERSON);
+    assert!(scan.success, "{:?}", scan.error);
+    let data = scan.data.clone().unwrap();
+    let modules = data["modules"].as_array().unwrap();
+
+    let engine = modules.iter().find(|m| m["module_key"] == "ECU_7E8").expect("the engine module");
+    assert_eq!(engine["fault_count"], 0, "its UDS fault memory is empty");
+    assert!(engine["note"].is_null(), "and it answered, so nothing else explains the zero");
+    assert_eq!(engine["emissions_codes_read"], false, "so the entry says what was not asked");
+
+    // A module outside the legislated block keeps no emissions codes, and
+    // nothing is left unread there.
+    let brakes = modules.iter().find(|m| m["module_key"] == "ECU_768").expect("the brake module");
+    assert!(brakes["emissions_codes_read"].is_null(), "{brakes}");
+
+    let scope = scan.warnings.iter().find(|w| w.code == "uds_scan_scope").expect("the scope note");
+    assert!(scope.message.contains("03, 07 and 0A"), "{}", scope.message);
+    assert!(scope.message.contains("not a clean result"), "{}", scope.message);
+
+    // The scan the assistant is handed says the same.
+    let handed_on = service.scan_all_modules(ASSISTANT);
+    assert!(codes(&handed_on.warnings).contains(&"full_scan_reused"));
+    assert_eq!(handed_on.data.unwrap()["modules"], data["modules"]);
+}
+
 /// A scan that failed is not a scan to hand anybody.
 #[test]
 fn a_failed_scan_is_not_kept() {

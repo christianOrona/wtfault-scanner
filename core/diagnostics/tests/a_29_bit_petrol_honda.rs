@@ -73,6 +73,11 @@ fn the_full_scan_sweeps_29_bit_addresses_and_finds_both_modules() {
         .map(|m| m["address"].as_str().unwrap())
         .collect();
     assert_eq!(addresses, ["18DAF110", "18DAF11E"]);
+    // 29-bit addressing has no legislated block to rule a module out of, so
+    // neither is taken to keep no emissions codes.
+    for module in data["modules"].as_array().unwrap() {
+        assert_eq!(module["emissions_codes_read"], false, "{module}");
+    }
     assert!(
         !scan.warnings.iter().any(|w| w.code == "no_fault_lists_read"),
         "both modules hand over fault lists: {:?}",

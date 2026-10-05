@@ -51,6 +51,15 @@ with the caveat that everything below 1.0 is allowed to move.
 
 ### Fixed
 
+- **Ask no longer says the engine has no faults without reading its codes.**
+  Asked whether a truck was safe to drive, the assistant read only the full
+  scan and answered that there was nothing in the engine module. The engine
+  had three codes. The full scan reads each module's own fault memory and not
+  the trouble codes a code reader shows, and nothing in its result said so. It
+  says so now, module by module. An answer that says "no faults" when the
+  trouble codes were not read for it is also held back until they are, and if
+  the model says it again anyway the answer opens with a note that they were
+  not read.
 - **A file declared to be two calibrations is no longer an exact match.** If
   one of the two was the module's, the file was called exact. It is now
   *conflicting evidence* and is not judged either way.

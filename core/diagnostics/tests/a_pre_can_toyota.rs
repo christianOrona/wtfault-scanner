@@ -149,6 +149,9 @@ fn the_full_scan_reads_what_the_k_line_can_reach_and_says_so() {
     assert!(data["fault_count"].as_u64().unwrap() > 0);
     assert_eq!(data["buses"][0]["label"], "K-line (pin 7)");
     let engine = data["modules"].as_array().unwrap().iter().find(|m| m["address"] == "10").unwrap();
+    // Here the legislated services are the scan, so the codes were read.
+    assert_eq!(engine["module_key"], "ECU_10");
+    assert_eq!(engine["emissions_codes_read"], true);
     // A code both confirmed and permanent is one fault, listed once.
     let faults = engine["faults"].as_array().unwrap();
     let p2463: Vec<&serde_json::Value> = faults.iter().filter(|f| f["code"] == "P2463").collect();

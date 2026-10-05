@@ -290,8 +290,22 @@ impl ToolRegistry {
                 "scan_all_modules",
                 capabilities::SCAN_ALL_MODULES,
                 PermissionLevel::L0,
-                "Find every control module on the vehicle and read its stored faults. This \n                 reaches far beyond the emissions system that `read_dtcs` covers - brakes, \n                 airbag, body, transmission - and is the only way to see a fault in a module \n                 the legislated services cannot address. Slower than `read_dtcs` because it \n                 sweeps the whole diagnostic address range, so run it once, early, rather \n                 than repeatedly. Each fault says whether it is failing right now or merely \n                 stored from an earlier drive; those mean very different things.",
-                "Every module that answered, with its address and its faults, each carrying \n                 status and a description when this build has one.",
+                "Find every control module on the vehicle and read its fault memory. This \
+                 reaches far beyond the emissions system that `read_dtcs` covers - brakes, \
+                 airbag, body, transmission - and is the only way to see a fault in a module \
+                 the legislated services cannot address. It does NOT include what `read_dtcs` \
+                 reads: the stored, pending and permanent trouble codes of the engine and the \
+                 other emissions modules are asked for with different services, and this scan \
+                 does not ask them. A module listed here with `emissions_codes_read: false` \
+                 and no faults has not been shown to have none; run `read_dtcs` as well before \
+                 saying that it, or the vehicle, is free of faults. Slower than `read_dtcs` \
+                 because it sweeps the whole diagnostic address range, so run it once, early, \
+                 rather than repeatedly. Each fault says whether it is failing right now or \
+                 merely stored from an earlier drive; those mean very different things.",
+                "Every module that answered, with its `module_key`, its address and its faults, \
+                 each carrying status and a description when this build has one. \
+                 `emissions_codes_read` is false for a module whose trouble codes this scan did \
+                 not ask for, and null for one that keeps none.",
                 no_args(),
             ),
             ToolSchema::new(
@@ -393,10 +407,13 @@ impl ToolRegistry {
                 "read_dtcs",
                 capabilities::READ_DTCS,
                 PermissionLevel::L0,
-                "Read stored, pending and permanent diagnostic trouble codes. Descriptions come \
+                "Read stored, pending and permanent diagnostic trouble codes. This is the only \
+                 read of the emissions codes: `scan_all_modules` does not include them, so a \
+                 full scan alone never shows that the engine has no codes. Descriptions come \
                  from a catalog; a code that is not in it is returned with its structural \
                  decoding and no description rather than an invented one.",
-                "Decoded trouble codes with status, module, description and verification status.",
+                "Decoded trouble codes with status, module, description and verification status, \
+                 and `modules_read`: the modules that were asked.",
                 module_arg(false),
             ),
             ToolSchema::new(

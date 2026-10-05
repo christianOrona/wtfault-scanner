@@ -22,12 +22,14 @@
 //! # Layout
 //!
 //! * [`provider`] — the vendor-neutral seam: Anthropic, OpenAI-compatible, Ollama.
+//! * [`claims`] — a chat answer that says "no faults", checked against what was read.
 //! * [`settings`] — which providers are configured, and where the keys live.
 //! * [`error`] — failures, and the [`error::Secret`] wrapper that keeps
 //!   credentials out of logs.
 
 #![warn(missing_docs)]
 
+pub mod claims;
 pub mod credentials;
 pub mod error;
 pub mod privacy;

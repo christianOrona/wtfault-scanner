@@ -1442,8 +1442,10 @@ more.
   "addresses_swept_blind": 252,
   "modules": [
     {
+      "module_key": "ECU_768",
       "address": "768", "request_address": "760", "name": "Module at 768",
       "in_legislated_range": false, "fault_count": 2, "note": null,
+      "emissions_codes_read": null,
       "faults": [
         { "code": "C0035-00", "base_code": "C0035", "status": 9,
           "status_summary": "failing right now", "failing_now": true, "confirmed": true,
@@ -1467,6 +1469,24 @@ emissions diagnostics and reaches the engine and transmission controllers only;
 a vehicle with a dead airbag module and a failing body controller comes back
 clean from it. `0x19` asks every module, and it is a public standard that works
 the same on every manufacturer.
+
+**The scan does not include the emissions codes.** It asks each module for its
+UDS fault memory and nothing else, so the stored, pending and permanent codes a
+code reader shows (services 03, 07 and 0A) are not in it; they come from
+[`GET /modules/{key}/dtcs`](#get-moduleskeydtcs--toolresult) and the
+assistant's `read_dtcs`. `emissions_codes_read` says which modules that matters
+for:
+
+- `false`: the module may keep emissions codes and this scan did not ask for
+  them. An empty `faults` list here is not a clean module. Every module in the
+  legislated block, and every primary-bus module on a 29-bit vehicle, where no
+  such block is defined.
+- `null`: the module keeps none, so nothing was left unasked.
+- `true`: a pre-CAN vehicle, where the legislated services are the scan.
+
+On the simulated F-250 with a clogged exhaust filter the engine module is
+`"fault_count": 0, "emissions_codes_read": false` while holding three codes.
+`module_key` is the name every other module endpoint takes.
 
 Addresses where this vehicle has answered before are asked first and taken out
 of the blind sweep: they answer in milliseconds, while an address with nothing on
@@ -2294,6 +2314,14 @@ core's mouth. The model re-reads what it needs.
   `evidence_ref`). Build follow-up suggestions from it, not from the prose.
 - `truncated: true` means the step limit stopped the run before the model
   finished.
+- An answer that says there are no faults is checked against the reads of this
+  turn. If the trouble codes were not read in it, the answer is not returned:
+  the model is told which modules it has not read and is given one more go, and
+  that first answer shows in `trace` as a `thinking` entry. If it says the same
+  again without reading them, `text` opens with a note from the application
+  saying what was not read, ahead of the model's own words. Recognising the
+  claim is a matter of wording, so this catches the usual ways of saying it and
+  not every way.
 - `question` is set when the model asked the person something only they can
   answer — what the dash menu shows, whether a noise happens cold:
   `{ "question": "...", "options": ["...", "..."], "why": "..." }`, two to five

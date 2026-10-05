@@ -340,6 +340,29 @@ fn in_legislated_range(request_addr: &str) -> serde_json::Value {
     }
 }
 
+/// Whether the address sweep read a module's emissions codes: `false` where it
+/// may keep some, `null` where it keeps none.
+///
+/// The sweep asks every module one question, UDS `0x19`. A module in the
+/// legislated block also keeps the codes a code reader shows (stored, pending
+/// and permanent: services 03, 07 and 0A) and the sweep does not ask for
+/// those. A module on the legislated bus whose address does not rule it out of
+/// that block is treated as one that may.
+///
+/// Reproduced on the simulated F-250 on 2026-10-05: the engine module held
+/// P2463, P242F and P2002 and an empty UDS fault memory. The scan listed it
+/// with no faults, and the assistant, having read only the scan, told an owner
+/// there was nothing in the engine module. An empty list has to say which
+/// question it is the answer to.
+fn emissions_codes_read_by_sweep(bus: VehicleBus, request_addr: &str) -> serde_json::Value {
+    let may_keep_them =
+        bus.answers_obd2() && in_legislated_range(request_addr) != serde_json::json!(false);
+    match may_keep_them {
+        true => serde_json::json!(false),
+        false => serde_json::Value::Null,
+    }
+}
+
 /// The wire a pre-CAN protocol runs on, by its connector pins.
 ///
 /// `None` for CAN, and for a protocol not yet known: the label for those is the
@@ -5843,7 +5866,10 @@ impl DiagnosticService {
             if let Ok(stored) = self.store.upsert_module(&record) {
                 let _ = self.store.append_event(
                     &self.session.id,
-                    EventKind::ModuleDiscovered { module_key: key, address: response_addr.clone() },
+                    EventKind::ModuleDiscovered {
+                        module_key: key.clone(),
+                        address: response_addr.clone(),
+                    },
                 );
                 // This is the one read that reaches every module, which makes
                 // it the one a comparison between two visits most needs.
@@ -5858,12 +5884,16 @@ impl DiagnosticService {
             // the invention this project refuses. One that has said, through
             // service 09, keeps what it said.
             modules.push(serde_json::json!({
+                // The name every other read knows this module by.
+                "module_key": key,
                 "request_address": request_addr,
                 "address": response_addr,
                 "name": name,
                 "in_legislated_range": in_legislated_range(request_addr),
                 "faults": dtcs,
                 "fault_count": fault_count,
+                "emissions_codes_read":
+                    emissions_codes_read_by_sweep(self.adapter.current_bus(), request_addr),
                 "note": note,
                 "cut_off": cut_off,
             }));
@@ -5882,9 +5912,13 @@ impl DiagnosticService {
         }
         warnings.push(Warning::info(
             "uds_scan_scope",
-            "This reads every module that answers on the standard diagnostic addresses, not \
-             only the emissions ones. Codes outside the emissions system are reported with \
-             their raw identifier when this build has no description for them.",
+            "This reads the fault memory (UDS 0x19) of every module that answers on the \
+             standard diagnostic addresses, not only the emissions ones. It does not ask the \
+             emissions services a code reader uses (03, 07 and 0A), so the stored, pending and \
+             permanent trouble codes of the engine and the other emissions modules are not in \
+             this result: they are read separately, as trouble codes. For one of those modules \
+             an empty list here is not a clean result. Codes outside the emissions system are \
+             reported with their raw identifier when this build has no description for them.",
         ));
 
         Ok(Payload {
@@ -6125,12 +6159,15 @@ impl DiagnosticService {
                     })
                     .collect();
                 serde_json::json!({
+                    "module_key": m.module_key,
                     "request_address": null,
                     "address": m.address,
                     "name": m.name,
                     "in_legislated_range": true,
                     "fault_count": faults.len(),
                     "faults": faults,
+                    // The legislated services are how this path reads at all.
+                    "emissions_codes_read": true,
                     "note": null,
                     "cut_off": null,
                 })
