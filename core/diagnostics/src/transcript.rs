@@ -238,9 +238,23 @@ impl Frame {
     /// `< 7E8 21 37 57 ...`, or `None` for anything that is not a frame
     /// (`ELM327 v1.5`, `SEARCHING...`, `NO DATA`, a headerless reply).
     fn parse(line: &str) -> Option<Frame> {
-        let mut tokens = line.strip_prefix("< ")?.split_whitespace();
-        let address = tokens.next()?;
-        if !matches!(address.len(), 3 | 8) || !address.chars().all(|c| c.is_ascii_hexdigit()) {
+        let reply = line.strip_prefix("< ")?;
+        // A 29-bit address printed with spaces on is four separate bytes,
+        // `18 DA F1 10`, not one token. Measured on a 2023 Honda Odyssey
+        // through an OBDLink MX+ (2026-10-04): its VIN went unreplaced, and
+        // the export was refused, because no line of it parsed as a frame.
+        // Only the two ISO 15765-4 29-bit forms are taken as an address, so a
+        // reply printed without headers is still not mistaken for one.
+        let spaced_29_bit = ["18 DA ", "18 DB "].iter().any(|p| reply.starts_with(p));
+        let (address, rest) = if spaced_29_bit && reply.len() > 11 && reply.is_char_boundary(11) {
+            reply.split_at(11)
+        } else {
+            reply.split_once(char::is_whitespace)?
+        };
+        let tokens = rest.split_whitespace();
+        if !spaced_29_bit
+            && (!matches!(address.len(), 3 | 8) || !address.chars().all(|c| c.is_ascii_hexdigit()))
+        {
             return None;
         }
         let bytes = tokens
@@ -256,7 +270,7 @@ impl Frame {
             return None;
         }
         Some(Frame {
-            address: address.to_string(),
+            address: address.trim_end().to_string(),
             pci: bytes[..pci_len].to_vec(),
             data: bytes[pci_len..].to_vec(),
         })
@@ -322,6 +336,34 @@ mod tests {
             out,
             "> 0902\n< 7E8 10 14 49 02 01 31 46 54\n< 7E8 21 45 58 31 45 50 35 4A\n< 7E8 22 46 41 30 30 30 30 30\n"
         );
+    }
+
+    /// As an OBDLink MX+ printed a 2023 Odyssey's VIN reply: the 29-bit
+    /// address as four bytes on every line. The VIN here is made up.
+    #[test]
+    fn a_vin_behind_a_spaced_29_bit_address_is_replaced_in_place() {
+        let real = "5FNRL6H72PB123456";
+        let new = anonymous_vin(real).unwrap();
+        let frames = |v: &str| {
+            let b: Vec<String> = v.bytes().map(|x| format!("{x:02X}")).collect();
+            format!(
+                "> 0902
+< 18 DA F1 10 10 14 49 02 01 {}
+< 18 DA F1 10 21 {}
+< 18 DA F1 10 22 {}
+< 18 DA F1 1E 03 41 00 00
+",
+                b[..3].join(" "),
+                b[3..10].join(" "),
+                b[10..].join(" ")
+            )
+        };
+        assert!(new.ends_with("000000"));
+        let out = redact_vin(&frames(real), real, &new);
+        assert_eq!(out, frames(&new));
+        assert!(vin_residue(&out, real).is_none());
+        // And a reply printed without headers is still not taken for a frame.
+        assert!(Frame::parse("< 49 02 01 35 46 4E").is_none());
     }
 
     #[test]

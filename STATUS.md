@@ -13,10 +13,10 @@ Evidence, not intention. Everything here has run against a vehicle.
 
 | | |
 |---|---|
-| Vehicles seen | 3 real (2019 F-250 ×2, 2012 F-250), plus three virtual ones: the truck, a 29-bit petrol Honda, and a 2004 Toyota on the K-line |
+| Vehicles seen | 4 real (2019 F-250 ×2, 2012 F-250, 2023 Honda Odyssey), plus three virtual ones: the truck, a 29-bit petrol Honda, and a 2004 Toyota on the K-line |
 | Adapters | FTDI USB at 500000 baud, Bluetooth ELM327 clone at 38400, OBDLink MX+ (STN) |
-| Sessions recorded | 40 on a real adapter |
-| Adapter exchanges logged | ~40,600 |
+| Sessions recorded | 41 on a real adapter |
+| Adapter exchanges logged | ~54,500 |
 
 OBD-II services 01–0A, UDS 0x10/0x19/0x22/0x27/0x2E/0x3E, full-bus module sweep,
 Mode 06, readiness, live data, session comparison, flight recorder.
@@ -36,6 +36,45 @@ measured a case where four bytes read back correctly and nothing moved.
 ## Findings from real sessions
 
 Mined from the local session database. These are measured counts, not guesses.
+
+### The first vehicle that is not a Ford
+
+A 2023 Honda Odyssey, 3.5 L petrol, through the OBDLink MX+ on 2026-10-04: one
+session, 13,885 exchanges, now a CI replay. It connected on 29-bit CAN at
+500 kbit/s with no bus error on the main bus, identified from its VIN, and a
+full scan found 13 modules with no fault that had a fault bit set. Self-test
+results were read from the engine. What it showed that the truck could not:
+
+- **Nothing is on its second-bus pins, and the scans asked every address
+  there anyway.** Listening heard nothing at 500, 250 or 125 kbit/s, and every
+  request then came back `CAN ERROR`: 3,738 of them across one module scan and
+  three full scans, about a minute of each full scan. **Fixed** in the simulator
+  it now reproduces exactly (534 per module scan); a sweep stops after three in
+  a row. Not yet re-run on the vehicle.
+- **Its engine has no PID 05.** It lists 59 service 01 PIDs, and coolant
+  temperature, intake air temperature and air flow are only on 67, 68 and 66.
+  This build decoded none of them, so the car had no coolant temperature at
+  all and *Warm idle* could never see a warm engine. Decoders for 66, 67, 68
+  and A6 (odometer) are **added, unverified**; the guided tests still ask for
+  PID 05. Eighteen of its PIDs have no decoder.
+- **Every module refused every standard identification identifier**
+  (`7F 22 31` to F187, F188, F18A, F191, F195, F197 and Ford's two), so 11 of
+  13 are still listed by address. The engine and transmission name themselves
+  and report a calibration identification through service 09.
+- **Those calibration identifications were read and kept nowhere.** **Fixed**:
+  the software identity read stores them on the module.
+- **One module's fault list was cut off** at 97 of 163 bytes, twice: it
+  answers "pending" first and the full scan stopped listening at 1.17 s.
+  **Fixed, unverified**: it is given 2.5 s.
+- **The Full scan screen lost a finished scan** when another tab was opened,
+  and the readiness card blamed the vehicle for being asked before the first
+  scan. Both **fixed**.
+- **Its recording could not be exported.** The VIN anonymiser did not read a
+  29-bit address printed as four bytes, left the VIN in place, and the export
+  refused, as designed. **Fixed.**
+
+The owner read 27,224 on the odometer that day, which is what PID A6 will be
+checked against.
 
 ### Certain PIDs time out repeatedly and we keep asking
 
@@ -260,7 +299,9 @@ Desk work that is ready to pick up:
 
 Needs the vehicle or the owner (steps in `docs/AT-THE-CAR.md`):
 - #54 cold-start baseline on the F-250 (`dev-core.ps1 -Db` is ready).
-- #39 a second make end to end (Mazda 3 or Odyssey), then export its replay (#59).
+- The 2023 Odyssey again, to check what was fixed after its first scan and
+  the four new readings (`docs/AT-THE-CAR.md`, 3a). Its first scan is done and
+  its replay is in CI (#39, #59).
 - #64 the Android build against the paired adapter, then the screen staying
   on and a database export through the share sheet. A recorded drive waits on
   all three.
