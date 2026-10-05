@@ -8,6 +8,7 @@ members = [
     "core/adapter",
     "core/safety",
     "core/session",
+    "core/calibration",
     "core/diagnostics",
     "core/tools",
     "core/agent",
@@ -32,6 +33,7 @@ aim-decoders = { path = "core/decoders" }
 aim-adapter = { path = "core/adapter" }
 aim-safety = { path = "core/safety" }
 aim-session = { path = "core/session" }
+aim-calibration = { path = "core/calibration" }
 aim-diagnostics = { path = "core/diagnostics" }
 aim-tools = { path = "core/tools" }
 aim-agent = { path = "core/agent" }

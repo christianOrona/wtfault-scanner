@@ -1,0 +1,16 @@
+[package]
+name = "aim-calibration"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+# Already in the tree: the updater checks a download's SHA-256 with it.
+ring = "0.17.14"
+tracing = "0.1.44"
+
+[dev-dependencies]
+tempfile = "3.24.0"
