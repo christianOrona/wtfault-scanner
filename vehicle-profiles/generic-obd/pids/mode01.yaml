@@ -822,3 +822,57 @@ pids:
     formula: "D * 100 / 255"
     range: { min: 0, max: 100 }
     verification: unverified
+
+  # The newer forms of four readings every engine has. Measured on a 2023
+  # Honda Odyssey on 2026-10-04: its engine controller lists 59 PIDs and
+  # 0x05, 0x0F and 0x10 are not among them. Coolant temperature, intake air
+  # temperature and air flow are reported only on 0x67, 0x68 and 0x66, so with
+  # the older PIDs alone this vehicle has no coolant temperature at all.
+  #
+  # Each starts with a byte saying which sensors are fitted, then one value
+  # per sensor. Only the first sensor is decoded: the file format gives a
+  # numeric PID one value. Layouts are SAE J1979 as the public PID tables give
+  # them, from one source, and stay unverified until read on a vehicle and
+  # checked against something else that vehicle says.
+  - pid: 0x66
+    signal_id: maf_sensor_a
+    name: "Mass air flow, sensor A (UNVERIFIED)"
+    kind: numeric
+    bytes: 5
+    unit: "g/s"
+    formula: "(256 * B + C) / 32"
+    range: { min: 0, max: 2047.97 }
+    verification: unverified
+
+  - pid: 0x67
+    signal_id: coolant_temp_sensor_1
+    name: "Engine coolant temperature, sensor 1 (UNVERIFIED)"
+    kind: numeric
+    bytes: 3
+    unit: "degC"
+    formula: "B - 40"
+    range: { min: -40, max: 215 }
+    verification: unverified
+
+  - pid: 0x68
+    signal_id: intake_air_temp_sensor_1
+    name: "Intake air temperature, bank 1 sensor 1 (UNVERIFIED)"
+    kind: numeric
+    bytes: 7
+    unit: "degC"
+    formula: "B - 40"
+    range: { min: -40, max: 215 }
+    verification: unverified
+
+  # The odometer, as the engine controller reports it: four bytes, tenths of a
+  # kilometre. The one reading here a person can check exactly, against the
+  # dash.
+  - pid: 0xA6
+    signal_id: odometer
+    name: "Odometer (UNVERIFIED)"
+    kind: numeric
+    bytes: 4
+    unit: "km"
+    formula: "(16777216 * A + 65536 * B + 256 * C + D) / 10"
+    range: { min: 0, max: 429496729.5 }
+    verification: unverified

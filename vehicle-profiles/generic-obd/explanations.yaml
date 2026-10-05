@@ -241,6 +241,18 @@ signals:
   - id: def_level_reagent_system
     easy: "How full the diesel exhaust fluid tank is, as reported by the emissions system that uses it. Should agree with the tank level reading."
     technical: "Service 01 PID 85, byte F. NOx reagent (DEF) tank level, 100/255 % per count."
+  - id: coolant_temp_sensor_1
+    easy: "How hot the liquid cooling the engine is, from the reading newer cars give instead of the older one. It starts cold and climbs to around 90 C, then stays there."
+    technical: "Service 01 PID 67, byte B, -40 offset. Byte A says which of two coolant sensors are fitted. Some engines report coolant temperature only here and do not support PID 05; a 2023 Honda Odyssey is one."
+  - id: intake_air_temp_sensor_1
+    easy: "How hot the air is as it enters the engine, from the reading newer cars give instead of the older one. On a cold morning it starts near the outside temperature."
+    technical: "Service 01 PID 68, byte B, -40 offset. Byte A says which intake air temperature sensors are fitted; only bank 1 sensor 1 is decoded."
+  - id: maf_sensor_a
+    easy: "How much air, by weight, is being pulled into the engine each second, from the reading newer cars give instead of the older one. A trickle at idle, far more under power."
+    technical: "Service 01 PID 66, bytes B-C, 1/32 g/s per count. Byte A says which of two air flow sensors are fitted; only sensor A is decoded."
+  - id: odometer
+    easy: "How far the car has travelled in total, as the engine computer reports it. It should match the number on the dash."
+    technical: "Service 01 PID A6. Four bytes, 0.1 km per count."
 
   # ---- torque --------------------------------------------------------------
   - id: driver_demand_torque
