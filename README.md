@@ -472,6 +472,7 @@ faults in the cars:
 | | |
 |---|---|
 | `STATUS.md` | where the project is, and what real sessions have shown |
+| `CONTRIBUTING.md` | how to help: a recording from your car, a profile, or code |
 | `docs/ARCHITECTURE.md` | crate map and design decisions |
 | `docs/SAFETY.md` | the two ceilings, and what has to be true before a write |
 | `docs/SECURITY.md` | threat model, credentials, and where your data goes |
@@ -491,7 +492,8 @@ cargo test --workspace
 cargo run -p aim-adapter --example probe_port -- COM5    # what is on that port?
 ```
 
-Screenshots above are from the virtual vehicle.
+[CONTRIBUTING.md](CONTRIBUTING.md) covers what a change needs and what will
+not be merged. Screenshots above are from the virtual vehicle.
 
 ---
 
