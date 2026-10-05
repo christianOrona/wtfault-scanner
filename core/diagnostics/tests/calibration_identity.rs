@@ -11,7 +11,8 @@
 use aim_adapter::{DiagnosticAdapter, Elm327Adapter, Elm327Config};
 use aim_calibration::resolve::Outcome;
 use aim_calibration::{
-    resolve, Cache, CalibrationIdentity, DirectorySource, Field, IdentitySource, MatchStatus,
+    resolve, Availability, Basis, Cache, CalibrationIdentity, DirectorySource, Field, Found,
+    IdentitySource, Library, ManufacturerOrigin, MatchStatus, NotGiven, SourceStatus,
     ValidationStatus,
 };
 use aim_decoders::DecoderSet;
@@ -19,7 +20,8 @@ use aim_diagnostics::DiagnosticService;
 use aim_safety::SafetyGate;
 use aim_session::SessionStore;
 use aim_simulator::{
-    AdapterPersonality, ScenarioId, SimulatedTransport, VirtualVehicle, SIMULATED_HONDA_VIN,
+    AdapterPersonality, ReplayMode, ReplayTransport, ScenarioId, SimulatedTransport, Transcript,
+    VirtualVehicle, SIMULATED_HONDA_VIN,
 };
 use aim_types::EventKind;
 use std::sync::Arc;
@@ -121,6 +123,9 @@ fn an_identifier_the_module_refuses_is_kept_as_a_refusal() {
         .expect("F191 was asked for");
     assert_eq!(hardware.field, Some(Field::HardwareNumber));
     assert!(hardware.reason.contains("refused"), "{}", hardware.reason);
+    // "Request out of range" is the module saying it has no such identifier,
+    // and it is kept as that, not as a failure to read.
+    assert_eq!(hardware.state, NotGiven::NotSupported);
     assert!(hardware.raw_hex.as_deref().is_some_and(|r| r.starts_with("7f22")), "{hardware:?}");
     assert!(hardware.evidence_ref.is_some());
     // All thirteen were asked or accounted for, and none was made up.
@@ -189,8 +194,10 @@ fn a_file_is_matched_to_the_module_only_as_far_as_the_evidence_goes() {
             aim_calibration::sha256_hex(image)
         )),
     );
-    // Only named like it.
-    put("37805-5MR-C120.rwd", b"some other bytes", None);
+    // Only named like it: a package by its shape, whose header names
+    // something else. Made up, and nobody's real file.
+    let package = aim_calibration::rwd::fixture::z(&[&[b"TEST-OTHER-0001"]], &[0x9C, 0x41, 0x07]);
+    put("37805-5MR-C120.rwd", &package, None);
     // Declared to be the transmission's.
     put(
         "gearbox.bin",
@@ -247,14 +254,298 @@ fn nothing_but_reads_is_sent_to_the_vehicle() {
         .collect();
     for request in &to_vehicle {
         let service_id = u8::from_str_radix(&request[..2], 16).unwrap();
-        // OBD-II services 01 to 0A, TesterPresent, ReadDTCInformation and
-        // ReadDataByIdentifier: every one of them a read. Session control,
-        // reset, security access, writes, routines and transfers are not
-        // among them.
-        assert!(matches!(service_id, 0x01..=0x0A | 0x3E | 0x19 | 0x22), "{request} is not a read");
+        // The OBD-II services that read, TesterPresent, ReadDTCInformation
+        // and ReadDataByIdentifier. Not OBD-II 04, which clears codes, nor
+        // 08, which commands a component: they sit between the reads and are
+        // not reads. Session control, reset, security access, writes,
+        // routines and transfers are not among them either.
+        assert!(
+            matches!(service_id, 0x01..=0x03 | 0x05..=0x07 | 0x09 | 0x0A | 0x3E | 0x19 | 0x22),
+            "{request} is not a read"
+        );
     }
     // And the UDS reads the identity itself made are the thirteen
     // identifiers, for each of two modules.
     let identity_reads = to_vehicle.iter().filter(|c| c.starts_with("22")).count();
     assert_eq!(identity_reads, 26);
+}
+
+/// Where every field stands is said in one word each, and the words differ:
+/// what the module gave, what it said it does not have, and what nothing in
+/// this build asks for at all.
+#[test]
+fn each_field_is_available_not_supported_or_not_read_and_they_are_not_confused() {
+    let mut service = odyssey();
+    let read = service.read_calibration_identity(ENGINE, USER);
+    let data = read.data.expect("an identity");
+    let stands: std::collections::BTreeMap<Field, Availability> =
+        serde_json::from_value(data["availability"].clone()).unwrap();
+
+    assert_eq!(stands[&Field::CalibrationId], Availability::Available);
+    assert_eq!(stands[&Field::CalibrationVerificationNumber], Availability::Available);
+    assert_eq!(stands[&Field::ModuleName], Availability::Available);
+    // Asked for by every request that could read it, and refused as not there.
+    for field in [Field::HardwareNumber, Field::PartNumber, Field::SoftwareNumber] {
+        assert_eq!(stands[&field], Availability::NotSupported, "{field:?}");
+    }
+    // No standard request reads these, so nothing was asked and nothing is known.
+    for field in [Field::ProgramId, Field::StrategyId, Field::RomId] {
+        assert_eq!(stands[&field], Availability::NotRead, "{field:?}");
+    }
+    assert_eq!(data["availability"]["hardware_number"], "NOT_SUPPORTED");
+    assert_eq!(data["availability"]["program_id"], "NOT_READ");
+}
+
+fn found_by(service: &mut DiagnosticService, module: &str) -> (serde_json::Value, Found) {
+    let result = service.find_calibration(module, "agent:test");
+    assert!(result.success, "{:?}", result.error);
+    assert_eq!(result.tool, "find_calibration");
+    let data = result.data.expect("a search");
+    let found: Found = serde_json::from_value(data["search"].clone()).unwrap();
+    (data, found)
+}
+
+/// The search a model asks for is the search a person asks for: the same
+/// library, the same rules, the same answer.
+#[test]
+fn the_tool_a_model_calls_runs_the_same_search_as_the_screen() {
+    let dir = tempfile::tempdir().unwrap();
+    let library = Library::at(dir.path().join("calibrations")).with_program_files(None);
+    let mut service = odyssey();
+
+    // With nowhere to look, it says so and sends nothing.
+    let before = requests(&service).len();
+    let nowhere = service.find_calibration(ENGINE, "agent:test");
+    assert!(!nowhere.success);
+    assert_eq!(requests(&service).len(), before);
+
+    service.set_calibration_library(Some(library.clone()));
+
+    // Nothing supplied: an answer, with every source and how it ended.
+    let (data, found) = found_by(&mut service, ENGINE);
+    assert_eq!(found.resolution.outcome, Outcome::NoArtifactFound);
+    assert!(!found.resolution.incomplete);
+    let status = |found: &Found, id: &str| {
+        found.resolution.sources.iter().find(|s| s.source.id == id).map(|s| s.status)
+    };
+    assert_eq!(status(&found, "folder"), Some(SourceStatus::NoMatch));
+    assert_eq!(status(&found, "honda-j2534-rewrite"), Some(SourceStatus::NotConfigured));
+    assert_eq!(status(&found, "cache"), Some(SourceStatus::NoMatch));
+    assert_eq!(data["limits"]["manufacturer_origin"], "NOT_ESTABLISHED");
+    assert_eq!(data["limits"]["downloads"], false);
+    assert_eq!(data["availability"]["calibration_id"], "AVAILABLE");
+    assert_eq!(data["identity"]["fields"]["calibration_id"][0]["value"], "37805-5MR-C120");
+
+    // A file the person declares to be this calibration.
+    let image = b"stand-in bytes; not a real calibration";
+    library.add_file("pcm-update.bin", image).unwrap();
+    std::fs::write(
+        library.folder().join("pcm-update.bin.json"),
+        r#"{ "calibration_id": "37805-5MR-C120" }"#,
+    )
+    .unwrap();
+
+    let (_, by_tool) = found_by(&mut service, ENGINE);
+    assert_eq!(by_tool.resolution.outcome, Outcome::ArtifactFound);
+    let one = &by_tool.resolution.matches[0];
+    assert_eq!(one.matching.status, MatchStatus::ExactMatch);
+    assert_eq!(one.matching.rests_on, Some(Basis::UserDeclared));
+    assert_eq!(one.origin.manufacturer, ManufacturerOrigin::NotEstablished);
+    assert_eq!(status(&by_tool, "folder"), Some(SourceStatus::Matched));
+
+    // The same question asked the way the screen asks it: the identity read
+    // from the module, handed to the library. One implementation, one answer.
+    let identity = identity_of(&mut service, ENGINE);
+    let by_screen = library.find(&identity, "2026-10-04T12:00:00Z");
+    let judged = |found: &Found| {
+        found
+            .resolution
+            .matches
+            .iter()
+            .map(|e| (e.artifact.sha256.clone(), e.matching.status, e.matching.rests_on))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(judged(&by_tool), judged(&by_screen));
+    assert_eq!(by_tool.resolution.outcome, by_screen.resolution.outcome);
+}
+
+/// Looking for a calibration only ever reads the vehicle, and reads it
+/// exactly as much as reading the identity does: the search itself sends
+/// nothing at all.
+#[test]
+fn looking_for_a_calibration_sends_the_vehicle_nothing_but_the_identity_reads() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut service = odyssey();
+    service.set_calibration_library(Some(
+        Library::at(dir.path().join("calibrations")).with_program_files(None),
+    ));
+
+    // What reaches the vehicle, as opposed to what only sets the adapter up.
+    let to_vehicle = |service: &DiagnosticService| {
+        requests(service)
+            .into_iter()
+            .filter(|c| {
+                !c.is_empty() && c.len() % 2 == 0 && c.bytes().all(|b| b.is_ascii_hexdigit())
+            })
+            .count()
+    };
+    let start = to_vehicle(&service);
+    identity_of(&mut service, ENGINE);
+    let after_identity = to_vehicle(&service);
+    found_by(&mut service, ENGINE);
+    let sent = requests(&service);
+
+    assert!(after_identity > start);
+    assert_eq!(
+        to_vehicle(&service) - after_identity,
+        after_identity - start,
+        "the search sent the vehicle something of its own"
+    );
+    for request in sent
+        .iter()
+        .filter(|c| !c.is_empty() && c.len() % 2 == 0 && c.bytes().all(|b| b.is_ascii_hexdigit()))
+    {
+        let service_id = u8::from_str_radix(&request[..2], 16).unwrap();
+        // Nothing that writes (2E), runs a routine (31), opens a session
+        // (10), resets (11), asks for security access (27), or starts,
+        // carries or ends a transfer (34, 36, 37).
+        assert!(
+            !matches!(
+                service_id,
+                0x04 | 0x08 | 0x10 | 0x11 | 0x27 | 0x2E | 0x31 | 0x34 | 0x36 | 0x37
+            ),
+            "{request} was sent while looking for a calibration"
+        );
+        assert!(
+            matches!(service_id, 0x01..=0x03 | 0x05..=0x07 | 0x09 | 0x0A | 0x3E | 0x19 | 0x22),
+            "{request} is not a read"
+        );
+    }
+}
+
+// ---- the real vehicle -------------------------------------------------------
+
+/// The 2023 Odyssey's first real scan, as it was recorded on 2026-10-04 (its
+/// VIN's serial zeroed). The simulator above was written to imitate this
+/// recording; these bytes are the vehicle's own.
+const REAL_SCAN: &str = include_str!("replays/2023-honda-odyssey-first-scan.transcript");
+
+fn the_real_odyssey() -> DiagnosticService {
+    let transport = ReplayTransport::new(
+        Transcript::parse(REAL_SCAN).unwrap(),
+        ReplayMode::Lookup,
+        "replay of the real Odyssey",
+    );
+    let adapter: Box<dyn DiagnosticAdapter> =
+        Box::new(Elm327Adapter::new(Box::new(transport), Elm327Config::fast()));
+    let mut service = DiagnosticService::start(
+        adapter,
+        SessionStore::open_in_memory().unwrap(),
+        Arc::new(DecoderSet::generic_obd().unwrap()),
+        SafetyGate::phase1(),
+        None,
+    )
+    .unwrap();
+    assert!(service.connect(USER).success);
+    assert!(service.identify_vehicle(USER).success);
+    assert!(service.scan_modules(USER).success);
+    service
+}
+
+/// The identity read, run over what the real vehicle actually sent.
+///
+/// This is as far as a recording can take it. The scan that was recorded
+/// asked for the calibration identification, the verification number, the
+/// name, and six of the thirteen standard identifiers, so those are checked
+/// against the vehicle's own bytes. The other seven identifiers were never
+/// put to the real vehicle: the recording has no answer for them, and what
+/// this asserts about them is exactly that, not what the vehicle would say.
+///
+/// One more limit, and it is why the read asks twice. The recorded scan asked
+/// for the calibration identification and verification number of every
+/// module at once, never of one module alone. So a replay cannot say whether
+/// this vehicle answers them when asked alone; here that goes unanswered and
+/// the answer comes from asking everyone, which is the vehicle's real reply.
+#[test]
+fn the_real_odysseys_recorded_answers_read_as_what_they_are() {
+    let mut service = the_real_odyssey();
+
+    for (module, name, calibration, cvn) in [
+        (ENGINE, "ECM-EngineControl", "37805-5MR-C120", "16B6A354"),
+        (TRANSMISSION, "TCM-TransmisCtrl", "28102-5MX-A200", "550C681C"),
+    ] {
+        let read = service.read_calibration_identity(module, USER);
+        assert!(read.success, "{:?}", read.error);
+        let data = read.data.expect("an identity");
+        let id: CalibrationIdentity = serde_json::from_value(data["identity"].clone()).unwrap();
+
+        // What the vehicle gave, from its own bytes.
+        assert_eq!(id.values(Field::CalibrationId), vec![calibration], "{module}");
+        let cvns = id.values(Field::CalibrationVerificationNumber);
+        assert!(cvns.len() == 1 && cvns[0].eq_ignore_ascii_case(cvn), "{module}: {cvns:?}");
+        assert_eq!(id.first(Field::ModuleName), Some(name), "{module}");
+        let given = &id.fields[&Field::CalibrationId][0];
+        assert!(given.evidence_ref.is_some() && given.raw_hex.is_some());
+
+        // What the vehicle refused: `7F 22 31` to each of the six it was
+        // really asked, kept as "has no such identifier" with the bytes.
+        for did in [0xF187u16, 0xF188, 0xF191, 0xF18A, 0xF195, 0xF197] {
+            let refused = id
+                .unanswered
+                .iter()
+                .find(|u| u.source == IdentitySource::UdsDid { did })
+                .unwrap_or_else(|| panic!("{did:04X} was asked of {module}"));
+            assert_eq!(refused.state, NotGiven::NotSupported, "{did:04X} of {module}");
+            assert_eq!(refused.raw_hex.as_deref(), Some("7f2231"), "{did:04X} of {module}");
+            assert!(refused.evidence_ref.is_some());
+        }
+
+        // What the vehicle was never asked. The recording is silent on the
+        // first of them, and the rest are then not asked. None is called
+        // "not supported": nobody knows that.
+        let never_asked: Vec<NotGiven> =
+            [0xF180u16, 0xF181, 0xF182, 0xF189, 0xF192, 0xF193, 0xF194]
+                .iter()
+                .map(|did| {
+                    id.unanswered
+                        .iter()
+                        .find(|u| u.source == IdentitySource::UdsDid { did: *did })
+                        .unwrap_or_else(|| panic!("{did:04X} is accounted for"))
+                        .state
+                })
+                .collect();
+        assert_eq!(never_asked[0], NotGiven::NoAnswer);
+        assert!(never_asked[1..].iter().all(|s| *s == NotGiven::NotAsked), "{never_asked:?}");
+
+        // And so, in a word each: the part number was asked and is not there;
+        // the hardware number was asked one way of two, so it is not settled.
+        assert_eq!(data["availability"]["calibration_id"], "AVAILABLE");
+        assert_eq!(data["availability"]["part_number"], "NOT_SUPPORTED");
+        assert_eq!(data["availability"]["hardware_number"], "NOT_READ");
+        assert_eq!(data["availability"]["program_id"], "NOT_READ");
+        // Nothing was made up to fill a gap.
+        for field in [Field::HardwareNumber, Field::PartNumber, Field::ProgramId, Field::StrategyId]
+        {
+            assert!(id.first(field).is_none(), "{field:?} of {module}");
+        }
+    }
+}
+
+/// The whole path on the real vehicle's own identity: nothing is on this
+/// computer for it, and the answer is that, with where it looked.
+#[test]
+fn the_real_odysseys_calibration_is_looked_for_and_not_found() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut service = the_real_odyssey();
+    service.set_calibration_library(Some(
+        Library::at(dir.path().join("calibrations")).with_program_files(None),
+    ));
+
+    let (data, found) = found_by(&mut service, ENGINE);
+
+    assert_eq!(data["identity"]["fields"]["calibration_id"][0]["value"], "37805-5MR-C120");
+    assert_eq!(found.resolution.outcome, Outcome::NoArtifactFound);
+    assert!(found.resolution.matches.is_empty() && found.resolution.set_aside.is_empty());
+    assert!(found.resolution.sources.iter().all(|s| !s.source.uses_network));
+    assert_eq!(found.resolution.sources.len(), 3);
 }

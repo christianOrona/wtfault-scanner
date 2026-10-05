@@ -2759,6 +2759,11 @@ the same flag; neither needs the app restarted.
 Which software a module runs, and whether a file on this computer is that
 software. Read-only throughout; `docs/CALIBRATION.md` has the rules.
 
+Three answers are kept apart in every result and are never one score: whether
+a file matches (`matching.status`), whose word that rests on
+(`matching.rests_on`), and who made the file (`origin.manufacturer`, always
+`NOT_ESTABLISHED`).
+
 #### `GET /modules/{key}/calibration`
 
 A **tool endpoint**: it reads the vehicle. Only reads are sent: OBD-II service
@@ -2768,26 +2773,33 @@ identifiers, in the session the module is already in.
 ```jsonc
 {
   "tool": "read_calibration_identity", "success": true, "module": "ECU_18DAF110",
-  "data": { "identity": {
-    "module_key": "ECU_18DAF110", "address": "18DAF110",
-    "protocol": "ISO 15765-4 CAN 29/500",
-    "fields": {
-      "calibration_id": [{
-        "value": "37805-5MR-C120",
-        "source": { "kind": "obd_info_type", "info_type": 4 },
-        "evidence_ref": 52,
-        "raw_hex": "490401" /* ...the bytes it was read from */
-      }],
-      "calibration_verification_number": [ /* ... */ ],
-      "module_name": [ /* ... */ ], "vin": [ /* ... */ ], "make": [ /* ... */ ]
+  "data": {
+    "identity": {
+      "module_key": "ECU_18DAF110", "address": "18DAF110",
+      "protocol": "ISO 15765-4 CAN 29/500",
+      "fields": {
+        "calibration_id": [{
+          "value": "37805-5MR-C120",
+          "source": { "kind": "obd_info_type", "info_type": 4 },
+          "evidence_ref": 52,
+          "raw_hex": "490401" /* ...the bytes it was read from */
+        }],
+        "calibration_verification_number": [ /* ... */ ],
+        "module_name": [ /* ... */ ], "vin": [ /* ... */ ], "make": [ /* ... */ ]
+      },
+      "unanswered": [{
+        "field": "hardware_number",
+        "source": { "kind": "uds_did", "did": 61841 },
+        "state": "not_supported",
+        "reason": "the module refused: requestOutOfRange",
+        "evidence_ref": 1034, "raw_hex": "7f2231"
+      }]
     },
-    "unanswered": [{
-      "field": "hardware_number",
-      "source": { "kind": "uds_did", "did": 61841 },
-      "reason": "the module refused: requestOutOfRange",
-      "evidence_ref": 1034, "raw_hex": "7f2231"
-    }]
-  } }
+    "availability": {
+      "calibration_id": "AVAILABLE", "hardware_number": "NOT_SUPPORTED",
+      "program_id": "NOT_READ" /* ...one entry for every field about the module */
+    }
+  }
 }
 ```
 
@@ -2795,6 +2807,15 @@ identifiers, in the session the module is already in.
 several values. `unanswered` holds every identifier asked for and not given,
 with the reply's bytes when there was one. Nothing is filled in. `source.kind`
 is `obd_info_type`, `uds_did`, `vin_structure` or `lookup`.
+
+`unanswered[].state` says which kind of "not given" it was, and they are
+different facts: `not_supported` (the module says it has none), `refused`,
+`no_answer`, `unreadable`, `empty`, `not_asked`. A record written before this
+was kept reads as `unspecified`.
+
+`availability` has one word for every field about the module, including the
+ones no request reads: `AVAILABLE`, `NOT_SUPPORTED`, `REFUSED`, `READ_FAILED`
+or `NOT_READ`.
 
 A module that reports nothing identifying its software succeeds, with a
 `software_identity_not_reported` warning.
@@ -2806,13 +2827,16 @@ computer's disk only.
 
 → `{ "folder": "…/calibrations/files", "sources": [ … ], "kept": [ … ], "formats": ["rwd","bin","gz","hex","s19"], "uses_network": false, "writes_to_vehicle": false }`
 
-Each source has `id`, `name`, `location`, `uses_network` and `enabled`. No
-source uses a network.
+Each source has `id`, `name`, `kind`, `location`, `uses_network` and
+`enabled`. `kind` is `user_folder`, `tool_installation`, `kept` or `other`.
+There are three: `folder`, `honda-j2534-rewrite` and `cache`. No source uses a
+network. `formats` are extensions; a name may carry two (`.rwd.gz`).
 
 #### `POST /calibration/find`
 
-Judge the files in the calibration folder, and the kept ones, against an
-identity. **Does not touch the vehicle**, so an identity read earlier works.
+Judge the files in every calibration source against an identity. **Does not
+touch the vehicle**, so an identity read earlier works. This is the same
+search the `find_calibration` tool runs.
 
 ```json
 { "identity": { "module_key": "ECU_18DAF110", "address": "18DAF110", "protocol": null, "fields": {}, "unanswered": [] } }
@@ -2823,30 +2847,89 @@ identity. **Does not touch the vehicle**, so an identity read earlier works.
   "module": "ECU_18DAF110",
   "folder": "…/calibrations/files",
   "resolution": {
-    "outcome": "ARTIFACT_FOUND",            // or NO_ARTIFACT_FOUND
+    "outcome": "ARTIFACT_FOUND",            // NO_ARTIFACT_FOUND | CONFLICTING_EVIDENCE
+    "incomplete": false,                    // true when a source failed to be searched
     "matches": [{
-      "artifact": { "sha256": "…", "size": 38, "format": "bin", "filename": "pcm.bin", "sources": [ … ], "claims": { … } },
+      "artifact": { "sha256": "…", "size": 38, "format": "bin", "compression": null,
+                    "filename": "pcm.bin",
+                    "sources": [{ "source": "folder", "kind": "user_folder", "reference": "…", "found_at": "…" }],
+                    "claims": { "calibration_id": [{ "value": "37805-5MR-C120", "basis": "user_declared",
+                                                     "stated_in": "pcm.bin.json", "source": "folder" }] } },
       "matching": {
-        "status": "EXACT_MATCH",            // PARTIAL_MATCH | NO_MATCH | UNKNOWN
+        "status": "EXACT_MATCH",  // PARTIAL_MATCH | CONFLICTING_EVIDENCE | NO_MATCH | UNKNOWN
+        "rests_on": "user_declared", // source_declared | file_header | filename | null
         "reason": "The module reports the calibration identification this file is declared to be…",
+        "warnings": ["This match rests on what you declared about the file. …"],
         "checks": [{ "field": "calibration_id", "verdict": "confirmed",
-                     "reported": ["37805-5MR-C120"], "claimed": [["37805-5MR-C120", "declared"]], "note": "…" }]
+                     "reported": ["37805-5MR-C120"],
+                     "claimed": [["37805-5MR-C120", "user_declared"], ["pcm", "filename"]], "note": "…" }]
       },
       "validation": { "status": "VALID", "sha256": "…", "checks": [ … ] },
+      "inspection": {
+        "compression": null,                // "gzip" when the content is packed
+        "unpack_problem": null,
+        "payload_sha256": null,             // SHA-256 of what is inside the packing
+        "payload_size": null,
+        "content": "opaque",                // empty | gzip | rwd | intel_hex | s_record | opaque
+        "rwd": null,                        // the header, for an RWD package
+        "software": "PAYLOAD_OPAQUE"        // or PAYLOAD_NOT_REACHED
+      },
+      "origin": { "manufacturer": "NOT_ESTABLISHED", "reason": "Nothing checks a manufacturer's signature on it. …" },
       "cached": true
     }],
-    "set_aside": [ /* looked at and not this module's */ ],
-    "sources": [{ "source": { … }, "searched": true, "offered": 2, "error": null }]
+    "set_aside": [ /* looked at and not established as this module's; those in doubt first */ ],
+    "sources": [{ "source": { "id": "folder", "kind": "user_folder", … },
+                  "status": "matched", "searched": true,
+                  "offered": 2, "matched": 1, "passed_over": 0, "note": null, "error": null }]
   }
 }
 ```
 
-`NO_ARTIFACT_FOUND` is a `200`: for most modules it is the true answer. A
-check's `verdict` is `confirmed`, `conflict`, `name_agrees`, `name_differs` or
-`unknown`; a claim's basis is `declared` or `filename`. `EXACT_MATCH` requires
-`calibration_id` to be `confirmed` and no `conflict` anywhere. A validation
-status is `VALID`, `INVALID`, `PARTIALLY_VALIDATED` or `UNKNOWN`, and is about
-the file, not about whether it fits the module.
+`NO_ARTIFACT_FOUND` is a `200`: for most modules it is the true answer.
+
+A source's `status` is `matched`, `no_match`, `failed`, `unavailable`,
+`not_configured` or `switched_off`. Only the first two were searched. A source
+that `failed` is never reported as holding nothing, and sets `incomplete`.
+
+A check's `verdict` is `confirmed`, `conflict`, `conflicting_evidence`,
+`in_file_header`, `name_agrees`, `name_differs` or `unknown`. A claim's basis
+is `filename`, `user_declared`, `source_declared` or `file_header`.
+`EXACT_MATCH` requires `calibration_id` to be `confirmed` by a declaration,
+no `conflict`, and no `conflicting_evidence`. An identifier found in a file's
+header gives at most `PARTIAL_MATCH`.
+
+A validation status is `VALID`, `INVALID`, `PARTIALLY_VALIDATED` or `UNKNOWN`,
+and is about the file, not about whether it fits the module. A file can be an
+`EXACT_MATCH` and `INVALID`: read both.
+
+For an RWD package, `inspection.rwd` is
+`{ "indicator": "5a", "layout": "z", "headers_read": true, "groups": [{ "tag": "1", "texts": ["…"], "not_shown": 0 }], "header_bytes": 43, "problem": null }`.
+`layout` is `z`, `one`, `x`, `y`, `zero` or `other`. `texts` are the header
+values that are plain text; what each means is not established. The software
+after the header is never read.
+
+#### `POST /calibration/files?name=<file name>`
+
+Put a calibration file the person has into their folder. The body is the file,
+sent with `Content-Type: application/octet-stream`, at most 64 MB. It is copied
+and nothing else: adding a file declares nothing about what it is.
+
+→ `{ "filename": "pcm.bin", "sha256": "…", "size": 38, "already_there": false, "path": "…" }`
+
+`400` when the name is not a plain file name (no folder, drive or device), is
+not a kind of file treated as a calibration, the body is empty, or a
+**different** file of that name is already there. A file is never replaced.
+
+#### `POST /tools/find_calibration`
+
+What an AI model calls. Body: `{ "arguments": { "module": "ECU_18DAF110" } }`.
+It takes a module and nothing else: no path, address or identity.
+
+It reads the module's identity (the same reads as above), then runs the search
+above. → a `ToolResult` whose `data` is
+`{ "identity": { … }, "availability": { … }, "search": { /* as POST /calibration/find */ }, "limits": { "manufacturer_origin": "NOT_ESTABLISHED", "software_inside_files": "PAYLOAD_OPAQUE", "downloads": false, "writes_to_vehicle": false, "why": "…" } }`.
+
+A `calibration_search_incomplete` warning is added when a source failed.
 
 ---
 

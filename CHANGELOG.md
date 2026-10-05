@@ -10,13 +10,30 @@ with the caveat that everything below 1.0 is allowed to move.
 - **See which software a module runs.** *Inspect* has a *Software on this
   module* card: the calibration identification and its checksum, and any part,
   hardware and software numbers the module will give, each with a link to the
-  reply it was read from. What the module refuses to say is listed as refused.
-- **Check whether a file is that software.** *Find calibration file* looks in
-  a folder on your computer and says whether a file there is the module's
-  calibration: exact, partial, not, or cannot tell, with every comparison
-  shown. A file's name alone is never enough for exact. The app downloads no
-  calibration files and never writes one to a vehicle;
+  reply it was read from. What the module did not give is listed with why: it
+  has none, it refused, it did not answer, or nothing asks for it.
+- **Check whether a file is that software.** *Find calibration file* looks
+  through the calibration files on your computer and says whether one is the
+  module's calibration: exact, partial, conflicting, not, or cannot tell, with
+  every comparison shown. A file's name alone is never enough for exact. The
+  app downloads no calibration files and never writes one to a vehicle;
   `docs/CALIBRATION.md` has the whole of it.
+- **Every match says whose word it is.** A result shows what the match rests
+  on (what you declared, the file's own header, or only its name), and
+  separately that who made the file is not established. Nothing you can type
+  about a file makes the app call it the manufacturer's.
+- **Add a calibration file you have.** *Add a file you have* copies a file
+  into your calibration folder and looks again.
+- **Ask the assistant about calibration files.** The model in *Ask* can look
+  for a module's calibration file itself. It runs the same search as the
+  button and cannot download anything.
+- **Packed Honda files are read as what they are.** A `.rwd.gz` is gzip
+  holding an RWD package, and both layers are checked. The package's header is
+  read; the software inside is not. If the module's identifier is written in
+  the header, the result says so. No real Honda file has been tried.
+- **Honda's service tool folder is searched when it is installed.** Only the
+  files named like the module's own calibration are opened, and nothing there
+  is changed.
 - **One full scan, used everywhere.** The AI inspection reads the full scan
   you already ran instead of running its own, for half an hour or until codes
   are cleared, and says that it did. A scan the inspection ran shows on the
@@ -34,6 +51,18 @@ with the caveat that everything below 1.0 is allowed to move.
 
 ### Fixed
 
+- **A file declared to be two calibrations is no longer an exact match.** If
+  one of the two was the module's, the file was called exact. It is now
+  *conflicting evidence* and is not judged either way.
+- **A file that is not what it says shows that beside its match.** *File NOT
+  valid* used to sit under the comparison table, below a green *Exact match*.
+- **A search that could not look everywhere says so.** A source that failed is
+  reported as not searched, and the result is marked incomplete. It used to
+  read as searched.
+- **A module asked alone for its calibration is asked the legislated way if it
+  stays silent.** A module is only obliged to answer when every module is
+  asked at once, which is the only way the Odyssey has been asked so far. One
+  that answers only that way would have been reported as "did not answer".
 - **A scan no longer spends a minute on a bus the car does not have.** On a
   vehicle with nothing on the second bus, every request there went
   unacknowledged and the scan asked all 255 addresses anyway. It stops after

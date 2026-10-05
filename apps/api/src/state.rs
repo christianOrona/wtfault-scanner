@@ -56,6 +56,14 @@ impl PersonalityChoice {
     }
 }
 
+impl ServerConfig {
+    /// The calibration files on this computer, when this build has a place
+    /// for them. The one way anything here reaches them.
+    pub fn calibration_library(&self) -> Option<aim_calibration::Library> {
+        self.calibrations_dir.clone().map(aim_calibration::Library::at)
+    }
+}
+
 /// How the server was launched. Supplies the defaults a connect request omits.
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
@@ -417,12 +425,16 @@ impl AppState {
         let store = self.store.clone();
         let decoders = self.decoders();
         let label = request.label.clone();
+        // The same library the calibration routes use, so a model asking
+        // through the tool and a person asking on screen search one place.
+        let calibrations = self.config.calibration_library();
 
         let service_slot = Arc::clone(&self.service);
         tokio::task::spawn_blocking(move || {
             let mut service =
                 DiagnosticService::start(adapter, store, decoders, SafetyGate::phase1(), label)
                     .map_err(ApiError::new)?;
+            service.set_calibration_library(calibrations);
             let result = service.connect("user:api");
             let mut guard = service_slot
                 .lock()

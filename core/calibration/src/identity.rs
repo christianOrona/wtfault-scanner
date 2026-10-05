@@ -90,6 +90,25 @@ impl Field {
         }
     }
 
+    /// Everything that can be known about a module and its software, as
+    /// opposed to the vehicle it is in.
+    pub const ABOUT_THE_MODULE: [Field; 14] = [
+        Field::ModuleName,
+        Field::HardwareNumber,
+        Field::HardwareVersion,
+        Field::PartNumber,
+        Field::SoftwareNumber,
+        Field::SoftwareVersion,
+        Field::CalibrationId,
+        Field::CalibrationVerificationNumber,
+        Field::ProgramId,
+        Field::StrategyId,
+        Field::RomId,
+        Field::BootSoftwareId,
+        Field::ApplicationDataId,
+        Field::Supplier,
+    ];
+
     /// True for the fields that describe the vehicle and not the module.
     pub fn is_about_the_vehicle(self) -> bool {
         matches!(
@@ -160,6 +179,52 @@ pub struct Identified {
     pub raw_hex: Option<String>,
 }
 
+/// Why an identifier was not given. Each is a different fact, and they are
+/// kept apart: a module that has no such identifier, one that would not say,
+/// one that never answered and one that was never asked are four different
+/// vehicles to somebody deciding what to try next.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NotGiven {
+    /// The module answered that it has no such identifier, or does not
+    /// support asking for one.
+    NotSupported,
+    /// The module refused for another reason: it may have the identifier and
+    /// would not give it as it was asked.
+    Refused,
+    /// Nothing came back.
+    NoAnswer,
+    /// Something came back and could not be read as the identifier. The
+    /// reply is kept whole.
+    Unreadable,
+    /// The module answered with nothing in it.
+    Empty,
+    /// It was not asked, for the reason given.
+    NotAsked,
+    /// A record written before the reason was kept as more than words. Its
+    /// words still stand.
+    #[default]
+    Unspecified,
+}
+
+/// Where one thing about a module stands, in a word.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum Availability {
+    /// The module reported it.
+    Available,
+    /// The module said it has none, to every request that could have read it.
+    NotSupported,
+    /// The module refused to give it.
+    Refused,
+    /// It was asked for and the reading failed: no answer, an empty answer,
+    /// or one that could not be read.
+    ReadFailed,
+    /// It was not read: this build has no request that reads it, or the
+    /// requests that could were not all made. Nothing is known either way.
+    NotRead,
+}
+
 /// An identifier that was asked for and not given.
 ///
 /// Kept because "the module would not say" and "nobody asked" are different,
@@ -170,6 +235,9 @@ pub struct Unanswered {
     pub field: Option<Field>,
     /// How it was asked.
     pub source: IdentitySource,
+    /// Why there is no value, as one of a fixed set.
+    #[serde(default)]
+    pub state: NotGiven,
     /// Why there is no value: the module's refusal in words, that nothing
     /// answered, or that the reply could not be read as text.
     pub reason: String,
@@ -229,6 +297,43 @@ impl CalibrationIdentity {
     /// The first value known for a field.
     pub fn first(&self, field: Field) -> Option<&str> {
         self.fields.get(&field).and_then(|v| v.first()).map(|i| i.value.as_str())
+    }
+
+    /// Where each thing about the module stands: reported, not supported,
+    /// refused, failed, or never read. Every field is listed, so that what
+    /// was never asked for is said and not merely absent.
+    pub fn availability(&self) -> BTreeMap<Field, Availability> {
+        Field::ABOUT_THE_MODULE
+            .into_iter()
+            .map(|field| {
+                let asked: Vec<NotGiven> = self
+                    .unanswered
+                    .iter()
+                    .filter(|u| u.field == Some(field))
+                    .map(|u| u.state)
+                    .collect();
+                let has = |states: &[NotGiven]| asked.iter().any(|s| states.contains(s));
+                let state = if self.fields.get(&field).is_some_and(|v| !v.is_empty()) {
+                    Availability::Available
+                } else if has(&[NotGiven::Refused]) {
+                    Availability::Refused
+                } else if has(&[
+                    NotGiven::NoAnswer,
+                    NotGiven::Unreadable,
+                    NotGiven::Empty,
+                    NotGiven::Unspecified,
+                ]) {
+                    Availability::ReadFailed
+                } else if asked.is_empty() || has(&[NotGiven::NotAsked]) {
+                    // One way of asking coming back "not supported" does not
+                    // settle it while another was never tried.
+                    Availability::NotRead
+                } else {
+                    Availability::NotSupported
+                };
+                (field, state)
+            })
+            .collect()
     }
 
     /// True when the module reported anything that identifies its software.
@@ -294,6 +399,56 @@ mod tests {
             },
         );
         assert!(!id.names_its_software());
+    }
+
+    #[test]
+    fn what_is_not_known_is_not_known_in_five_different_ways() {
+        let mut id = CalibrationIdentity::for_module("ECU_18DAF110", "18DAF110");
+        id.record(Field::CalibrationId, from_service_09("37805-5MR-C120"));
+        let mut not_given = |field: Field, did: u16, state: NotGiven| {
+            id.unanswered.push(Unanswered {
+                field: Some(field),
+                source: IdentitySource::UdsDid { did },
+                state,
+                reason: String::new(),
+                evidence_ref: None,
+                raw_hex: None,
+            });
+        };
+        not_given(Field::HardwareNumber, 0xF191, NotGiven::NotSupported);
+        not_given(Field::HardwareNumber, 0xF192, NotGiven::NotSupported);
+        not_given(Field::PartNumber, 0xF187, NotGiven::Refused);
+        not_given(Field::Supplier, 0xF18A, NotGiven::NoAnswer);
+        // Asked one way and told no; the other way never tried.
+        not_given(Field::SoftwareVersion, 0xF189, NotGiven::NotSupported);
+        not_given(Field::SoftwareVersion, 0xF195, NotGiven::NotAsked);
+
+        let stands = id.availability();
+        assert_eq!(stands[&Field::CalibrationId], Availability::Available);
+        assert_eq!(stands[&Field::HardwareNumber], Availability::NotSupported);
+        assert_eq!(stands[&Field::PartNumber], Availability::Refused);
+        assert_eq!(stands[&Field::Supplier], Availability::ReadFailed);
+        assert_eq!(stands[&Field::SoftwareVersion], Availability::NotRead);
+        // Nothing in this build asks for a program identifier at all.
+        assert_eq!(stands[&Field::ProgramId], Availability::NotRead);
+        // Every module field is listed, and nothing about the vehicle.
+        assert_eq!(stands.len(), Field::ABOUT_THE_MODULE.len());
+        assert!(stands.keys().all(|f| !f.is_about_the_vehicle()));
+        assert_eq!(
+            serde_json::to_value(Availability::NotSupported).unwrap(),
+            serde_json::json!("NOT_SUPPORTED")
+        );
+    }
+
+    /// An identity stored before the reason was typed still reads.
+    #[test]
+    fn an_unanswered_identifier_from_an_earlier_record_still_reads() {
+        let old = r#"{ "field": "hardware_number", "source": { "kind": "uds_did", "did": 61841 },
+                       "reason": "the module refused: request out of range",
+                       "evidence_ref": 1034, "raw_hex": "7f2231" }"#;
+        let u: Unanswered = serde_json::from_str(old).unwrap();
+        assert_eq!(u.state, NotGiven::Unspecified);
+        assert!(u.reason.contains("refused"));
     }
 
     #[test]

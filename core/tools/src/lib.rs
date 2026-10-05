@@ -226,7 +226,39 @@ impl ToolRegistry {
                  hardware and software identifiers. Reads only. An identifier the module \
                  refused is reported as refused, never filled in.",
                 "The identity, each identifier with the request it came from, the raw bytes \
-                 and an evidence reference, plus every identifier asked for and not given.",
+                 and an evidence reference; every identifier asked for and not given, with \
+                 whether the module does not support it, refused it, did not answer, or was \
+                 not asked; and `availability`, one of AVAILABLE, NOT_SUPPORTED, REFUSED, \
+                 READ_FAILED or NOT_READ for every field.",
+                module_arg(true),
+            ),
+            ToolSchema::new(
+                "find_calibration",
+                capabilities::MODULE_IDENTITY,
+                PermissionLevel::L0,
+                "Look for a calibration file that is the software one module runs. Reads what \
+                 the module says about its software (the same reads as \
+                 read_calibration_identity), then searches the calibration files on this \
+                 computer: the person's own folder, files already kept, and a manufacturer \
+                 service tool's folder when one is installed. Read-only. It downloads nothing, \
+                 searches no network, and cannot write to the vehicle or change a file. Finding \
+                 nothing is the usual answer and is not a failure. Use it for: which \
+                 calibration files match this module, why a file matches, where a file came \
+                 from, and whether a file is established as the manufacturer's (it never is: \
+                 report that plainly).",
+                "`identity` and `availability` as read_calibration_identity returns them. \
+                 `search.resolution.outcome`: ARTIFACT_FOUND, NO_ARTIFACT_FOUND or \
+                 CONFLICTING_EVIDENCE. `search.resolution.sources`: every source with its \
+                 status (matched, no_match, failed, unavailable, not_configured, switched_off); \
+                 a source that failed or is not there was NOT searched, so do not report it as \
+                 holding nothing, and `incomplete` is true when one failed. `matches` and \
+                 `set_aside`: each file with `matching.status`, `matching.rests_on` (whose \
+                 word the match is: user_declared, source_declared, file_header or filename), \
+                 every comparison in `matching.checks`, `matching.warnings`, `validation` (is \
+                 the file intact), `inspection` (packing, header values; the software inside is \
+                 PAYLOAD_OPAQUE and is never read), and `origin.manufacturer`, which is always \
+                 NOT_ESTABLISHED. Say only what these fields say. A match is never proof of \
+                 who made a file.",
                 module_arg(true),
             ),
             ToolSchema::new(
@@ -667,6 +699,10 @@ pub fn execute(
         "read_calibration_identity" => {
             service.read_calibration_identity(module.unwrap_or_default(), initiator)
         }
+        // The one argument is a module. The identity that is matched is the
+        // one the module reports, never one the caller supplies, and there is
+        // no parameter for a path, an address or a file.
+        "find_calibration" => service.find_calibration(module.unwrap_or_default(), initiator),
         "read_supported_pids" => service.read_supported_pids(module.unwrap_or_default(), initiator),
         "read_monitor_tests" => service.read_monitor_tests(module.unwrap_or_default(), initiator),
         "scan_all_modules" => service.scan_all_modules(initiator),
@@ -753,6 +789,48 @@ mod tests {
         ] {
             assert!(r.get(name).is_some(), "{name} is missing from the registry");
             assert!(r.get(name).unwrap().enabled, "{name} should be enabled");
+        }
+    }
+
+    /// Looking for a calibration is something a model can ask for, and all it
+    /// can say is which module. There is nothing in the call through which a
+    /// path, a web address or an identity of its own choosing could arrive.
+    #[test]
+    fn finding_a_calibration_is_a_tool_that_takes_a_module_and_nothing_else() {
+        let r = ToolRegistry::phase1();
+        let tool = r.get("find_calibration").expect("find_calibration is registered");
+        assert!(tool.enabled);
+        assert!(r.enabled().iter().any(|t| t.name == "find_calibration"));
+        assert_eq!(tool.permission_level, PermissionLevel::L0);
+        // The same read-only capability as reading the identity.
+        assert_eq!(tool.capability, r.get("read_calibration_identity").unwrap().capability);
+        assert_eq!(tool.parameters["required"], json!(["module"]));
+        let properties = tool.parameters["properties"].as_object().unwrap();
+        assert_eq!(properties.keys().collect::<Vec<_>>(), vec!["module"]);
+        assert_eq!(tool.parameters["additionalProperties"], false);
+
+        for extra in [
+            json!({ "module": "ECU_7E8", "url": "https://example.com/file.rwd.gz" }),
+            json!({ "module": "ECU_7E8", "path": "C:/Windows" }),
+            json!({ "module": "ECU_7E8", "identity": { "module_key": "ECU_7E8" } }),
+            json!({}),
+        ] {
+            assert!(
+                validate::validate("find_calibration", &tool.parameters, &extra).is_err(),
+                "{extra} was accepted"
+            );
+        }
+    }
+
+    /// No tool a model is handed writes software to a module, by any name.
+    #[test]
+    fn nothing_a_model_is_handed_programs_a_module() {
+        let r = ToolRegistry::phase1();
+        for tool in r.all() {
+            let name = tool.name.to_ascii_lowercase();
+            for word in ["flash", "program", "write_calibration", "reprogram", "download"] {
+                assert!(!name.contains(word), "{} looks like a programming tool", tool.name);
+            }
         }
     }
 

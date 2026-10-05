@@ -6,9 +6,10 @@
 //! when its content was checked against a hash somebody stated for it
 //! beforehand.
 
-use crate::artifact::{ArtifactRecord, Basis};
-use crate::format::{content_agrees, sniff, Content};
-use crate::identity::{same_identifier, Field};
+use crate::artifact::ArtifactRecord;
+use crate::format::{content_agrees, inspect, Compression, Content, Inspection};
+use crate::identity::same_identifier;
+use crate::resolve::ONE_PER_FILE;
 use serde::{Deserialize, Serialize};
 
 /// The largest file treated as a calibration. A module's whole flash is a few
@@ -65,6 +66,17 @@ impl Validation {
 /// `content` is the file's bytes, or `None` when the file could not be read,
 /// which is itself a result and not an error.
 pub fn validate(record: &ArtifactRecord, content: Option<&[u8]>) -> Validation {
+    let inspection = inspect(content.unwrap_or_default());
+    validate_inspected(record, content, &inspection)
+}
+
+/// [`validate`], for a caller that has already looked inside the file and
+/// should not unpack it twice. `inspection` must be of the same `content`.
+pub fn validate_inspected(
+    record: &ArtifactRecord,
+    content: Option<&[u8]>,
+    inspection: &Inspection,
+) -> Validation {
     let mut v = Validation { status: ValidationStatus::Unknown, sha256: None, checks: Vec::new() };
 
     let Some(bytes) = content else {
@@ -120,28 +132,51 @@ pub fn validate(record: &ArtifactRecord, content: Option<&[u8]>) -> Validation {
         },
     );
 
-    let supported = record.format.is_supported();
+    // What the name says, layer by layer, against what is actually there.
+    let named = record.named();
+    let supported = named.is_supported();
     v.check(
         "format",
         Some(supported),
         if supported {
-            format!("named as {:?}", record.format)
+            format!("named as {}", named.describe())
         } else {
             String::from("not a kind of file this build treats as a calibration")
         },
     );
 
-    let content_kind = sniff(bytes);
-    let agrees = content_agrees(record.format, content_kind);
+    // The packing: a name that says gzip must be a gzip that opens, and a
+    // file that is gzip must say so.
+    let packing = match (named.compression, inspection.compression) {
+        (Some(Compression::Gzip), Some(Compression::Gzip)) => match &inspection.unpack_problem {
+            None => (Some(true), String::from("gzip, as the name says, and it unpacks")),
+            Some(problem) => (Some(false), format!("named as gzip, and {problem}")),
+        },
+        (Some(Compression::Gzip), None) => {
+            (Some(false), String::from("the name says gzip and the content is not gzip"))
+        }
+        (None, Some(Compression::Gzip)) if supported => {
+            (Some(false), format!("the name says {} and the content is gzip", named.describe()))
+        }
+        (None, _) => (None, String::from("not packed")),
+    };
+    let packing_ok = packing.0 != Some(false);
+    v.check("packing", packing.0, packing.1);
+
+    // What is inside, against what the name says is inside. Only asked once
+    // the packing has opened: a gzip that does not unpack has shown nothing.
+    let content_kind = inspection.content;
+    let agrees = if packing_ok { content_agrees(named.payload, content_kind) } else { None };
     v.check(
         "content against name",
         agrees,
         match agrees {
-            Some(true) => format!("the content is {content_kind:?}, as the name says"),
+            Some(true) => format!("what is inside is {content_kind:?}, as the name says"),
             Some(false) if content_kind == Content::Empty => String::from("there is no content"),
             Some(false) => {
-                format!("the name says {:?} and the content is {content_kind:?}", record.format)
+                format!("the name says {} and what is inside is {content_kind:?}", named.describe())
             }
+            None if !packing_ok => String::from("not checked: the packing did not open"),
             None => String::from(
                 "this kind of file has nothing its content can be checked against here",
             ),
@@ -158,18 +193,14 @@ pub fn validate(record: &ArtifactRecord, content: Option<&[u8]>) -> Validation {
 
     // Two declared values for the one thing a file can only be one of.
     let mut contradictions = Vec::new();
-    for field in [Field::CalibrationId, Field::HardwareNumber, Field::ProgramId, Field::RomId] {
+    for field in ONE_PER_FILE {
         let declared: Vec<&str> = record
             .claimed(field)
             .iter()
-            .filter(|c| c.basis == Basis::Declared)
+            .filter(|c| c.basis.is_declared())
             .map(|c| c.value.as_str())
             .collect();
-        // Hardware may legitimately be several: one calibration, several
-        // boards. A file is one calibration.
-        if field != Field::HardwareNumber
-            && declared.iter().any(|a| declared.iter().any(|b| !same_identifier(a, b)))
-        {
+        if declared.iter().any(|a| declared.iter().any(|b| !same_identifier(a, b))) {
             contradictions.push(format!(
                 "{} is declared as {}",
                 field.label(),
@@ -192,6 +223,7 @@ pub fn validate(record: &ArtifactRecord, content: Option<&[u8]>) -> Validation {
     } else if !size_ok
         || !filed_ok
         || declared_ok == Some(false)
+        || !packing_ok
         || agrees == Some(false)
         || !contradictions.is_empty()
     {
@@ -207,25 +239,35 @@ pub fn validate(record: &ArtifactRecord, content: Option<&[u8]>) -> Validation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::artifact::{Claim, Claims, SourceRef};
-    use crate::format::ArtifactFormat;
+    use crate::artifact::{Basis, Claim, SourceKind, SourceRef};
+    use crate::identity::Field;
+    use crate::rwd::fixture;
+    use std::io::Write;
 
     fn record_for(name: &str, bytes: &[u8], declared: Option<&str>) -> ArtifactRecord {
-        ArtifactRecord {
-            sha256: crate::sha256_hex(bytes),
-            size: bytes.len() as u64,
-            format: ArtifactFormat::from_filename(name),
-            filename: name.into(),
-            sources: vec![SourceRef {
+        let mut record = ArtifactRecord::found(
+            name,
+            bytes,
+            SourceRef {
                 source: "folder".into(),
+                kind: SourceKind::UserFolder,
                 reference: name.into(),
                 found_at: "2026-10-04T00:00:00Z".into(),
-            }],
-            claims: Claims::new(),
-            declared_sha256: declared.map(String::from),
-            added_at: "2026-10-04T00:00:00Z".into(),
-            metadata_problem: None,
-        }
+            },
+            "2026-10-04T00:00:00Z",
+        );
+        record.declared_sha256 = declared.map(String::from);
+        record
+    }
+
+    fn gz(bytes: &[u8]) -> Vec<u8> {
+        let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        e.write_all(bytes).unwrap();
+        e.finish().unwrap()
+    }
+
+    fn failed<'a>(v: &'a Validation, what: &str) -> Option<&'a ValidationCheck> {
+        v.checks.iter().find(|c| c.what == what && c.passed == Some(false))
     }
 
     #[test]
@@ -268,11 +310,71 @@ mod tests {
         );
     }
 
+    /// The four things a file named `.rwd.gz` can turn out to be.
     #[test]
-    fn a_name_the_content_cannot_be_is_invalid() {
+    fn a_packed_package_is_checked_one_layer_at_a_time() {
+        let package = fixture::z(&[&[b"TEST-MOD-A010"]], &[0x9C, 0x41, 0x07]);
+        let name = "TEST-MOD-A010.rwd.gz";
+
+        // gzip holding an RWD package: both layers are what the name says.
+        let good = gz(&package);
+        let v = validate(&record_for(name, &good, None), Some(&good));
+        assert_eq!(v.status, ValidationStatus::PartiallyValidated, "{v:#?}");
+        assert!(v.checks.iter().any(|c| c.what == "packing" && c.passed == Some(true)));
+        assert!(v
+            .checks
+            .iter()
+            .any(|c| c.what == "content against name" && c.passed == Some(true)));
+
+        // Not gzip at all.
         let bytes = b"not gzip at all";
-        let v = validate(&record_for("37805-5MR-C120.rwd.gz", bytes, None), Some(bytes));
+        let v = validate(&record_for(name, bytes, None), Some(bytes));
         assert_eq!(v.status, ValidationStatus::Invalid);
+        assert!(failed(&v, "packing").is_some_and(|c| c.detail.contains("not gzip")));
+
+        // gzip that does not open.
+        let mut cut = good.clone();
+        cut.truncate(cut.len() - 10);
+        let v = validate(&record_for(name, &cut, None), Some(&cut));
+        assert_eq!(v.status, ValidationStatus::Invalid);
+        assert!(failed(&v, "packing").is_some_and(|c| c.detail.contains("does not unpack")));
+        // And nothing is said about what is inside something that did not open.
+        assert!(v.checks.iter().any(|c| c.what == "content against name" && c.passed.is_none()));
+
+        // gzip that opens, holding something that is not an RWD package.
+        let other = gz(b"these are notes, not a package");
+        let v = validate(&record_for(name, &other, None), Some(&other));
+        assert_eq!(v.status, ValidationStatus::Invalid);
+        assert!(failed(&v, "packing").is_none());
+        assert!(failed(&v, "content against name")
+            .is_some_and(|c| c.detail.contains("gzip holding a Honda RWD package")));
+    }
+
+    #[test]
+    fn a_plain_package_is_checked_against_its_name_too() {
+        let package = fixture::one(&[(b'$', &["TEST-MOD-A010"])], &[0x9C, 0x41]);
+        let v = validate(&record_for("TEST-MOD-A010.rwd", &package, None), Some(&package));
+        assert_eq!(v.status, ValidationStatus::PartiallyValidated, "{v:#?}");
+
+        // Named as a package, and not one.
+        let bytes = b"some other bytes";
+        let v = validate(&record_for("TEST-MOD-A010.rwd", bytes, None), Some(bytes));
+        assert_eq!(v.status, ValidationStatus::Invalid);
+
+        // Named as a package, and really a packed one: the name left a layer out.
+        let packed = gz(&package);
+        let v = validate(&record_for("TEST-MOD-A010.rwd", &packed, None), Some(&packed));
+        assert_eq!(v.status, ValidationStatus::Invalid);
+        assert!(failed(&v, "packing").is_some_and(|c| c.detail.contains("is gzip")));
+    }
+
+    /// A gzip whose name does not say what it holds is opened and looked at,
+    /// and nothing is required of what is inside.
+    #[test]
+    fn a_gzip_that_does_not_name_its_content_only_has_to_open() {
+        let packed = gz(b"anything at all");
+        let v = validate(&record_for("download.gz", &packed, None), Some(&packed));
+        assert_eq!(v.status, ValidationStatus::PartiallyValidated, "{v:#?}");
     }
 
     #[test]
@@ -289,7 +391,12 @@ mod tests {
         for value in ["TEST-CAL-001", "TEST-CAL-002"] {
             record.claim(
                 Field::CalibrationId,
-                Claim { value: value.into(), basis: Basis::Declared, stated_in: None },
+                Claim {
+                    value: value.into(),
+                    basis: Basis::UserDeclared,
+                    stated_in: None,
+                    source: None,
+                },
             );
         }
         let v = validate(&record, Some(bytes));

@@ -249,24 +249,52 @@ const IDENTITY_READ: Duration = Duration::from_millis(1000);
 /// `F18C`, the module's serial number, is left out on purpose. It names one
 /// physical unit, nothing is matched on it, and it is not this app's to
 /// collect.
+///
+/// In the order asked. Asking stops at a module that stops answering, so the
+/// ones a file is most often matched on come first: part, software and
+/// hardware numbers. Those six are also the ones the ordinary scan already
+/// asks, which is why a recording of a real scan can check this read as far
+/// as them.
 const SOFTWARE_IDENTITY_DIDS: [(u16, aim_calibration::Field); 13] = {
     use aim_calibration::Field::*;
     [
+        (0xF187, PartNumber),
+        (0xF188, SoftwareNumber),
+        (0xF191, HardwareNumber),
+        (0xF18A, Supplier),
+        (0xF195, SoftwareVersion),
+        (0xF197, ModuleName),
         (0xF180, BootSoftwareId),
         (0xF181, SoftwareNumber),
         (0xF182, ApplicationDataId),
-        (0xF187, PartNumber),
-        (0xF188, SoftwareNumber),
         (0xF189, SoftwareVersion),
-        (0xF18A, Supplier),
-        (0xF191, HardwareNumber),
         (0xF192, HardwareNumber),
         (0xF193, HardwareVersion),
         (0xF194, SoftwareNumber),
-        (0xF195, SoftwareVersion),
-        (0xF197, ModuleName),
     ]
 };
+
+/// What a module's refusal of an identifier means, when the reply is one.
+///
+/// "I have no such identifier", "I do not do this service" and "not this
+/// sub-function" are the module saying the thing is not there. Every other
+/// refusal leaves open that it is. The two are different facts about a
+/// vehicle and are kept apart: a module with no verification number and a
+/// module that will not give one just now call for different next steps.
+fn refusal_of(reply: &[u8]) -> Option<(aim_calibration::NotGiven, String)> {
+    let [0x7F, _service, code, ..] = reply else { return None };
+    let state = match code {
+        0x31 | 0x11 | 0x12 => aim_calibration::NotGiven::NotSupported,
+        _ => aim_calibration::NotGiven::Refused,
+    };
+    Some((
+        state,
+        format!(
+            "the module refused: {}",
+            aim_protocols::NegativeResponseCode::from_byte(*code).description()
+        ),
+    ))
+}
 
 /// Bytes as lowercase hex, for keeping beside whatever was read out of them.
 fn hex_of(bytes: &[u8]) -> String {
@@ -559,6 +587,9 @@ pub struct DiagnosticService {
     reference_year: u16,
     /// The last full scan that succeeded in this session.
     last_full_scan: Option<FinishedScan>,
+    /// The calibration files on this computer, when this build has a place
+    /// for them. Looking through them never touches the vehicle.
+    calibration_library: Option<aim_calibration::Library>,
 }
 
 impl DiagnosticService {
@@ -596,7 +627,14 @@ impl DiagnosticService {
             fuel_types: BTreeMap::new(),
             reference_year: 2026,
             last_full_scan: None,
+            calibration_library: None,
         })
+    }
+
+    /// Say where calibration files are kept on this computer, so that
+    /// [`DiagnosticService::find_calibration`] has somewhere to look.
+    pub fn set_calibration_library(&mut self, library: Option<aim_calibration::Library>) {
+        self.calibration_library = library;
     }
 
     /// The session this service records into.
@@ -935,6 +973,38 @@ impl DiagnosticService {
                     ),
                 )
             })
+    }
+
+    /// Ask one module for something the legislation makes every emissions
+    /// module report.
+    ///
+    /// Asked of the module alone first. When that goes unanswered it is asked
+    /// the way the legislation defines, of every module at once, and this
+    /// module's reply is picked out by its address. A module is only obliged
+    /// to answer the second way. The 2023 Odyssey has only ever been asked
+    /// for its calibration identifications that way, so whether it answers
+    /// when asked alone is not known; a module that does not would otherwise
+    /// be reported as "did not answer" for something it gives to anyone who
+    /// asks properly.
+    fn request_legislated(
+        &mut self,
+        module: &Module,
+        request: &ObdRequest,
+    ) -> AimResult<(EcuMessage, Option<i64>)> {
+        match self.request_module(module, request) {
+            Err(unanswered) if unanswered.code == ErrorCode::NoData => {
+                let Ok(messages) = self.request(request, &RequestTarget::Functional) else {
+                    return Err(unanswered);
+                };
+                let evidence = self.recorder.last_response_event();
+                messages
+                    .into_iter()
+                    .find(|m| m.address == module.address)
+                    .map(|m| (m, evidence))
+                    .ok_or(unanswered)
+            }
+            other => other,
+        }
     }
 
     /// Peel the response header off a message, surfacing negative responses.
@@ -1985,8 +2055,80 @@ impl DiagnosticService {
         );
         let outcome = self
             .authorize(capabilities::MODULE_IDENTITY, initiator, None)
-            .and_then(|_| self.calibration_identity_inner(module_key));
+            .and_then(|_| self.software_identity(module_key))
+            .map(|(identity, warnings)| Payload {
+                data: Some(serde_json::json!({
+                    "availability": identity.availability(),
+                    "identity": identity,
+                })),
+                warnings,
+                evidence: self.recorder.last_response_event(),
+                module: Some(module_key.to_string()),
+                ..Default::default()
+            });
         self.finish("read_calibration_identity", capabilities::MODULE_IDENTITY, t0, outcome)
+    }
+
+    /// Read what a module says about its software, then look through the
+    /// calibration files on this computer for one that is that software.
+    ///
+    /// The first half is [`DiagnosticService::read_calibration_identity`] and
+    /// sends the same reads. The second half is
+    /// [`aim_calibration::Library::find`], the same search the screen and the
+    /// HTTP route run, and it touches neither the vehicle nor a network.
+    ///
+    /// The caller names a module and nothing else. It cannot supply the
+    /// identity to match against, a path, or an address: what is matched is
+    /// what the module itself just said.
+    pub fn find_calibration(&mut self, module_key: &str, initiator: &str) -> ToolResult {
+        let t0 = Instant::now();
+        self.record_invocation(
+            "find_calibration",
+            initiator,
+            serde_json::json!({ "module": module_key }),
+        );
+        let outcome = self
+            .authorize(capabilities::MODULE_IDENTITY, initiator, None)
+            .and_then(|_| match self.calibration_library.clone() {
+                Some(library) => Ok(library),
+                None => Err(AimError::bad_request(
+                    "this build has no folder for calibration files, so there is nowhere to look",
+                )),
+            })
+            .and_then(|library| {
+                let (identity, mut warnings) = self.software_identity(module_key)?;
+                let found = library.find(&identity, &now().to_rfc3339());
+                let resolution = &found.resolution;
+                if resolution.incomplete {
+                    warnings.push(Warning::caution(
+                        "calibration_search_incomplete",
+                        "A place calibration files are kept could not be searched, so a file                          may be there that was not looked at. The sources list says which.",
+                    ));
+                }
+                // Said on every search, whatever it found: nothing below
+                // establishes who made a file.
+                let limits = serde_json::json!({
+                    "manufacturer_origin": "NOT_ESTABLISHED",
+                    "why": "Nothing in this app checks a manufacturer's signature. A match says \
+                            which calibration a file is described as or names, never who made it.",
+                    "software_inside_files": "PAYLOAD_OPAQUE",
+                    "downloads": false,
+                    "writes_to_vehicle": false,
+                });
+                Ok(Payload {
+                    data: Some(serde_json::json!({
+                        "availability": identity.availability(),
+                        "identity": identity,
+                        "search": found,
+                        "limits": limits,
+                    })),
+                    warnings,
+                    evidence: self.recorder.last_response_event(),
+                    module: Some(module_key.to_string()),
+                    ..Default::default()
+                })
+            });
+        self.finish("find_calibration", capabilities::MODULE_IDENTITY, t0, outcome)
     }
 
     /// What is established about the vehicle itself, for an identity.
@@ -2039,8 +2181,15 @@ impl DiagnosticService {
         }
     }
 
-    fn calibration_identity_inner(&mut self, module_key: &str) -> AimResult<Payload> {
-        use aim_calibration::{CalibrationIdentity, Field, Identified, IdentitySource, Unanswered};
+    /// The read itself: the identity, and anything the caller should be told
+    /// about it. Sends only reads.
+    fn software_identity(
+        &mut self,
+        module_key: &str,
+    ) -> AimResult<(aim_calibration::CalibrationIdentity, Vec<Warning>)> {
+        use aim_calibration::{
+            CalibrationIdentity, Field, Identified, IdentitySource, NotGiven, Unanswered,
+        };
 
         self.require_usable()?;
         let mut module = self.module_by_key(module_key)?;
@@ -2056,7 +2205,7 @@ impl DiagnosticService {
         ] {
             let source = IdentitySource::ObdInfoType { info_type };
             let request = ObdRequest::vehicle_info(info_type);
-            match self.request_module(&module, &request) {
+            match self.request_legislated(&module, &request) {
                 Ok((message, evidence)) => {
                     let raw = hex_of(&message.payload);
                     let decoded = Self::payload_of(&message, &request)
@@ -2084,6 +2233,7 @@ impl DiagnosticService {
                                 id.unanswered.push(Unanswered {
                                     field: Some(field),
                                     source,
+                                    state: NotGiven::Empty,
                                     reason: String::from("the module answered with nothing in it"),
                                     evidence_ref: evidence,
                                     raw_hex: Some(raw),
@@ -2091,19 +2241,38 @@ impl DiagnosticService {
                             }
                         }
                         // Kept whole. A reply that cannot be read is not
-                        // turned into a value.
-                        Err(e) => id.unanswered.push(Unanswered {
-                            field: Some(field),
-                            source,
-                            reason: format!("the reply could not be read: {}", e.message),
-                            evidence_ref: evidence,
-                            raw_hex: Some(raw),
-                        }),
+                        // turned into a value, and a refusal is not passed
+                        // off as a reply that could not be read.
+                        Err(e) => {
+                            let (state, reason) =
+                                refusal_of(&message.payload).unwrap_or_else(|| {
+                                    (
+                                        NotGiven::Unreadable,
+                                        format!("the reply could not be read: {}", e.message),
+                                    )
+                                });
+                            id.unanswered.push(Unanswered {
+                                field: Some(field),
+                                source,
+                                state,
+                                reason,
+                                evidence_ref: evidence,
+                                raw_hex: Some(raw),
+                            })
+                        }
                     }
                 }
                 Err(e) => id.unanswered.push(Unanswered {
                     field: Some(field),
                     source,
+                    // A refusal is the module speaking. Anything else that
+                    // went wrong on the way is a reading that failed, and is
+                    // not passed off as the module having nothing to say.
+                    state: match e.code {
+                        ErrorCode::NoData => NotGiven::NoAnswer,
+                        ErrorCode::NegativeResponse => NotGiven::Refused,
+                        _ => NotGiven::Unreadable,
+                    },
                     reason: if e.code == ErrorCode::NoData {
                         String::from("the module did not answer")
                     } else {
@@ -2129,6 +2298,7 @@ impl DiagnosticService {
                     id.unanswered.push(Unanswered {
                         field: Some(field),
                         source,
+                        state: NotGiven::NotAsked,
                         reason: format!("not asked: {why}"),
                         evidence_ref: None,
                         raw_hex: None,
@@ -2144,6 +2314,7 @@ impl DiagnosticService {
                     id.unanswered.push(Unanswered {
                         field: Some(field),
                         source,
+                        state: NotGiven::NoAnswer,
                         reason: String::from("the module did not answer"),
                         evidence_ref: evidence,
                         raw_hex: None,
@@ -2153,39 +2324,43 @@ impl DiagnosticService {
                 };
                 let raw = hex_of(&reply.payload);
                 let p = &reply.payload;
-                let reason = if p.len() >= 3
-                    && p[0] == 0x62
-                    && u16::from_be_bytes([p[1], p[2]]) == did
-                {
-                    match aim_protocols::identification_text(&p[3..]) {
-                        Some(text) => {
-                            id.record(
-                                field,
-                                Identified {
-                                    value: text,
-                                    source: source.clone(),
-                                    evidence_ref: evidence,
-                                    raw_hex: Some(raw.clone()),
-                                },
-                            );
-                            continue;
+                let (state, reason) =
+                    if p.len() >= 3 && p[0] == 0x62 && u16::from_be_bytes([p[1], p[2]]) == did {
+                        match aim_protocols::identification_text(&p[3..]) {
+                            Some(text) => {
+                                id.record(
+                                    field,
+                                    Identified {
+                                        value: text,
+                                        source: source.clone(),
+                                        evidence_ref: evidence,
+                                        raw_hex: Some(raw.clone()),
+                                    },
+                                );
+                                continue;
+                            }
+                            None => (
+                                NotGiven::Unreadable,
+                                String::from("the module answered with bytes that are not text"),
+                            ),
                         }
-                        None => String::from("the module answered with bytes that are not text"),
-                    }
-                } else if p.len() >= 3 && p[0] == 0x7F && p[1] == 0x22 {
-                    if p[2] == 0x11 {
-                        not_asking = Some("the module does not support reading identifiers");
-                    }
-                    format!(
-                        "the module refused: {}",
-                        aim_protocols::NegativeResponseCode::from_byte(p[2]).description()
-                    )
-                } else {
-                    String::from("the module answered with something other than the identifier")
-                };
+                    } else if let Some(refusal) = refusal_of(p).filter(|_| p[1] == 0x22) {
+                        if p[2] == 0x11 {
+                            not_asking = Some("the module does not support reading identifiers");
+                        }
+                        refusal
+                    } else {
+                        (
+                            NotGiven::Unreadable,
+                            String::from(
+                                "the module answered with something other than the identifier",
+                            ),
+                        )
+                    };
                 id.unanswered.push(Unanswered {
                     field: Some(field),
                     source,
+                    state,
                     reason,
                     evidence_ref: evidence,
                     raw_hex: Some(raw),
@@ -2241,13 +2416,7 @@ impl DiagnosticService {
             ));
         }
 
-        Ok(Payload {
-            data: Some(serde_json::json!({ "identity": id })),
-            warnings,
-            evidence: self.recorder.last_response_event(),
-            module: Some(module_key.to_string()),
-            ..Default::default()
-        })
+        Ok((id, warnings))
     }
 
     /// Read a module's identity: ECU name, calibration ids, CVNs.
@@ -7800,6 +7969,28 @@ mod tests {
             raw_lines: Vec::new(),
             cut_off: None,
         }
+    }
+
+    /// "I have none" and "I will not say" are different answers, whichever
+    /// service was asked, and neither is a reply that could not be read.
+    #[test]
+    fn a_refusal_says_whether_the_thing_is_absent_or_withheld() {
+        use aim_calibration::NotGiven;
+        // Request out of range, service not supported, sub-function not
+        // supported: to UDS 22, and to OBD-II service 09.
+        for reply in [[0x7F, 0x22, 0x31], [0x7F, 0x22, 0x11], [0x7F, 0x09, 0x12]] {
+            let (state, reason) = refusal_of(&reply).expect("a refusal");
+            assert_eq!(state, NotGiven::NotSupported, "{reply:02X?}");
+            assert!(reason.starts_with("the module refused"), "{reason}");
+        }
+        // Security access denied, conditions not correct: it may well be there.
+        for reply in [[0x7F, 0x22, 0x33], [0x7F, 0x09, 0x22]] {
+            assert_eq!(refusal_of(&reply).unwrap().0, NotGiven::Refused, "{reply:02X?}");
+        }
+        // Not refusals at all.
+        assert!(refusal_of(&[0x62, 0xF1, 0x91, 0x41]).is_none());
+        assert!(refusal_of(&[0x7F, 0x22]).is_none());
+        assert!(refusal_of(&[]).is_none());
     }
 
     /// A refusal is an answer too. Listed as a clear, it reads as a repair.

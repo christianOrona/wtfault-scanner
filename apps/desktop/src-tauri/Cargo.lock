@@ -101,6 +101,7 @@ dependencies = [
 name = "aim-calibration"
 version = "0.6.0"
 dependencies = [
+ "flate2",
  "ring",
  "serde",
  "serde_json",

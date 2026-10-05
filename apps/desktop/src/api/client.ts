@@ -160,33 +160,75 @@ export interface CalibrationIdentity {
     string,
     { value: string; source: IdentitySource; evidence_ref: number | null; raw_hex: string | null }[]
   >;
-  /** Asked for and not given, with the refusal. */
+  /** Asked for and not given, with which kind of "not given" it was. */
   unanswered: {
     field: string | null;
     source: IdentitySource;
+    state: NotGiven;
     reason: string;
     evidence_ref: number | null;
     raw_hex: string | null;
   }[];
 }
 
-/** A calibration file judged two ways: against the module, and as a file. */
+/** Why an identifier was not given. Each is a different fact. */
+export type NotGiven =
+  | "not_supported"
+  | "refused"
+  | "no_answer"
+  | "unreadable"
+  | "empty"
+  | "not_asked"
+  | "unspecified";
+
+/** Where one thing about a module stands, in a word. */
+export type Availability = "AVAILABLE" | "NOT_SUPPORTED" | "REFUSED" | "READ_FAILED" | "NOT_READ";
+
+/** What reading a module's software identity returns. */
+export interface CalibrationRead {
+  identity: CalibrationIdentity;
+  /** Every field about the module, with where it stands. */
+  availability: Record<string, Availability>;
+}
+
+/** Whose word something said about a file is. Weakest first. */
+export type Basis = "filename" | "user_declared" | "source_declared" | "file_header";
+
+/** What kind of place a file was found in. */
+export type SourceKind = "user_folder" | "tool_installation" | "kept" | "other";
+
+/** A calibration file with every judgement made of it, each kept apart:
+ *  against the module, of the file itself, what is inside it, who made it. */
 export interface Evaluated {
   artifact: {
     sha256: string;
     size: number;
+    /** What its name says it is, once any packing is taken off. */
     format: string;
+    /** The packing its name states. */
+    compression: "gzip" | null;
     filename: string;
-    sources: { source: string; reference: string; found_at: string }[];
+    sources: { source: string; kind: SourceKind; reference: string; found_at: string }[];
   };
   matching: {
-    status: "EXACT_MATCH" | "PARTIAL_MATCH" | "NO_MATCH" | "UNKNOWN";
+    status: "EXACT_MATCH" | "PARTIAL_MATCH" | "CONFLICTING_EVIDENCE" | "NO_MATCH" | "UNKNOWN";
+    /** Whose word ties the file to the module's calibration. Read the
+     *  status with it, never without. */
+    rests_on: Basis | null;
     reason: string;
+    warnings: string[];
     checks: {
       field: string;
-      verdict: "confirmed" | "conflict" | "name_agrees" | "name_differs" | "unknown";
+      verdict:
+        | "confirmed"
+        | "conflict"
+        | "conflicting_evidence"
+        | "in_file_header"
+        | "name_agrees"
+        | "name_differs"
+        | "unknown";
       reported: string[];
-      claimed: [string, "declared" | "filename"][];
+      claimed: [string, Basis][];
       note: string;
     }[];
   };
@@ -195,24 +237,75 @@ export interface Evaluated {
     sha256: string | null;
     checks: { what: string; passed: boolean | null; detail: string }[];
   };
+  /** What looking inside the file found. The software in it is never read. */
+  inspection: {
+    compression: "gzip" | null;
+    unpack_problem: string | null;
+    payload_sha256: string | null;
+    payload_size: number | null;
+    content: "empty" | "gzip" | "rwd" | "intel_hex" | "s_record" | "opaque";
+    rwd: {
+      indicator: string;
+      layout: string;
+      headers_read: boolean;
+      groups: { tag: string; texts: string[]; not_shown: number }[];
+      header_bytes: number | null;
+      problem: string | null;
+    } | null;
+    software: "PAYLOAD_OPAQUE" | "PAYLOAD_NOT_REACHED";
+  };
+  /** Who made the file. This build has one answer. */
+  origin: { manufacturer: "NOT_ESTABLISHED"; reason: string };
   cached: boolean;
 }
+
+/** How searching one source ended. A source that failed or is not there was
+ *  not searched: that is not the same as holding nothing. */
+export type SourceStatus =
+  | "matched"
+  | "no_match"
+  | "failed"
+  | "unavailable"
+  | "not_configured"
+  | "switched_off";
 
 /** The result of looking for a module's calibration on this computer. */
 export interface CalibrationFound {
   module: string;
   folder: string;
   resolution: {
-    outcome: "ARTIFACT_FOUND" | "NO_ARTIFACT_FOUND";
+    outcome: "ARTIFACT_FOUND" | "CONFLICTING_EVIDENCE" | "NO_ARTIFACT_FOUND";
     matches: Evaluated[];
     set_aside: Evaluated[];
+    /** True when a source that should have been searched could not be. */
+    incomplete: boolean;
     sources: {
-      source: { id: string; name: string; location: string; uses_network: boolean; enabled: boolean };
+      source: {
+        id: string;
+        name: string;
+        kind: SourceKind;
+        location: string;
+        uses_network: boolean;
+        enabled: boolean;
+      };
+      status: SourceStatus;
       searched: boolean;
       offered: number;
+      matched: number;
+      passed_over: number;
+      note: string | null;
       error: string | null;
     }[];
   };
+}
+
+/** A calibration file a person added to their folder. */
+export interface CalibrationAdded {
+  filename: string;
+  sha256: string;
+  size: number;
+  already_there: boolean;
+  path: string;
 }
 
 /** What importing another install's database added, or would add. */
@@ -293,11 +386,19 @@ export const api = {
     ),
   /** Ask a module which software it runs. Reads the vehicle, and only reads. */
   calibrationIdentity: (key: string) =>
-    request<ToolResult<{ identity: CalibrationIdentity }>>(`/modules/${enc(key)}/calibration`),
+    request<ToolResult<CalibrationRead>>(`/modules/${enc(key)}/calibration`),
   /** Look on this computer for a file that is that software. Does not touch
    *  the vehicle and fetches nothing. Finding none is an answer. */
   findCalibration: (identity: CalibrationIdentity) =>
     post<CalibrationFound>("/calibration/find", { identity }),
+  /** Put a calibration file the person has into their folder, as it is.
+   *  Copied and nothing else: adding a file says nothing about what it is. */
+  addCalibrationFile: (file: File) =>
+    request<CalibrationAdded>(`/calibration/files?name=${enc(file.name)}`, {
+      method: "POST",
+      body: file,
+      headers: { "content-type": "application/octet-stream" },
+    }),
   /** Merge a database exported by another install into this one. With
    *  `dryRun` the answer is what would be added and nothing is kept. */
   importDatabase: (file: Blob, dryRun: boolean) =>

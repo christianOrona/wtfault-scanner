@@ -2,7 +2,9 @@
 //!
 //! A file is stored at `<root>/artifacts/<sha256>.<ext>` and its record as
 //! JSON at `<root>/metadata/<sha256>.json`. The hash is the file's identity:
-//! its name is only what it was called where it was found.
+//! its name is only what it was called where it was found. The extension
+//! keeps both layers of that name, so a packed package is kept as
+//! `<sha256>.rwd.gz`, exactly as it arrived: nothing is unpacked into here.
 //!
 //! The same content added twice, from anywhere and under any name, is one
 //! file with one record that lists both places.
@@ -12,7 +14,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::artifact::{ArtifactRecord, Claims, SourceRef};
-use crate::format::ArtifactFormat;
+use crate::format::Named;
 use crate::is_sha256_hex;
 use crate::sha256_hex;
 
@@ -61,66 +63,36 @@ impl Cache {
     pub fn add(&self, bytes: &[u8], incoming: Incoming) -> io::Result<ArtifactRecord> {
         let sha = sha256_hex(bytes);
         let record_path = self.root.join("metadata").join(format!("{}.json", sha));
-        let artifact_path = self.root.join("artifacts").join(format!(
-            "{}.{}",
-            sha,
-            ArtifactFormat::from_filename(&incoming.filename).extension()
-        ));
+
+        let mut sighting =
+            ArtifactRecord::found(&incoming.filename, bytes, incoming.source, &incoming.now);
+        sighting.claims = incoming.claims;
+        sighting.declared_sha256 = incoming.declared_sha256;
 
         // Already kept: one more sighting of the same content, not a second
         // artifact. The first name, format and date stay.
-        if let Ok(Some(mut record)) = self.get(&sha) {
-            let sighting = ArtifactRecord {
-                sha256: sha,
-                size: bytes.len() as u64,
-                format: ArtifactFormat::from_filename(&incoming.filename),
-                filename: incoming.filename,
-                sources: vec![incoming.source],
-                claims: incoming.claims,
-                declared_sha256: incoming.declared_sha256,
-                added_at: incoming.now,
-                metadata_problem: None,
-            };
-            record.absorb(&sighting);
-            // The record outliving its file is the one case worth repairing
-            // here: the content is in hand and hashes to the record's name.
-            let kept = self.file_path(&record);
-            if !kept.exists() {
-                let tmp = kept.with_extension("tmp");
-                fs::write(&tmp, bytes)?;
-                fs::rename(tmp, &kept)?;
+        let record = match self.get(&sha) {
+            Ok(Some(mut record)) => {
+                record.absorb(&sighting);
+                record
             }
-            let tmp_path = record_path.with_extension("json.tmp");
-            let json = serde_json::to_string_pretty(&record)?;
-            fs::write(&tmp_path, json)?;
-            fs::rename(tmp_path, &record_path)?;
-            return Ok(record);
-        }
-
-        // Create a temporary artifact file
-        let tmp_artifact_path = artifact_path.with_extension("bin.tmp");
-        fs::write(&tmp_artifact_path, bytes)?;
-        fs::rename(&tmp_artifact_path, &artifact_path)?;
-
-        // Create the metadata record
-        let record = ArtifactRecord {
-            sha256: sha,
-            size: bytes.len() as u64,
-            format: ArtifactFormat::from_filename(&incoming.filename),
-            filename: incoming.filename,
-            sources: vec![incoming.source],
-            claims: incoming.claims,
-            declared_sha256: incoming.declared_sha256,
-            added_at: incoming.now,
-            metadata_problem: None,
+            _ => sighting,
         };
 
-        // Write the metadata
-        let tmp_metadata_path = record_path.with_extension("json.tmp");
-        let json = serde_json::to_string_pretty(&record)?;
-        fs::write(&tmp_metadata_path, json)?;
-        fs::rename(tmp_metadata_path, &record_path)?;
+        // Written when it is not there. For a record that has outlived its
+        // file this is the one repair worth making here: the content is in
+        // hand and hashes to the record's name.
+        let artifact_path = self.file_path(&record);
+        if !artifact_path.exists() {
+            let tmp = self.root.join("artifacts").join(format!("{}.tmp", record.sha256));
+            fs::write(&tmp, bytes)?;
+            fs::rename(tmp, &artifact_path)?;
+        }
 
+        let tmp_path = record_path.with_extension("json.tmp");
+        let json = serde_json::to_string_pretty(&record)?;
+        fs::write(&tmp_path, json)?;
+        fs::rename(tmp_path, &record_path)?;
         Ok(record)
     }
 
@@ -139,7 +111,7 @@ impl Cache {
             Ok(contents) => {
                 let record: ArtifactRecord = serde_json::from_str(&contents)
                     .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-                Ok(Some(record))
+                Ok(Some(by_its_name(record)))
             }
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(e),
@@ -161,7 +133,7 @@ impl Cache {
                     match fs::read_to_string(&path) {
                         Ok(contents) => {
                             if let Ok(record) = serde_json::from_str::<ArtifactRecord>(&contents) {
-                                records.push(record);
+                                records.push(by_its_name(record));
                             }
                         }
                         Err(_) => {
@@ -179,7 +151,15 @@ impl Cache {
 
     /// Return the path to an artifact file for a given record.
     pub fn file_path(&self, record: &ArtifactRecord) -> PathBuf {
-        self.root.join("artifacts").join(format!("{}.{}", record.sha256, record.format.extension()))
+        let artifacts = self.root.join("artifacts");
+        let path = artifacts.join(format!("{}.{}", record.sha256, record.named().extension()));
+        // A packed file kept before both layers of its name were, is under
+        // the last extension alone. It is still that file.
+        let earlier = artifacts.join(format!("{}.gz", record.sha256));
+        if !path.exists() && earlier.exists() {
+            return earlier;
+        }
+        path
     }
 
     /// Read the bytes of an artifact file.
@@ -207,9 +187,20 @@ impl Cache {
     }
 }
 
+/// A record with its format read from its name, so one written before
+/// packing was kept apart from content says the same as one written now.
+fn by_its_name(mut record: ArtifactRecord) -> ArtifactRecord {
+    let named: Named = record.named();
+    record.format = named.payload;
+    record.compression = named.compression;
+    record
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::artifact::SourceKind;
+    use crate::format::{ArtifactFormat, Compression};
     use tempfile::tempdir;
 
     #[test]
@@ -222,6 +213,7 @@ mod tests {
             source: SourceRef {
                 source: "test-source".to_string(),
                 reference: "ref1".to_string(),
+                kind: SourceKind::UserFolder,
                 found_at: "now".to_string(),
             },
             claims: Claims::new(),
@@ -255,6 +247,7 @@ mod tests {
             source: SourceRef {
                 source: "source1".to_string(),
                 reference: "ref1".to_string(),
+                kind: SourceKind::UserFolder,
                 found_at: "now".to_string(),
             },
             claims: Claims::new(),
@@ -267,6 +260,7 @@ mod tests {
             source: SourceRef {
                 source: "source2".to_string(),
                 reference: "ref2".to_string(),
+                kind: SourceKind::UserFolder,
                 found_at: "now".to_string(),
             },
             claims: Claims::new(),
@@ -307,6 +301,7 @@ mod tests {
             source: SourceRef {
                 source: "source1".to_string(),
                 reference: "ref1".to_string(),
+                kind: SourceKind::UserFolder,
                 found_at: "now".to_string(),
             },
             claims: Claims::new(),
@@ -319,6 +314,7 @@ mod tests {
             source: SourceRef {
                 source: "source2".to_string(),
                 reference: "ref2".to_string(),
+                kind: SourceKind::UserFolder,
                 found_at: "now".to_string(),
             },
             claims: Claims::new(),
@@ -348,6 +344,7 @@ mod tests {
             source: SourceRef {
                 source: "test-source".to_string(),
                 reference: "ref1".to_string(),
+                kind: SourceKind::UserFolder,
                 found_at: "now".to_string(),
             },
             claims: Claims::new(),
@@ -389,5 +386,66 @@ mod tests {
         // This should not panic or fail
         let list = cache.list().unwrap();
         assert_eq!(list.len(), 0);
+    }
+
+    #[test]
+    fn a_packed_package_is_kept_under_both_layers_of_its_name_and_untouched() {
+        let dir = tempdir().unwrap();
+        let cache = Cache::open(dir.path()).unwrap();
+        let bytes = b"\x1f\x8bstand-in for a packed package";
+        let incoming = Incoming {
+            filename: "TEST-MOD-A010.rwd.gz".to_string(),
+            source: SourceRef {
+                source: "folder".to_string(),
+                reference: "ref1".to_string(),
+                kind: SourceKind::UserFolder,
+                found_at: "now".to_string(),
+            },
+            claims: Claims::new(),
+            declared_sha256: None,
+            now: "2026-10-04T00:00:00Z".to_string(),
+        };
+
+        let record = cache.add(bytes, incoming).unwrap();
+        assert_eq!(record.format, ArtifactFormat::Rwd);
+        assert_eq!(record.compression, Some(Compression::Gzip));
+        let kept = cache.file_path(&record);
+        assert!(kept.to_string_lossy().ends_with(".rwd.gz"), "{}", kept.display());
+        // Kept as it arrived: the same bytes, not what they unpack to.
+        assert_eq!(fs::read(&kept).unwrap(), bytes);
+        assert!(cache.intact(&record).unwrap());
+        // Nothing is left behind from writing it.
+        let files: Vec<_> = fs::read_dir(dir.path().join("artifacts")).unwrap().flatten().collect();
+        assert_eq!(files.len(), 1);
+    }
+
+    /// A packed file kept by the first build is at `<sha256>.gz` with a
+    /// record that calls it `gz`. It is found where it is and read as what
+    /// its name says.
+    #[test]
+    fn a_file_kept_before_layers_were_named_is_still_found() {
+        let dir = tempdir().unwrap();
+        let cache = Cache::open(dir.path()).unwrap();
+        let bytes = b"\x1f\x8bearlier";
+        let sha = sha256_hex(bytes);
+        fs::write(dir.path().join("artifacts").join(format!("{sha}.gz")), bytes).unwrap();
+        fs::write(
+            dir.path().join("metadata").join(format!("{sha}.json")),
+            format!(
+                r#"{{ "sha256": "{sha}", "size": {}, "format": "gz",
+                      "filename": "TEST-MOD-A010.rwd.gz",
+                      "sources": [{{ "source": "folder", "reference": "x", "found_at": "t" }}],
+                      "added_at": "t" }}"#,
+                bytes.len()
+            ),
+        )
+        .unwrap();
+
+        let record = cache.get(&sha).unwrap().expect("the earlier record reads");
+        assert_eq!(record.format, ArtifactFormat::Rwd);
+        assert_eq!(record.compression, Some(Compression::Gzip));
+        assert_eq!(cache.read(&record).unwrap(), bytes);
+        assert!(cache.intact(&record).unwrap());
+        assert_eq!(cache.list().unwrap().len(), 1);
     }
 }

@@ -84,6 +84,12 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/v1/calibration", get(crate::calibration_routes::calibration_status))
         .route("/api/v1/calibration/find", post(crate::calibration_routes::find_calibration))
+        .route(
+            "/api/v1/calibration/files",
+            post(crate::calibration_routes::add_calibration_file).layer(
+                axum::extract::DefaultBodyLimit::max(crate::calibration_routes::MAX_UPLOAD_BYTES),
+            ),
+        )
         .route("/api/v1/modules/{key}/read", post(module_read))
         .route("/api/v1/dtcs/clear", post(clear_dtcs))
         .route("/api/v1/readiness", get(readiness))

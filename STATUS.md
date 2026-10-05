@@ -259,10 +259,20 @@ removed, not yet against the 2012 truck.
   the same file added nothing. No file from a real phone has been imported.
 - **Which software a module runs, and whether a file is that software.** A
   module's calibration identification and verification number are read with
-  their evidence, every identifier it refuses is kept as a refusal, and a
-  calibration file on the computer is judged against them: exact only when the
-  module's own identification equals one declared for the file. Nothing is
-  downloaded and nothing is written. Run against the simulated Odyssey only.
+  their evidence. Every identifier it does not give is kept with why: not
+  supported, refused, no answer, unreadable or not asked. A calibration file
+  on the computer is judged against them: exact only when the module's own
+  identification equals one declared for the file. Every result says whose
+  word the match rests on, and that who made the file is not established.
+  A file can be added from the screen. The AI model has the same search as a
+  tool (`find_calibration`). Nothing is downloaded and nothing is written.
+  Checked against the real Odyssey's recorded bytes for the calibration
+  identification, verification number, name and six refused identifiers. The
+  button itself has not been pressed on the vehicle.
+- **What is inside a calibration file, as far as its header.** `.rwd.gz` is
+  read as gzip holding an RWD package, and the header of an RWD package is
+  read. Tested against files built to a public description of the format. No
+  real RWD file has been through it.
 - **Sessions replay without the vehicle.** A recorded session exports as a
   transcript with the VIN anonymised, and CI replays recorded sessions and fails
   when a replay discovers less than the original did.
@@ -368,10 +378,15 @@ Honest gaps, in the order they matter.
   (whose pre-CAN layout differs) are not decoded, and nothing that needs UDS
   is offered.
 - **A calibration file has to be supplied.** No source of manufacturers'
-  files is built in, so for nearly every module the answer is that none was
-  found. A Honda `.rwd` is hashed and matched on what is declared about it and
-  is not opened. On the 2023 Odyssey only the engine and transmission say what
-  they run; its other eleven modules refuse every standard identifier.
+  files is built in and nothing is downloaded, so for nearly every module the
+  answer is that none was found. Honda's own service tool folder is searched
+  when that tool is installed; it has been on no machine this was tested on.
+  On the 2023 Odyssey only the engine and transmission say what they run; its
+  other eleven modules refuse every standard identifier.
+- **A calibration file is never opened past its header.** The software inside
+  is not read, decoded or compared. What an RWD header value means is not
+  publicly described, so an identifier found in one makes a match partial and
+  never exact. Nothing establishes that a file came from its manufacturer.
 - **No manufacturer-specific decoding.** Everything is the public standard,
   which is why it works across brands and also why a module can answer with a
   code nobody has a description for.

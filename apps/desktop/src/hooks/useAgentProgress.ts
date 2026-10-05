@@ -36,6 +36,7 @@ const PLAIN: Record<string, string> = {
   read_supported_pids: "Checking what this module can report",
   get_module_identity: "Asking a module to identify itself",
   read_calibration_identity: "Asking a module which software it runs",
+  find_calibration: "Looking on this computer for that module's calibration file",
   adapter_health: "Checking the adapter",
   read_monitor_tests: "Reading the self-test results",
   read_readiness: "Checking which self-tests have finished",
