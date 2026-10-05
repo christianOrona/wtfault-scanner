@@ -265,7 +265,7 @@ the `-setup.exe` for most people, the `.msi` for managed installs. Once
 installed, the app tells you when there is a newer version, and downloads and
 installs it when you press the buttons to.
 
-**Android:** from the next release on, each release also has an `.apk`. Pair
+**Android:** from 0.6.0 on, each release also has an `.apk`. Pair
 the ELM327 in Android's Bluetooth settings, install the APK, and pick the
 adapter by name. [docs/ANDROID.md](docs/ANDROID.md) covers installing, what
 differs from the desktop, and building it.

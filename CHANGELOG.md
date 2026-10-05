@@ -3,7 +3,18 @@
 Notable changes, newest first. Versions follow [semantic versioning](https://semver.org),
 with the caveat that everything below 1.0 is allowed to move.
 
-## [Unreleased]
+## [0.6.0] — 2026-10-04
+
+The scanner now runs on an Android phone, so the thing that goes to the car
+can be the thing in your pocket, and what the phone records there can be
+brought back to the laptop as part of the same vehicle's history. It also
+reads vehicles from before CAN, walks you through tests that need the engine
+in a particular state, and can use a free AI model.
+
+The Android app has run in an emulator against the virtual vehicle. It has not
+yet been connected to a real adapter, and the share sheet, the import and the
+screen staying on have not been tried on a phone at all. If you try any of
+them, an issue saying what happened is the most useful thing you can send.
 
 ### Added
 

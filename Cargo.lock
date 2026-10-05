@@ -13,7 +13,7 @@ dependencies = [
 
 [[package]]
 name = "aim-adapter"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "aim-protocols",
  "aim-simulator",
@@ -27,7 +27,7 @@ dependencies = [
 
 [[package]]
 name = "aim-agent"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "aim-types",
  "async-trait",
@@ -43,7 +43,7 @@ dependencies = [
 
 [[package]]
 name = "aim-api"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "aim-adapter",
  "aim-agent",
@@ -76,7 +76,7 @@ dependencies = [
 
 [[package]]
 name = "aim-decoders"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "aim-protocols",
  "aim-types",
@@ -88,7 +88,7 @@ dependencies = [
 
 [[package]]
 name = "aim-diagnostics"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "aim-adapter",
  "aim-decoders",
@@ -106,7 +106,7 @@ dependencies = [
 
 [[package]]
 name = "aim-protocols"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "aim-types",
  "serde",
@@ -115,7 +115,7 @@ dependencies = [
 
 [[package]]
 name = "aim-report-endpoint"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "axum",
  "clap",
@@ -130,7 +130,7 @@ dependencies = [
 
 [[package]]
 name = "aim-safety"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "aim-types",
  "serde",
@@ -140,7 +140,7 @@ dependencies = [
 
 [[package]]
 name = "aim-session"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "aim-types",
  "rusqlite",
@@ -153,7 +153,7 @@ dependencies = [
 
 [[package]]
 name = "aim-simulator"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "aim-adapter",
  "aim-decoders",
@@ -166,7 +166,7 @@ dependencies = [
 
 [[package]]
 name = "aim-tools"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "aim-adapter",
  "aim-decoders",
@@ -181,7 +181,7 @@ dependencies = [
 
 [[package]]
 name = "aim-transport"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "aim-types",
  "serde",
@@ -192,7 +192,7 @@ dependencies = [
 
 [[package]]
 name = "aim-types"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "serde",
  "serde_json",

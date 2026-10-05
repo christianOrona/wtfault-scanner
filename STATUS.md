@@ -3,7 +3,7 @@
 Where the project actually is, updated when something significant changes.
 Not a changelog — see `CHANGELOG.md` for releases — and not a diary.
 
-Last reviewed: **2026-10-01**
+Last reviewed: **2026-10-04**
 
 ---
 
@@ -15,8 +15,8 @@ Evidence, not intention. Everything here has run against a vehicle.
 |---|---|
 | Vehicles seen | 3 real (2019 F-250 ×2, 2012 F-250), plus three virtual ones: the truck, a 29-bit petrol Honda, and a 2004 Toyota on the K-line |
 | Adapters | FTDI USB at 500000 baud, Bluetooth ELM327 clone at 38400, OBDLink MX+ (STN) |
-| Sessions recorded | 34 |
-| Adapter exchanges logged | ~29,900 |
+| Sessions recorded | 40 on a real adapter |
+| Adapter exchanges logged | ~40,600 |
 
 OBD-II services 01–0A, UDS 0x10/0x19/0x22/0x27/0x2E/0x3E, full-bus module sweep,
 Mode 06, readiness, live data, session comparison, flight recorder.
@@ -72,8 +72,13 @@ for the last probe, and the adapter now resends the command it never got. The
 header changes and no `STOPPED` at all, no bus errors, one `?` (the
 multi-PID request a v1.4b clone does not support) and two `BUFFER FULL`.
 Whether the resend or the bus-selection fix ended them cannot be told apart
-from one session. Timeouts are not visible in a transcript, so that count is
-unmeasured.
+from one session.
+
+Counted again on 2026-10-04 from the session database, which does record
+timeouts: across every session on a real adapter, `stopped` 1,921, `timeout`
+1,657, `not_understood` 258, `bus_error` 141, `unable_to_connect` 19. Every
+`stopped` and every `timeout` is from 2026-09-13 or earlier. The 2026-09-28
+visit was five sessions and 12,794 replies with neither.
 
 ### Protocol detection accepted a failed bus init
 
@@ -237,7 +242,7 @@ removed, not yet against the 2012 truck.
   record of the file. That catches a damaged or swapped download; it does not
   replace signing, which is what would catch a replaced release.
 
-## Pending, as of 2026-10-01
+## Pending, as of 2026-10-04
 
 Desk work that is ready to pick up:
 - Wideband oxygen sensors: PIDs 24-2B (voltage, `(256C+D)*8/65535` V) and
