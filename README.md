@@ -1,101 +1,58 @@
 <div align="center">
 
-<img src="docs/screenshots/icon.png" alt="WTFault Scanner" width="200">
+<img src="docs/screenshots/icon-small.png" alt="WTFault Scanner" width="140">
 
 # WTFault Scanner
 
 ### *Just ask your car what the fuck is wrong.*
 
-An OBD-II scanner with a language model attached. The model can be wrong. What
-it cannot do is hand you a guess wearing the label of something your car said.
+An open-source scan tool that asks every computer in your car what it knows,
+explains the answer in plain words, and shows you the raw data behind every
+claim.
+
+[![Download the latest release](https://img.shields.io/badge/Download-latest%20release-2ea44f?style=for-the-badge)](https://github.com/christianOrona/wtfault-scanner/releases/latest)
+[![Try it without a car](https://img.shields.io/badge/No%20car%3F-try%20it%20anyway-1f6feb?style=for-the-badge)](#no-car-try-it-anyway)
 
 [![CI](https://github.com/christianOrona/wtfault-scanner/actions/workflows/check.yml/badge.svg)](https://github.com/christianOrona/wtfault-scanner/actions/workflows/check.yml)
-[![status: work in progress](https://img.shields.io/badge/status-work%20in%20progress-orange)](#status)
 [![release](https://img.shields.io/github/v/release/christianOrona/wtfault-scanner?include_prereleases&sort=semver)](https://github.com/christianOrona/wtfault-scanner/releases)
 [![licence](https://img.shields.io/badge/licence-MIT%20OR%20Apache--2.0-blue)](#licence)
-[![platform](https://img.shields.io/badge/platform-Windows%20%7C%20Android-lightgrey)](#getting-started)
+[![platform](https://img.shields.io/badge/platform-Windows%20%7C%20Android%20preview-lightgrey)](#get-started)
+[![status: work in progress](https://img.shields.io/badge/status-work%20in%20progress-orange)](#where-it-stands)
+
+<img src="docs/screenshots/report.png" alt="An AI inspection report: a verdict, a cost range labelled as an estimate, and a finding labelled measured with links to its evidence" width="820">
+
+<sub>A real report, not a mock-up and not edited: the built-in virtual truck, read
+by the app and written up by Claude. Every line marked <code>measured</code> links to the
+bytes it came from.</sub>
 
 </div>
 
-> **Work in progress.** It reads real vehicles today — verified on a 2019 F-250
-> over a real adapter. The screenshots below are from the built-in virtual
-> truck, which is said here rather than left for you to assume. It is also
-> unfinished in ways worth knowing before you rely on it: see [Status](#status).
-
 ---
 
-## What it is
+## Your car already knows what is wrong
 
-Every cheap scanner tells you `P0420`. This one tells you what that means for
-your car, what it would cost, what it could not check, and shows you the exact
-conversation with the vehicle that produced the answer.
+Every cheap scanner tells you `P0420` and leaves you to it. This one tells you
+what that means for your car, what it could cost, what it could not check, and
+shows you the exact conversation with the vehicle that produced the answer.
 
 It also asks questions a code reader never asks. Most scanners read the
 emissions system, because that is the part the law requires a car to expose.
 Brakes, airbag, body and transmission modules are on the same wires answering
-the same standard, and nobody asks them — which is how a car with a dead wheel
+the same standard, and nobody asks them. That is how a car with a dead wheel
 speed sensor scans completely clean.
 
 ```
-                        ┌──────────────────────────────┐
-   "what's wrong        │   language model             │   plain English,
-    with my truck?" ───▶│   (Claude / local / any)     │──▶ with sources
-                        └──────────────┬───────────────┘
-                                       │ typed tool calls only
-                        ┌──────────────▼───────────────┐
-                        │   capability gate            │   refuses anything
-                        │   + typed tool registry      │   not on the list
-                        └──────────────┬───────────────┘
-                        ┌──────────────▼───────────────┐
-                        │   diagnostic core            │   every byte recorded
-                        │   OBD-II (J1979) + UDS       │
-                        └──────────────┬───────────────┘
-                        ┌──────────────▼───────────────┐
-                        │   adapter  ──▶  your vehicle │
-                        └──────────────────────────────┘
+your car  →  adapter  →  every byte recorded  →  the model reads it  →  you, with sources
 ```
-
----
-
-## Why this and not a $30 scanner
 
 Free is the least interesting thing about it.
 
-### Bring your own brain
+---
 
-No scanner ties you to its vendor's cloud. This one does not tie you to
-*anyone's*. The model is a setting:
+## AI that shows its receipts
 
-| | |
-|---|---|
-| **Anthropic** | strongest reasoning, pay per scan, your data leaves the machine |
-| **Ollama** | runs on your own hardware — a GPU box on your network, or this laptop |
-| **xAI** | Grok, same deal as Anthropic |
-| **OpenRouter (free)** | free models with a free key and no GPU; picks the best one and moves on when it is busy. 50 requests a day, and whoever serves a free model may keep what it is sent |
-| **Anything OpenAI-shaped** | point it at a URL and it works |
-
-The tool layer is vendor-neutral JSON Schema, so switching from a hosted model
-to a local one is a dropdown, not a rewrite. If you want a diagnostic tool that
-sends nothing to anybody, run Ollama and it sends nothing to anybody. Try that
-with a paid scan tool.
-
-### It gets smarter without a new version
-
-Everything it knows about vehicles is **data, not code** — sensor scaling, code
-descriptions, plain-language explanations, configurable features. Add a YAML
-file from the app, or drop one in a folder, and reconnect. No rebuild, no update, no waiting for a vendor
-to decide your car is worth supporting.
-
-That is also the honest answer to the manufacturer paywall. Nobody can
-reverse-engineer four brands alone, but the method is mechanical — read the
-configuration, change one setting with a known-good tool, read it again, diff —
-and a hundred owners can. Everything loaded that way is labelled on screen with
-the file it came from, so a wrong mapping is traceable to whoever supplied it.
-
-### It knows the difference between reading and knowing
-
-This is the part that has no equivalent anywhere. Three sources, always
-labelled, never blended:
+The model can be wrong. What it cannot do is hand you a guess wearing the label
+of something your car said. Three sources, always labelled, never blended:
 
 ```
   measured        read from YOUR vehicle, this session, with the raw bytes
@@ -103,141 +60,107 @@ labelled, never blended:
   AI knowledge    the model's own reasoning — NOT checked against your car
 ```
 
-A repair-cost estimate is always the third one and always a range. A scanner
-that shows you a confident dollar figure is showing you a guess wearing a
-number's clothes.
+![A cost estimate from the report, labelled AI general knowledge, with a range and the basis for it](docs/screenshots/estimate.png)
 
-### It looks where the law does not require
+A repair cost is always the third kind and always a range. A scanner that shows
+you a confident dollar figure is showing you a guess wearing a number's clothes.
 
-Emissions diagnostics are legislated, which is why every scanner reads them.
-Brakes, airbag, body and transmission modules are on the same wires answering
-the same ISO standard, and almost nothing asks them. This does.
+![The flight recorder, opened from an evidence link in the report, with the adapter's reply highlighted](docs/screenshots/evidence.png)
 
-Because it asks in the public standard rather than with proprietary
-identifiers, the *asking* works on vehicles nobody wrote special code for — a
-module that answers a fault request answers it the same way whoever built it.
-Understanding the answer in detail is where manufacturers diverge, and that part
-is data the app either has for your vehicle or admits it does not.
+Every number is one click from the adapter exchange that produced it. Not a log
+file to go digging in: a click, from the claim to the bytes. That is what makes
+"it does not make things up" something you can check rather than something we
+say.
 
-### It shows its working
+Four rules it will not break:
 
-Every number can show you the exact adapter exchange that produced it. Not a log
-file — a click, from the number, to the bytes. That is what makes "it never
-makes anything up" a checkable claim rather than marketing.
-
-### It adapts to your hardware instead of assuming
-
-The app measures what your adapter actually achieves and sizes its requests
-accordingly. Plug in something faster and it goes faster, with no setting to
-change. It finds your cable's line speed by sweeping, and recognises STN-series
-hardware and uses the extra throughput.
-
----
-
-## Four rules it will not break
-
-**A measurement can only come from the vehicle.** Every number the app presents
-as a reading carries the raw bytes it came from and can show you the adapter
-exchange that produced it. A model can still be wrong in its reasoning — that is
-what models do — but there is no path by which its prose becomes a value in the
-measured column, because that column is populated from tool results and nothing
-else.
-
-**It separates what it measured from what it believes.** A fault read from your
-vehicle, a description from the standard code catalogue, and the model's own
-general automotive knowledge are three different things and are labelled as
-three different things. Repair costs are always the third one.
-
-**It says "I don't know".** An unnamed module is "the module at 7A8", not a
-guess at what it probably is. A code with no catalogue entry keeps its
-structural decoding and gets no description rather than an invented one.
-
-**A change is not believed until it is seen.** Configuration writes exist, behind
-a typed confirmation, a full precondition list, and a read-back: the record is
-read, the masked bits changed, the record written whole, then read again and
-compared. A module answering "accepted" is not a changed setting, and a write
-that cannot be verified is reported as unverified with the final state unknown.
-Programming and firmware are compiled off, and the assistant can reach none of
-it.
+- **A measurement can only come from the vehicle.** There is no path by which a
+  model's prose becomes a value in the measured column. That column is filled
+  from what the adapter returned and nothing else.
+- **It says "I don't know."** An unnamed module is "the module at 768", not a
+  guess at what it probably is. The report above does it: a chassis fault this
+  build has no description for is reported as exactly that.
+- **It tells you what it could not check.** Every report carries the list,
+  because a clean scan is not a clean car.
+- **A change is not believed until it is seen.** A module answering "accepted"
+  is not a changed setting. The record is read back and compared.
 
 ---
 
 ## What it does
 
-### Everything it found, explained
+### Ask it anything
 
-<img src="docs/screenshots/inspect.png" alt="Inspection screen">
+![Asking whether it is safe to drive home. The assistant asks which warning lights are lit before answering.](docs/screenshots/ask.png)
 
-Plain questions, real answers, with every claim sourced. It decides which tests
-are worth running, runs them, and tells you what it found — including what it
-could not check.
+Plain questions, in your own words. It reads whatever it needs from the car to
+answer, shows you what it read, and asks you back when the answer depends on
+something only you can see.
 
-Set whether you **own** the vehicle or are **thinking of buying it**, and the
-whole report changes: an owner gets urgency and what they can fix themselves,
-a buyer gets cost and negotiating position.
+### Every computer, not just the two the law covers
 
-### Full vehicle scan
+![A full scan: five modules found, one fault failing right now, one stored](docs/screenshots/fullscan.png)
 
-<img src="docs/screenshots/fullscan.png" alt="Full vehicle scan">
+A full scan sweeps every diagnostic address and asks whatever answers for its
+faults. No AI is involved and nothing is spent. It tells a fault **failing
+right now** from one merely **stored** from an earlier drive, which the
+legislated services cannot tell you at all. And a code this build has no
+description for keeps its structure and gets nothing invented, as above.
 
-Sweeps every diagnostic address on the bus and asks whatever answers for its
-fault memory. This reaches modules the emissions services cannot address, and
-it distinguishes a fault **failing right now** from one merely **stored** from
-an earlier drive — which the legislated services cannot tell you at all.
+### Live data that explains itself
 
-The transport and the services are ISO 14229, which is why this works on
-vehicles nobody wrote special code for. What is **not** standard is everything
-that makes an answer meaningful: which addresses a manufacturer put its modules
-on, which identifiers hold which data, how a value is scaled, which diagnostic
-sessions exist, and what security a module demands before it will talk. Those
-are per-manufacturer, and the app treats them as data it either has for your
-vehicle or honestly does not.
+![Live data: five readings with graphs, each with a link to where the number came from](docs/screenshots/live.png)
 
-### Live data
+Watch the sensors move. Every reading can say what it is in a sentence, and the
+number of signals is worked out from what your adapter actually achieves
+rather than from a hardcoded guess.
 
-<img src="docs/screenshots/live.png" alt="Live data">
+### Change a setting, carefully
 
-Watch the sensors move. Every reading explained in a sentence, charts that
-glide rather than stutter, and a signal budget worked out from what your
-adapter actually achieves rather than from a hardcoded guess.
+![Changing a setting: the exact byte that would change, shown before and after, and a typed confirmation](docs/screenshots/setting.png)
 
-### Self-test measurements
+Some things about a car are switched on or off in its computers rather than
+repaired. The app shows the exact byte that would change, checks its
+preconditions, makes you type a word, writes, and reads the record back.
 
-The reading a code reader cannot give you. Your vehicle continuously grades its
-own emissions systems, and OBD service 06 reports the measured value *next to
-the limit it is judged by*. A catalyst reading 0.58 against a 0.60 limit is
-passing — and about to stop. You see it months before it sets a code.
+Today that means **two settings verified on one 2019 F-250** (door auto-lock,
+and the double honk when you walk away), four more mapped and not yet verified,
+and a practice setting on the virtual truck. A mapping is data: measure one,
+add the file, and it works with no new release. Changing a setting needs an
+STN-based adapter (see [Get started](#get-started)).
 
-### Emissions readiness — the used-car check
+### And the rest
 
-Clearing trouble codes also resets every self-test, and they only finish again
-after 50–100 miles of driving. A car with no stored codes but unfinished
-self-tests was very probably cleared shortly before you arrived. The app says
-so plainly, along with the honest caveat that a flat battery does the same
-thing.
-
-### Flight recorder
-
-<img src="docs/screenshots/recorder.png" alt="Flight recorder">
-
-Every command sent and every reply received, in order, in an append-only log.
-Click "show me where this number came from" anywhere in the app and land on the
-exact exchange. This is what makes the honesty rules checkable rather than
-promised.
-
-### Easy or Advanced
-
-One switch. **Easy** hides identifiers, hex and decoder provenance and puts a
-plain sentence where you are already looking. **Advanced** shows everything.
-Neither hides the evidence link — a simpler screen is not allowed to be a less
-honest one.
+- **AI inspection.** One button. It decides which checks are worth running,
+  runs them and writes the report at the top of this page. Tell it whether you
+  **own** the vehicle or are **thinking of buying it**, and the whole report
+  changes.
+- **Self-test results.** Your car grades its own emissions systems and reports
+  the measured value *next to the limit it is judged by*. A catalyst reading
+  0.58 against a 0.60 limit is passing, and about to stop. You see it months
+  before it sets a code.
+- **The used-car check.** Clearing trouble codes also resets every self-test,
+  and they only finish again after 50 to 100 miles. No codes but unfinished
+  self-tests means the car was very probably cleared shortly before you
+  arrived. The app says so, with the honest caveat that a flat battery does
+  the same thing.
+- **What changed since last time.** Every scan is kept, and two visits to the
+  same vehicle can be compared: which faults appeared, which are gone, which
+  readings moved.
+- **Reports that leave the app.** Copy the report as text or save it, source
+  labels included, and export codes and live data as CSV.
+- **Laptop and phone.** Export the database on one device and import it on
+  another. Sessions are filed under the vehicle by its VIN.
+- **Easy or Advanced.** One switch. Easy hides identifiers and hex and puts a
+  plain sentence where you are already looking. Neither hides the evidence
+  link: a simpler screen is not allowed to be a less honest one.
 
 ---
 
-## Try it without a car
+## No car? Try it anyway
 
-There are virtual vehicles built in. Connect → **Virtual vehicle**, then pick
-one. Everything works: scans, live data, the agent, the flight recorder.
+Virtual vehicles are built in. Connect → **Virtual vehicle**, then pick one.
+Everything works: scans, live data, the assistant, the flight recorder.
 
 ```
 f250         2019 F-250 diesel: 11-bit CAN, a second bus, five control modules
@@ -254,67 +177,75 @@ bus-silent   the adapter works and the vehicle does not answer
 parked       key on, engine off: the state a setting is changed in
 ```
 
+Every screenshot on this page is the virtual truck.
+
 ---
 
-## Getting started
+## Get started
 
-### Download
+**1. Download.** Windows installers are on the
+[releases page](https://github.com/christianOrona/wtfault-scanner/releases/latest):
+the `-setup.exe` for most people, the `.msi` for managed installs. They are
+built by [the release workflow](.github/workflows/release.yml) from a tagged
+commit, and each release lists SHA-256 checksums. They are **not code signed
+yet**, so Windows SmartScreen warns before the installer runs. Signing has been
+applied for through SignPath Foundation; the
+[code signing policy](docs/CODE_SIGNING.md) covers what gets signed and exactly
+what the app sends over the network.
 
-Windows installers are on the [releases page](https://github.com/christianOrona/wtfault-scanner/releases):
-the `-setup.exe` for most people, the `.msi` for managed installs. Once
-installed, the app tells you when there is a newer version, and downloads and
-installs it when you press the buttons to.
+**2. Connect.** Plug an adapter into the car, or pick the virtual vehicle.
 
-**Android:** from 0.6.0 on, each release also has an `.apk`. Pair
-the ELM327 in Android's Bluetooth settings, install the APK, and pick the
-adapter by name. [docs/ANDROID.md](docs/ANDROID.md) covers installing, what
-differs from the desktop, and building it.
+Any ELM327-class adapter can **read**. The app measures what yours actually
+achieves and sizes its requests to it, finds a wired cable's line speed by
+sweeping, and recognises STN-based hardware (OBDLink and similar) and uses the
+extra throughput. **Changing a setting needs an STN-based adapter**, an OBDLink
+EX or MX+: a cheap clone refuses to transmit a request that long, and the
+vehicle never sees it.
 
-From the next release on, installers are built by
-[the release workflow](.github/workflows/release.yml) from a tagged commit rather
-than on a developer's machine, and each release lists SHA-256 checksums.
+**3. Inspect.** A full scan needs nothing else. For the AI report and Ask, add
+a model in **Settings**.
 
-Code signing has been applied for through SignPath Foundation and is **not in
-place yet**, so Windows SmartScreen warns before the installer runs; each release
-says whether it is signed. The [code signing policy](docs/CODE_SIGNING.md) covers
-what gets signed, who approves it, and exactly what the app sends over the
-network.
+**Android is a preview.** Each release since 0.6.0 has an `.apk`, and the whole
+app runs in the emulator. Its Bluetooth link has not been tested against a real
+adapter yet. [docs/ANDROID.md](docs/ANDROID.md) covers installing and building.
 
-### From source
+**From source:**
 
 ```bash
-git clone <this repo>
+git clone https://github.com/christianOrona/wtfault-scanner.git
 cd wtfault-scanner/apps/desktop
 npm install
 npm run tauri:build      # installers land in src-tauri/target/release/bundle
 ```
 
-Then point it at a model in **Settings**: Anthropic with an API key, or an
-Ollama endpoint on your own hardware if you would rather nothing left the
-machine.
+---
 
-> **Building from a fresh clone:** the desktop shell embeds the built UI, so
-> `npm run build` has to run before the Rust side will compile. `npm run
-> tauri:build` does both in the right order.
+## Bring your own brain
 
-### Hardware
+There is no WTFault cloud and no WTFault account. The model is a setting:
 
-Any ELM327-class adapter works. The app measures what yours can actually do and
-sizes its requests accordingly, rather than assuming the cheapest one — and it
-recognises STN-series hardware (OBDLink and similar) and uses the extra
-throughput.
+| | |
+|---|---|
+| **Anthropic** | strongest reasoning, pay per scan, your data leaves the machine |
+| **Ollama** | runs on your own hardware: a GPU box on your network, or this laptop |
+| **xAI** | Grok, same deal as Anthropic |
+| **OpenRouter (free)** | free models with a free key and no GPU. Built, and not yet run end to end on a real key. Whoever serves a free model may keep what it is sent |
+| **Anything OpenAI-shaped** | point it at a URL |
 
-It also finds the line speed for you. A wired cable that answers at 500000 baud
-is found by sweeping, because nothing in the serial API can ask a device what
-speed it is set to.
+The tool layer is vendor-neutral JSON Schema, so switching from a hosted model
+to a local one is a dropdown, not a rewrite. If you want a diagnostic tool that
+sends nothing to anybody, run Ollama and it sends nothing to anybody. Try that
+with a paid scan tool.
 
 ---
 
-## Vehicle profiles: teaching it new things
+## It gets smarter without a new version
 
-Everything the app knows about vehicles is data, not code — PID scaling, code
-descriptions, plain-language explanations, configurable features. Drop a YAML
-file in the profiles folder and it loads at startup, no rebuild:
+Everything it knows about vehicles is **data, not code**: sensor scaling, code
+descriptions, plain-language explanations, configurable settings. Add a profile
+from the app, from a file or a URL, or drop one in the profiles folder. It
+applies on the next connection. No rebuild, no update, no waiting for a vendor
+to decide your car is worth supporting.
 
 ```yaml
 signals:
@@ -323,24 +254,25 @@ signals:
     technical: "Commanded start of injection relative to top dead centre."
 ```
 
-Everything loaded this way is labelled on screen with the file it came from, so
-a wrong mapping is traceable to whoever supplied it. **Settings → Vehicle
-profiles** shows the folder and exactly what was read.
+That is also the honest answer to the manufacturer paywall. Nobody can
+reverse-engineer four brands alone, but the method is mechanical (read the
+configuration, change one setting with a known-good tool, read it again, diff)
+and a hundred owners can. Everything loaded this way is labelled on screen with
+the file it came from, so a wrong mapping is traceable to whoever supplied it.
 
 ---
 
 ## What it will not do
 
-Not a limitation to work around — a design decision:
+Not a limitation to work around. A design decision:
 
 - **Nothing in the braking, steering or throttle path.** Refused by risk class,
   permanently, whatever evidence exists. A tool you run in your own driveway on
   a vehicle you then drive on a road should not change how it stops.
-- **Nothing to do with immobilisers or keys, and no writing of firmware.** Not
-  implemented, and a verified mapping would not change that. The app reads
-  which software a module says it runs and can tell you whether a file is that
-  software ([docs/CALIBRATION.md](docs/CALIBRATION.md)). It never programs or
-  flashes one.
+- **Nothing to do with immobilisers or keys, and no writing of firmware.** It
+  sends no security key and contains no algorithm to make one. It can read
+  which software a module says it runs ([docs/CALIBRATION.md](docs/CALIBRATION.md));
+  it never programs or flashes one.
 - **Nothing that defeats an emissions control.** Illegal in most places, and
   refused with a reason rather than silently missing.
 - **No invented repair costs.** Ranges only, always labelled as the model's
@@ -348,125 +280,33 @@ Not a limitation to work around — a design decision:
 
 ---
 
-## Status
+## Where it stands
 
-Working, on real vehicles, and unfinished. Both halves are true, so here is the
-line between them.
+Working, on real vehicles, and unfinished. Both halves are true.
 
-**Works today, verified on hardware**
+**Run on real hardware:** four vehicles (two 2019 F-250s, a 2012 F-250 and a
+2023 Honda Odyssey), three adapters, 41 recorded sessions and about 54,500
+logged exchanges. 11-bit and 29-bit CAN. Both CAN buses: the same F-250
+answers with 7 modules on the legislated bus and 29 more on the other.
 
-- OBD-II services 01–0A and UDS 0x10/0x19/0x22/0x27/0x2E/0x3E over an
-  ELM327-class adapter
-- **11-bit and 29-bit CAN.** Verified on a 2019 Ford F-250 (11-bit) and a 2023
-  Honda Odyssey (29-bit), which are different enough to have caught real bugs
-- **Both CAN buses.** Body, comfort and instrument modules live on the second
-  one, and reaching it is the difference between seeing a powertrain and seeing
-  a vehicle: the same F-250 answers with 7 modules on the legislated bus and 29
-  on the other. Its bit rate is discovered rather than assumed, because that
-  truck runs its second bus at 500 kbit/s where the convention says 125
-- **One configuration change, written to a real vehicle and confirmed by its
-  owner** — door auto-lock on that F-250, verified after an ignition cycle.
-  One is not a catalogue, and every other mapping still ships as `null`
-- Full-bus module sweep, live data, Mode 06, readiness, session comparison
-- **Read-only capability probing** — which identifiers a module holds, which
-  diagnostic sessions it grants, and whether it implements security access
-- **Community signal definitions** from OBDb, matched to the vehicle and
-  labelled with how closely
-- **Factory as-built import**, with the block↔identifier correspondence measured
-  rather than assumed
-- The agent loop against Anthropic, xAI, Ollama or any OpenAI-shaped endpoint
-- The flight recorder, and the evidence link from every number on screen
+**Know before you rely on it:**
 
-**Measured on a real vehicle**
+- **Windows is the tested platform.** The core builds on Linux in CI. Android
+  is a preview, as above.
+- **It asks in the public standards, OBD-II and UDS, which is why the asking
+  works across makes.** What an answer *means* in detail is per-manufacturer
+  data, and the app has it for few vehicles so far. On an unfamiliar car,
+  expect some modules listed by address and some codes with no description. It
+  will say which.
+- **Units on self-test values are a best guess** and labelled as one. Pass,
+  fail and margin are exact regardless.
+- **Vehicles from before CAN have only met the simulator.**
+- **RAM 2018 and newer** put a security gateway between the port and the bus.
+  No standards-based tool reaches past it, this one included.
 
-Two days of live testing on two vehicles produced the findings this project
-exists to produce, and several of them were bugs in this application rather than
-faults in the cars:
-
-- **It was a Ford-only scanner and nobody knew.** A hardcoded 11-bit broadcast
-  header meant every 29-bit vehicle answered nothing, which is indistinguishable
-  from a vehicle that is not there. On the Odyssey, fixing it turned "every
-  protocol returns NO DATA" into a VIN, two modules, readiness and live data —
-  and auto-detection then succeeded on the *first* probe, because the protocol
-  sweep had only ever been compensating for our own malformed request.
-- **It was seeing a seventh of the truck.** The F-250 answers with 7 modules on
-  the legislated bus and **29 more** on the second one — doors, seats, lighting,
-  the dash, 22 of them holding factory configuration blocks. Three separate
-  assumptions kept all of that invisible: the capability flag that gates bus
-  switching was never set true by anything, anywhere; the second bus was
-  hardcoded at 125 kbit/s when that truck runs it at **500**; and discovery
-  asked the OBD-II broadcast, which body modules have no obligation to answer
-  and do not — service 01 returns NO DATA across the whole bus while every one
-  of those 29 answers UDS. Any one of the three alone would have reported an
-  empty bus, convincingly.
-- **The first configuration mapping measured on a real vehicle.** AutoLock on the
-  F-250: module `72E`, identifier `DE0E`, byte 4, bit 0. Measured by capturing
-  the module, having the owner change the setting from the dash, capturing
-  again, and diffing — then the same in reverse. One bit moved each time, three
-  other body modules showed nothing.
-- **A cheap adapter cannot write, and a good one needs asking differently.** A
-  13-byte configuration write comes back `?` from a clone in 11 ms — it never
-  reaches the vehicle — while a 4-byte one is answered properly. Multi-frame
-  transmit is the limit, and it explains "I can read fine but writing never
-  works" without blaming the car. But the ELM327 *request form* caps at seven
-  data bytes on every device ever made, STN firmware included: an OBDLink MX+
-  also answers `?` to that form, and segments the same request perfectly
-  through its own `STPX`. Testing one form and concluding "cannot write" told
-  the owner of a capable adapter to go and buy the adapter they already had.
-- **A write can succeed and change nothing until the key is cycled.** Measured
-  on the F-250: the module accepted the write, the read-back returned the new
-  bytes, nothing reverted — and the dash menu still showed the old setting.
-  Every machine-checkable signal said it had worked. It took an ignition cycle
-  for the module to latch it, and one key cycle stood between a correct mapping
-  and it being filed as wrong.
-- **A device's banner is a compatibility story, not an identity.** The MX+
-  reports `ELM327 v1.4b` and `OBD SOLUTIONS LLC`; `STI` answers `STN2255
-  v5.12.4` and `STDI` answers `OBDLink MX+ r3.1.3`. Matching on names in a
-  banner fails on the exact hardware the match was written for.
-- **Bluetooth pairing creates two COM ports** and only one talks to the adapter.
-  Both look identical in a port list, and picking wrong looks exactly like dead
-  hardware.
-- **Adapter voltage readings are not trustworthy.** One cable reported 28.3 V on
-  a truck whose engine module reported 12.5 V.
-
-**Known gaps, in the order they matter**
-
-- **Windows only in practice.** The core is portable and CI builds it on Linux,
-  but the desktop shell has only ever been built and run on Windows. The
-  Android build runs the whole core in the emulator, and its Bluetooth link
-  has not yet met a real adapter.
-- **Mode 06 scalings are unverified.** Pass/fail and margin are exact regardless,
-  because they come from the same scaling on both sides — but the *units* on a
-  monitor value are a best guess and are labelled as one.
-- **Manufacturer-specific decoding is not there yet.** Everything is the public
-  standard, which is why it works across brands; it also means a module can
-  answer with a code nobody has a description for.
-- **Nothing knows what fuel the engine burns.** PID `0x51` reports it and is
-  never asked, so a gasoline-shaped procedure runs on a diesel and measures
-  nothing: the warm-idle baseline exists to read fuel trims, a diesel has none,
-  and it reported success anyway until it was run on one. It now says what it
-  could not measure — but a procedure still cannot declare which engines it
-  applies to, and no diesel-specific signals (particulate filter load,
-  regeneration state, exhaust fluid) are decoded at all.
-- **Profile import is folder-only.** Dropping a YAML file in works; importing one
-  from a URL, with a count of how many people have verified it, does not exist.
-- **RAM 2018 and newer** put a Security Gateway between the port and the bus. No
-  standards-based tool reaches past it, this one included.
-- **A cheap ELM327 clone cannot perform a configuration write.** The mapping,
-  the open write gate and the write path are all verified; the adapter refuses
-  to transmit a multi-frame request and the vehicle never sees it. STN-based
-  hardware — OBDLink EX or MX+ — is what this needs, and the app should report
-  that before somebody tries rather than after.
-- **One verified configuration mapping ships**, scoped by exact VIN to the truck
-  it was measured on. Every other feature in the catalogue has `mapping: null`
-  because nobody has measured them. That is a gap rather than a refusal: it
-  closes when somebody measures one and drops in a profile file, with no new
-  release. Refusals on risk grounds — brakes, keys, firmware — are the other
-  kind, and the app says which one it is telling you.
-- **The interface lags the core.** It can find a failing part and not show you
-  where it is, buries past sessions below the fold, and answers in plain text
-  where a button would do. Tracked, and being worked on.
-
+[`STATUS.md`](STATUS.md) is the unvarnished version: what real sessions
+showed, including the day it turned out to be a Ford-only scanner and nobody
+knew.
 
 ---
 
@@ -474,30 +314,34 @@ faults in the cars:
 
 | | |
 |---|---|
-| `STATUS.md` | where the project is, and what real sessions have shown |
-| `CONTRIBUTING.md` | how to help: a recording from your car, a profile, or code |
-| `docs/ARCHITECTURE.md` | crate map and design decisions |
-| `docs/SAFETY.md` | the two ceilings, and what has to be true before a write |
-| `docs/CALIBRATION.md` | which software a module runs, and matching a calibration file to it, read-only |
-| `docs/SECURITY.md` | threat model, credentials, and where your data goes |
-| `docs/CODE_SIGNING.md` | how releases are built and signed, and the privacy policy |
-| `docs/RELEASING.md` | cutting a release: what to bump, in what order, and the traps |
-| `docs/ANDROID.md` | the Android app: installing, building, signing, and how it differs |
-| `docs/API.md` | the `/api/v1` contract |
-| `docs/HANDOFF.md` | the specification this is built against |
-
----
+| [`STATUS.md`](STATUS.md) | where the project is, and what real sessions have shown |
+| [`CHANGELOG.md`](CHANGELOG.md) | what changed in each release |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | how to help: a recording from your car, a profile, or code |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | crate map and design decisions |
+| [`docs/SAFETY.md`](docs/SAFETY.md) | the two ceilings, and what has to be true before a write |
+| [`docs/SECURITY.md`](docs/SECURITY.md) | threat model, credentials, and where your data goes |
+| [`docs/CODE_SIGNING.md`](docs/CODE_SIGNING.md) | how releases are built and signed, and the privacy policy |
+| [`docs/CALIBRATION.md`](docs/CALIBRATION.md) | which software a module runs, and matching a calibration file to it, read-only |
+| [`docs/REPORTS.md`](docs/REPORTS.md) | problem reports: what Send does, and running the endpoint |
+| [`docs/ANDROID.md`](docs/ANDROID.md) | the Android app: installing, building, signing, and how it differs |
+| [`docs/AT-THE-CAR.md`](docs/AT-THE-CAR.md) | what to check next time a vehicle is connected |
+| [`docs/RELEASING.md`](docs/RELEASING.md) | cutting a release: what to bump, in what order, and the traps |
+| [`docs/API.md`](docs/API.md) | the `/api/v1` contract |
+| [`docs/KNOWLEDGE-ENGINE.md`](docs/KNOWLEDGE-ENGINE.md) | what was borrowed, what was rejected, and why |
+| [`docs/HANDOFF.md`](docs/HANDOFF.md) | the specification this is built against |
 
 ## Development
 
 ```bash
-./scripts/check.ps1        # tests, clippy, UI typecheck — about 20 s warm
+./scripts/check.ps1        # everything CI checks: tests, clippy, UI typecheck
 cargo test --workspace
 cargo run -p aim-adapter --example probe_port -- COM5    # what is on that port?
 ```
 
+The core is Rust, the interface is React inside Tauri, and the model reaches
+the vehicle only through typed tool calls behind a capability gate.
 [CONTRIBUTING.md](CONTRIBUTING.md) covers what a change needs and what will
-not be merged. Screenshots above are from the virtual vehicle.
+not be merged.
 
 ---
 
@@ -506,49 +350,54 @@ not be merged. Screenshots above are from the virtual vehicle.
 Almost every hard-won thing in this application was learned somewhere first.
 Some of it is a licence obligation to say so; the rest is just true.
 
-**Data this project ships**
+**Data this project uses**
 
-- **[OBDb](https://github.com/OBDb)** — a community documenting the diagnostic
+- **[OBDb](https://github.com/OBDb)**: a community documenting the diagnostic
   parameters, scalings and codes that vehicles answer to, across roughly 740
   makes and models. The bundled signalset comes from there and is used under
   **CC BY-SA 4.0**; see
   [`vehicle-profiles/catalog/obdb/ATTRIBUTION.md`](vehicle-profiles/catalog/obdb/ATTRIBUTION.md).
   It is what lets this app ask a vehicle a question nobody here had to reverse
   engineer.
+- **[NHTSA vPIC](https://vpic.nhtsa.dot.gov/)**: the US government's free VIN
+  decoder, asked only when you press the button, for the make, model and engine
+  a VIN does not spell out.
 
 **Behaviour learned by reading, and reimplemented independently**
 
 These are GPL and this project is MIT/Apache, so no code was taken from either.
 What was taken is knowledge of how ELM327 adapters and vehicles actually behave
-— facts about hardware, not anybody's expression — and the difference matters
+(facts about hardware, not anybody's expression) and the difference matters
 enough to say plainly.
 
 - **[python-OBD](https://github.com/Ircama/python-OBD)** (Ircama's maintained
   fork, and [Brendan Whitfield's](https://github.com/brendan-w/python-OBD)
-  original) — checking the socket is powered before sweeping protocols, and a
+  original): checking the socket is powered before sweeping protocols, and a
   faster way to find an adapter's line speed.
-- **[AndrOBD](https://github.com/fr3ts0n/AndrOBD)** by fr3ts0n — years of field
-  knowledge about what real adapters do when they misbehave: which error strings
-  actually appear, that `NABLETO` is a truncated `UNABLE TO CONNECT`, that a
-  warm start recovers where a full reset is overkill, and that a response
-  timeout is worth learning rather than assuming.
+- **[AndrOBD](https://github.com/fr3ts0n/AndrOBD)** by fr3ts0n: years of field
+  knowledge about what real adapters do when they misbehave. Which error
+  strings actually appear, that `NABLETO` is a truncated `UNABLE TO CONNECT`,
+  that a warm start recovers where a full reset is overkill, and that a
+  response timeout is worth learning rather than assuming.
 
 **Ideas and architecture**
 
-- **[odxtools](https://github.com/mercedes-benz/odxtools)** (Mercedes-Benz) —
+- **[odxtools](https://github.com/mercedes-benz/odxtools)** (Mercedes-Benz):
   separating a reusable data definition from the parameters that reference it.
-- **[EcuBus-Pro](https://github.com/ecubus/EcuBus-Pro)** — what a serious
+- **[EcuBus-Pro](https://github.com/ecubus/EcuBus-Pro)**: what a serious
   automotive diagnostic application looks like when protocol, hardware,
   database and interface are kept apart.
-- **[opendbc](https://github.com/commaai/opendbc)** (comma.ai) — identifying a
+- **[opendbc](https://github.com/commaai/opendbc)** (comma.ai): identifying a
   vehicle from what its ECUs report, rather than asking someone to pick from a
   list.
 - **[FORScan](https://forscan.org)** and the community around it, whose
   documentation of Ford as-built configuration is why the block↔identifier
   correspondence was worth going looking for at all.
-- **[automotive_diag](https://crates.io/crates/automotive_diag)** — a
+- **[automotive_diag](https://crates.io/crates/automotive_diag)**: a
   permissively-licensed Rust home for the diagnostic tables this project
   currently hand-writes.
+- **rwd-xray**: the one public description of Honda's RWD package format,
+  which the read-only header reader follows.
 
 A fuller audit, including what was rejected and why, is in
 [docs/KNOWLEDGE-ENGINE.md](docs/KNOWLEDGE-ENGINE.md).
