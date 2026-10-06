@@ -120,6 +120,11 @@ reach past it, and neither will the agent. That is what makes the safety gate
 meaningful — there is no second path to bypass — and what makes the flight
 recorder complete: if it happened, it is in the log.
 
+Inside the service the adapter sits behind one type (`wire.rs`), which sends a
+read as it is and sends anything else only under the gate's authorization for an
+operation that lists that service. So the rule does not depend on each of the
+service's operations remembering to ask first.
+
 ### The safety gate is architecture, not a dialog
 
 Handoff §10. `MAX_ENABLED_LEVEL` is a compile-time constant, not a setting.
@@ -172,7 +177,7 @@ The seam is built and tested; the model is not wired.
       │  • prompts, versioned                    │
       │  • evaluation harness                    │
       └───────────────┬──────────────────────────┘
-                      │  ToolCall { tool, arguments, initiator, confirmation }
+                      │  ToolCall { tool, arguments, initiator }
                       ▼
       ┌──────────────────────────────────────────┐
       │  aim_tools::execute()          ⟨ BUILT ⟩ │

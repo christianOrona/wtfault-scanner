@@ -40,6 +40,26 @@
 
 use aim_session::{Finding, FindingOutcome};
 
+/// How this application marks a finding it measured itself, in this session.
+pub const MEASURED_THIS_SESSION: &str = "measured_this_session";
+
+/// How it marks one it measured in an earlier session.
+pub const MEASURED_EARLIER: &str = "measured_earlier";
+
+/// A finding somebody recorded by hand: what they say is so, and no more.
+pub const USER_STATEMENT: &str = "user_statement";
+
+/// Whether `authority` is one this application keeps for its own measurements.
+///
+/// Nothing that arrives from outside may carry one. "Measured" has to mean
+/// that code which took a measurement wrote the finding, or a typed sentence
+/// and a reading off the vehicle are the same thing to everything downstream.
+pub fn is_measurement_authority(authority: &str) -> bool {
+    let authority = authority.trim();
+    authority.eq_ignore_ascii_case(MEASURED_THIS_SESSION)
+        || authority.eq_ignore_ascii_case(MEASURED_EARLIER)
+}
+
 /// How many findings reach a prompt.
 ///
 /// Enough to carry a vehicle's real history, bounded so that it cannot crowd
@@ -75,13 +95,32 @@ pub fn for_prompt(findings: &[Finding]) -> String {
          ruled out — it has been tried here and did not work.\n",
     );
 
+    // A finding this application did not measure says so on its own line. The
+    // heading above is true of the rest, and a sentence somebody typed must
+    // not inherit it.
+    let mut any_not_measured = false;
     for f in ordered {
         let mark = match f.outcome {
             FindingOutcome::RuledOut => "RULED OUT",
             FindingOutcome::Established => "ESTABLISHED",
             FindingOutcome::Observed => "OBSERVED",
         };
-        s.push_str(&format!("- [{mark}] {} ({})\n", f.claim, f.evidence));
+        if is_measurement_authority(&f.authority) {
+            s.push_str(&format!("- [{mark}] {} ({})\n", f.claim, f.evidence));
+        } else {
+            any_not_measured = true;
+            s.push_str(&format!(
+                "- [{mark}, NOT MEASURED: {}] {} ({})\n",
+                f.authority, f.claim, f.evidence
+            ));
+        }
+    }
+    if any_not_measured {
+        s.push_str(
+            "Lines marked NOT MEASURED were recorded by a person or taken from somewhere else, \
+             not read off the vehicle by this application. Say whose word they are when you \
+             rely on one.\n",
+        );
     }
 
     if dropped > 0 {
@@ -105,6 +144,33 @@ mod tests {
             authority: "measured_this_session".into(),
             observed_at: "2026-09-12T00:00:00Z".into(),
             session_id: None,
+        }
+    }
+
+    /// A finding somebody typed in is not presented to a model as a
+    /// measurement, whatever outcome it claims.
+    #[test]
+    fn a_finding_nobody_measured_says_so_in_the_prompt() {
+        let mut typed = finding("a", FindingOutcome::Established, "the gate is open");
+        typed.authority = USER_STATEMENT.into();
+        let measured = finding("b", FindingOutcome::Established, "the bus runs at 500 kbit/s");
+
+        let text = for_prompt(&[typed, measured.clone()]);
+        assert!(text.contains("- [ESTABLISHED, NOT MEASURED: user_statement] the gate is open"));
+        assert!(text.contains("- [ESTABLISHED] the bus runs at 500 kbit/s"));
+        assert!(text.contains("Lines marked NOT MEASURED"));
+
+        // Nothing is said about it when everything was measured.
+        assert!(!for_prompt(&[measured]).contains("NOT MEASURED"));
+    }
+
+    #[test]
+    fn only_this_applications_own_measurements_are_measurements() {
+        for authority in ["measured_this_session", " Measured_This_Session ", "measured_earlier"] {
+            assert!(is_measurement_authority(authority), "{authority:?}");
+        }
+        for authority in ["user_statement", "fetched_from_obdb", "", "measured", "a"] {
+            assert!(!is_measurement_authority(authority), "{authority:?}");
         }
     }
 

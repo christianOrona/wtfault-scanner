@@ -195,9 +195,18 @@ function describe(e: SessionEvent): React.ReactNode {
     case "safety_decision":
       return (
         <span className={k.allowed ? "" : "cls-bus_error"}>
-          {String(k.operation)} [{String(k.level)}] {k.allowed ? "allowed" : "REFUSED"} for{" "}
-          {String(k.initiator)}
+          {String(k.operation)} [{k.level == null ? "not a known operation" : String(k.level)}]{" "}
+          {k.allowed ? "allowed" : "REFUSED"} for {String(k.initiator)}
+          {k.approval ? ` - ${String(k.approval)}` : ""}
           {k.reason ? ` - ${String(k.reason)}` : ""}
+        </span>
+      );
+    case "config_write":
+      return (
+        <span className={k.outcome === "verified" ? "" : "cls-bus_error"}>
+          {String(k.feature_id)}: {String(k.did)} on {String(k.module)}, {String(k.before)} to{" "}
+          {String(k.intended)}. Module answered {String(k.reply)}, read back{" "}
+          {k.read_back == null ? "nothing" : String(k.read_back)}: {String(k.outcome)}
         </span>
       );
     case "tool_invoked":

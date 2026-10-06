@@ -22,6 +22,7 @@
 
 #![warn(missing_docs)]
 
+pub mod approvals;
 pub mod capture;
 pub mod config;
 pub mod identity;
@@ -32,6 +33,7 @@ pub mod recorder;
 pub mod scorecard;
 pub mod service;
 pub mod transcript;
+mod wire;
 
 pub use config::{plan_change, ChangeContext, ChangePlan, ChangeRequest, Check, DesiredValue};
 pub use identity::{Candidate, Evidence, EvidenceSource, IdentityField, VehicleIdentity};

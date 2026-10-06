@@ -246,8 +246,12 @@ pub trait DiagnosticAdapter: Send {
         self.request_pdu(pdu, target, timeout)
     }
 
-    /// Send a raw adapter command. Escape hatch for diagnostics and probing;
-    /// the safety gate is what decides whether a caller may reach it.
+    /// Send a raw adapter command. An escape hatch for whoever holds the
+    /// adapter itself, and nothing checks what is sent through it.
+    ///
+    /// The diagnostic core does not hold the adapter that way: it reaches it
+    /// only through a type that has no method for this, so no tool, route or
+    /// diagnostic operation can get here.
     fn raw_command(&mut self, command: &str) -> AimResult<AdapterResponse>;
 
     /// Move to a different vehicle bus.

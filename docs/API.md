@@ -29,7 +29,7 @@ Simulated vehicles, chosen with `--vehicle`: `f250` (the default, a diesel on
 - [Endpoints](#endpoints)
   - [Server](#server) · [Adapter](#adapter) · [Vehicle](#vehicle) ·
     [Modules](#modules) · [Procedures](#procedures) ·
-    [Vehicle configuration](#vehicle-configuration) ·
+    [Vehicle configuration](#vehicle-configuration) · [Approvals](#approvals) ·
     [Changing a setting](#changing-a-setting) · [Sessions](#sessions) ·
     [Assistant](#assistant) · [Model and privacy settings](#model-and-privacy-settings) ·
     [Updates](#updates) · [Problem reports and exports](#problem-reports-and-exports)
@@ -46,6 +46,17 @@ Simulated vehicles, chosen with `--vehicle`: `f250` (the default, a diesel on
 **No authentication.** The server binds to loopback and can talk to a vehicle.
 It is not meant to be reachable from a network, and adding a token would imply
 otherwise. Do not proxy it.
+
+**Local callers only.** Binding to loopback keeps other machines out; it does
+not keep out a web page open in a browser on this one. So every request, the
+WebSockets included, is refused with `403 operation_not_allowed` unless its
+`Host` names this machine (`127.0.0.1`, `localhost`, `[::1]`) and its `Origin`,
+when the browser sends one, does too. `curl` and the application's own window
+satisfy both without doing anything.
+
+**Changing a vehicle takes a person's approval**, asked for and answered through
+[`POST /approvals`](#approvals). No request body has a field that stands in for
+one.
 
 **Content type** is `application/json` in both directions. Request bodies are
 optional where marked; `POST` with no body behaves as `{}`.
@@ -111,9 +122,9 @@ codes appear inside a `ToolResult` with HTTP `200`.
 |---|---|---|
 | `bad_request` | 400 | Malformed request. |
 | `decoder_input_invalid` | 400 | Payload was the wrong shape for the decoder. |
-| `operation_not_allowed` | 403 | Not in the capability allowlist, or unknown tool. Fail-closed. |
+| `operation_not_allowed` | 403 | Not in the capability allowlist, an unknown tool, a caller that is not this machine, or a change asked for by anything that is not a person. Fail-closed. |
 | `permission_level_disabled` | 403 | Exists but is not available this way — L3, or a write asked for through `/tools`. |
-| `confirmation_required` | 403 | Needs a human confirmation that was not supplied. |
+| `confirmation_required` | 403 | Needs a person's approval, and none was presented or the one presented does not count. `error.details.reason` says which: `confirmation_required`, `approval_unknown`, `approval_expired`, `approval_for_something_else`, `approval_phrase_wrong`, `approval_not_trusted`. |
 | `transport_not_found` | 404 | No such port. |
 | `decoder_not_found` | 404 | No decoder definition for that signal. |
 | `not_found` | 404 | No such session, module, capture, provider or event. |
@@ -351,7 +362,8 @@ currently believes about the vehicle.
 `enabled` is whether the capability's level is within this build's ceiling.
 Everything up to L2 is enabled: clearing codes (`obd2.clear_dtcs`, L1), asking a
 module whether it takes writes (`config.probe_write_gate`, L1) and changing a
-setting (`config.write_feature`, L2), each behind a typed human confirmation.
+setting (`config.write_feature`, L2), each behind a person's
+[approval](#approvals).
 Programming (`program.program_module`, L3) is registered and disabled so its
 refusal is explicit and auditable. Show it as unavailable rather than hiding it.
 
@@ -497,14 +509,14 @@ Generic dispatch. Equivalent to the specific endpoints, and the path the
 assistant uses.
 
 ```json
-{
-  "arguments": { "module": "ECU_7E8", "signal": "control_module_voltage" },
-  "initiator": "user:ui",
-  "confirmation": null
-}
+{ "arguments": { "module": "ECU_7E8", "signal": "control_module_voltage" } }
 ```
 
-`initiator` defaults to `user:api`. Arguments are validated against the schema
+The body is the arguments and nothing else; any other field is `422`. A call made
+here is recorded as `user:api`. It cannot name its own initiator, so nothing a
+caller sends is filed in the flight recorder as the assistant's, and it has no
+field for an approval, so nothing that needs one can be done through this route.
+Arguments are validated against the schema
 and **rejected on any mismatch** — an unknown property, a missing required
 argument or a wrong type is a `bad_request` inside the envelope, and no request
 reaches the vehicle:
@@ -1086,7 +1098,6 @@ Record a finding.
   "outcome": "ruled_out",
   "claim": "Writing the documented fold-on-lock bytes to both door modules does not fold the mirrors on this truck.",
   "evidence": "Written, read back, latched through an ignition cycle; mirrors did not move. Restored byte-for-byte.",
-  "authority": "measured_this_session",
   "vin": null
 }
 ```
@@ -1094,7 +1105,11 @@ Record a finding.
 → `{ "recorded": true }`
 
 `claim` and `evidence` are both required — a finding nobody can attribute is a
-rumour. `authority` defaults to `measured_this_session`. `vin` is optional: when
+rumour. A finding recorded here is a person's statement and is stored with
+`authority: "user_statement"`, whatever it describes. `authority` may be omitted
+or sent as `user_statement`; anything else is `400`, because
+`measured_this_session` is written only by the code that took the measurement.
+The assistant is shown these marked as not measured. `vin` is optional: when
 absent the connected vehicle is used; naming one records against a vehicle that
 is not plugged in, for seeding history at a desk. An unknown `outcome` is `400`.
 
@@ -1400,7 +1415,9 @@ implements neither, which is what the example shows.
 #### `POST /modules/{key}/write-gate` → `ToolResult`
 
 Whether this module accepts configuration writes. Body:
-`{ "confirmation": "..." }`, recorded verbatim.
+`{ "approval": { "id": "...", "typed": "PROBE" } }`, from
+[`POST /approvals`](#approvals) with `"action": "probe_write_gate"` and this
+module.
 
 ```json
 {
@@ -1542,10 +1559,12 @@ top level holds every module's readings together.
 Clear stored codes.
 
 ```json
-{ "confirmation": "user typed CLEAR in the desktop app", "module": null }
+{ "approval": { "id": "5f1c…", "typed": "CLEAR" }, "module": null }
 ```
 
-`confirmation` is required and recorded verbatim; an empty one is `400`.
+`approval` is the answer to a challenge from [`POST /approvals`](#approvals)
+with `"action": "clear_codes"` and the same `module`. An approval to clear one
+module does not clear them all, and the other way round.
 `module` limits it to one module; absent means every module that answers.
 Preconditions: engine off, vehicle stationary, stable connection.
 
@@ -1944,12 +1963,66 @@ values; the simulator has no module at `726`.)
 
 ---
 
+### Approvals
+
+Clearing codes, asking a module whether it accepts writes and changing a setting
+each need a person's approval. An approval is not a string in the request. It is
+asked for here, answered by what the person types, and checked by the core.
+
+#### `POST /approvals`
+
+Ask for an approval of one specific thing. Touches no vehicle.
+
+```json
+{ "action": "change_setting", "feature_id": "double_honk_on_leaving", "desired": "off" }
+{ "action": "clear_codes", "module": "ECU_7E8" }
+{ "action": "clear_codes" }
+{ "action": "probe_write_gate", "module": "ECU_72E" }
+```
+
+```json
+{
+  "approval": {
+    "id": "5f1c0c1e7a9b4d0f8a3e2b6c9d4e1f70",
+    "phrase": "CHANGE",
+    "statement": "typed CHANGE to turn double_honk_on_leaving off",
+    "expires_in_seconds": 600
+  }
+}
+```
+
+Show the person what they are approving and ask them to type `phrase`. Then send
+the operation itself with `"approval": { "id": "...", "typed": "<what they typed>" }`.
+`statement` is what the flight recorder will say was approved.
+
+What an approval is good for:
+
+- **Exactly what was named.** The operation, and the feature and value or the
+  module. Anything else is `approval_for_something_else`.
+- **Once.** A `change_setting` approval covers two steps in order, asking the
+  setting's module whether it accepts writes and then the change, each once;
+  making the change ends it.
+- **For a while.** Ten minutes to answer, five to use once answered.
+- **Only if the phrase matches**, ignoring case and surrounding space. Five wrong
+  answers withdraw it.
+
+An unknown `feature_id` is `404`. Any field not shown above is `422`.
+
+This establishes that whoever asked read the challenge and answered it for the
+thing it names. The assistant cannot: it reaches the vehicle only through
+`/tools`, which has no field for an approval. It does not establish that a human
+pressed the keys, and a program on this machine running as you can do what you
+can.
+
+---
+
 ### Changing a setting
 
-Three calls, always in this order from the interface, and all addressed by
-**feature id**. None of them has anywhere to put a module address, a data
-identifier or a byte offset: where a setting lives comes from a vehicle profile,
-never from a caller. The examples are from a 2019 F-250.
+Four calls from the interface: a preview, an approval, and then the change, with
+a question to the module in between when the preview says one is needed. All are
+addressed by **feature id**. None of them has anywhere to put a module address, a
+data identifier or a byte offset: where a setting lives comes from a vehicle
+profile, never from a caller. The examples are from a 2019 F-250.
 
 #### `POST /features/{id}/preview` → `ToolResult` — what a change would do
 
@@ -1995,11 +2068,13 @@ said `can_apply: true` and the write that followed was refused.
   be read.
 - `needs_write_gate_probe` is true only when the one thing in the way is that
   nobody has asked the owning module whether it accepts writes. The interface
-  may then ask and change under a single confirmation; for any other blocker it
+  may then ask and change under a single approval; for any other blocker it
   must not.
 - `experiment` is true when the location of the setting is unverified, so the
-  vehicle's behaviour afterwards is the measurement. The confirmation has to say
-  so.
+  vehicle's behaviour afterwards is the measurement. What the person is shown
+  before approving has to say so. This is the one case in which a mapping
+  nobody has verified is written: a cosmetic or convenience setting, on a module
+  this application has itself measured accepting writes.
 - Precondition checks appear alongside the rest with their own ids:
   `ignition_on`, `engine_off`, `vehicle_stationary`, `stable_connection`,
   `battery_voltage`.
@@ -2007,8 +2082,9 @@ said `can_apply: true` and the write that followed was refused.
 #### `POST /features/{id}/write-gate` → `ToolResult`
 
 Does the module that owns this feature accept writes? Body:
-`{ "confirmation": "..." }` (required, recorded verbatim; empty is `400`). The same
-probe and result as [`POST /modules/{key}/write-gate`](#post-moduleskeywrite-gate--toolresult),
+`{ "desired": "on" | "off", "approval": { "id": "...", "typed": "CHANGE" } }`,
+the same body as the change it is the first half of and under the same
+`change_setting` approval. The same probe and result as [`POST /modules/{key}/write-gate`](#post-moduleskeywrite-gate--toolresult),
 with the module found from the mapping so the interface never has to know a
 setting lives at `72E` and is requested at `726`.
 
@@ -2017,23 +2093,46 @@ setting lives at `72E` and is requested at `726`.
 ```
 
 The result is remembered against the vehicle, so a gate measured open stays open
-across restarts. A module that has not answered a scan in this session is
-`precondition_failed`.
+across restarts. Only this application's own measurement counts: a finding about
+a write gate recorded through `POST /vehicles/knowledge` opens nothing. A module
+that has not answered a scan in this session is `precondition_failed`.
 
 #### `POST /features/{id}/apply` → `ToolResult` — make the change
 
-Body: `{ "desired": "on" | "off", "confirmation": "..." }`; an empty confirmation
-is `400`. Re-evaluates the plan from scratch rather than trusting the preview,
-writes, and reads the record back. Never reachable by the assistant.
+Body: `{ "desired": "on" | "off", "approval": { "id": "...", "typed": "CHANGE" } }`.
+Re-evaluates the plan from scratch rather than trusting the preview, writes, and
+reads the record back. Never reachable by the assistant.
 
 ```json
 {
   "feature_id": "double_honk_on_leaving",
-  "changed": true, "verified": true, "did": "DE28", "module": "726",
+  "changed": true, "verified": true, "outcome": "verified", "write_reply": "accepted",
+  "did": "DE28", "module": "726",
   "before": "04010001030001010101", "after": "04010001030000010101",
   "state_before": true, "state_after": false, "cycle_ignition_to_apply": true
 }
 ```
+
+What the module answered to the write (`write_reply`: `accepted`, `pending`,
+`no_answer`) is one fact. What the record holds afterwards is another, and only
+the second decides `outcome`:
+
+| `outcome` | The record read back as | `verified` | `changed` |
+|---|---|---|---|
+| `verified` | what was written | true | true |
+| `not_applied` | exactly what it was before | false | false |
+| `changed_unexpectedly` | something else | false | true |
+
+A module that answered "still working on it", or whose answer never arrived, is
+settled by reading the record: `verified` with a `write_reply_not_heard` warning
+if the write took, and a `vehicle_not_responding` failure saying nothing was
+written if it did not. A refusal is a failure carrying
+`error.details.refused_because`.
+
+When the record **cannot be read back at all**, the answer is `success: false`
+with `error.details.outcome: "unknown"` and `error.details.write_reply`. The
+write may have landed. Nothing is claimed either way: read the setting again
+before doing anything else.
 
 `verified` means the module read back what was written. It does not mean the
 vehicle behaves differently — most modules act on a new value only at power-up,
@@ -2156,7 +2255,8 @@ Page with `after_seq` = the last `seq` you have.
 | `module_discovered` | `module_key`, `address` |
 | `dtc_read` | `module_key`, `code`, `status` |
 | `measurement_recorded` | `module_key`, `signal_id`, `value`, `unit`, `raw_hex` |
-| `safety_decision` | `operation`, `level`, `allowed`, `initiator`, `confirmed`, `reason` |
+| `safety_decision` | `operation`, `level` (from the capability registry; `null` only for an operation it does not hold), `allowed`, `initiator`, `confirmed` (a person's approval was checked and accepted), `approval` (what they were told they were approving, when one was), `reason` |
+| `config_write` | `feature_id`, `module`, `did`, `before`, `intended`, `reply` (`accepted`, `refused`, `pending`, `no_answer`), `read_back` (`null` when it could not be read), `outcome` (`verified`, `not_applied`, `changed_unexpectedly`, `refused`, `unknown`) |
 | `tool_invoked` | `tool`, `arguments`, `initiator` |
 | `tool_completed` | `tool`, `success`, `execution_time_ms`, `warnings[]` |
 | `test_started` / `test_finished` | `test_id`/`run_id`, `result` |
@@ -3063,5 +3163,5 @@ the UI can render "not in this build" rather than inferring it from a 404.
 | `POST /modules/{key}/tests/{test_id}/run` | No active (L1) test is implemented. Active tests need confirmation and precondition UX, scheduled for the bidirectional-diagnostics phase. |
 
 Clearing codes (`POST /dtcs/clear`) and changing a setting (see
-[Changing a setting](#changing-a-setting)) are implemented, and both need a typed
-confirmation from a person. Programming (L3) is compiled out.
+[Changing a setting](#changing-a-setting)) are implemented, and both need a
+person's [approval](#approvals). Programming (L3) is compiled out.

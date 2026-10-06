@@ -18,11 +18,16 @@ security boundary.** A model reaches the vehicle only through the typed tool
 registry (`aim-tools`), every tool call passes the capability gate
 (`aim-safety`), and the operations that change a vehicle are marked
 `agent_forbidden` and refused with the initiator recorded — regardless of what
-the model says, what confirmation it supplies, or how the request is phrased.
+the model says or how the request is phrased. A person's approval is not
+something it can supply: an approval is a value from the application's approval
+desk, and a tool call has no field for one.
 
 There is a test that sweeps the whole capability registry and fails if anything
-marked agent-forbidden is reachable by an initiator beginning `agent:`, so a
-capability added later is covered without anyone remembering this document.
+marked agent-forbidden is reachable by a caller that is not a person, under
+every spelling of `agent` and with a genuine approval attached, so a capability
+added later is covered without anyone remembering this document. A second sweep
+calls every tool with everything a model could put in it and fails if anything
+but a read reached the adapter.
 
 ### A model that emits a malformed or hostile tool call
 
@@ -51,7 +56,13 @@ stops working. So:
 - Everything loaded from a profile is labelled on screen with the file it came
   from, and a wrong mapping is traceable to whoever supplied it.
 - A mapping that has not been verified against a real vehicle can be used to
-  read and never to write.
+  read. It can be written in one case only, as an experiment that is called
+  one: a cosmetic or convenience setting on a module this application has
+  measured accepting writes. `SAFETY.md` has the conditions.
+- A profile says what risk class its own settings are. That is the file's
+  claim, and a file that calls a brake setting a convenience is believed.
+- A signal file can only describe reads. One that names any other service is not
+  offered and is not sent.
 - A write whose value would land outside its own declared bit mask is refused,
   because it would change settings the feature does not describe.
 - A record shorter than the mapping expects is an error, not a padded guess.
@@ -64,7 +75,17 @@ stranger, notwithstanding all of the above.
 An adapter reply is parsed and classified, never trusted as prose. A positive
 response to a write is **not** treated as a successful change: the record is
 read back and compared, and a write that cannot be verified is reported as
-unverified rather than as success.
+unverified or unknown rather than as success. A lost or unfinished answer to a
+write is not treated as a refusal either: the record decides.
+
+### A statement that looks like a measurement
+
+Findings about a vehicle are kept across sessions, and some of them are read by
+safety checks. One recorded through the API is a person's statement and is
+stored as `user_statement`; the authorities this application gives its own
+measurements cannot be claimed from outside, and the assistant is shown the
+difference. Importing another database imports its history as that database
+recorded it, measured findings included, so only import one you would trust.
 
 ### Someone else on the network
 
@@ -73,10 +94,22 @@ the core's own port. That is deliberate and load-bearing: a vehicle-facing
 server with permissive CORS would let any web page you happen to have open read
 your vehicle, and in the worst case ask it for things.
 
-There is no authentication on the local API, because there is no network
-surface. If that ever changes — a phone app, a remote session — it needs
-explicit pairing, short-lived session credentials, and no raw CAN or arbitrary
-UDS endpoint. Do not expose the current API to a LAN as-is.
+### A web page open in a browser on this machine
+
+Loopback keeps other machines out. It does not keep out a browser on this one,
+and a browser runs pages from everywhere. A page whose host name is made to
+resolve to `127.0.0.1` is, to the browser, talking to its own site; and any page
+may open a WebSocket to a loopback port.
+
+So every request is refused unless its `Host` names this machine and its
+`Origin`, when there is one, does too. A browser sets both and a page cannot
+change them.
+
+There is no authentication on the local API beyond that. A program running as
+you can call it, as it can open the serial port. If the API is ever to be
+reachable from anywhere else — a phone app, a remote session — it needs explicit
+pairing, short-lived session credentials, and no raw CAN or arbitrary UDS
+endpoint. Do not expose the current API to a LAN as-is.
 
 ## Credentials
 

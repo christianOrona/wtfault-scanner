@@ -254,21 +254,24 @@ async fn the_full_read_only_diagnostic_flow_over_http_and_websocket() {
     drop(socket);
 
     // ---- the write path stays shut ---------------------------------------
-    let (status, cleared) = h
-        .post_raw(
-            "/tools/clear_dtcs",
-            json!({
-                "arguments": { "module": "ECU_7E8" },
-                "initiator": "agent:planner",
-                "confirmation": "the-owner"
-            }),
-        )
-        .await;
+    // A caller of this route cannot say who it is or that somebody approved:
+    // the body is the arguments, and anything else in it is a malformed
+    // request rather than something read past.
+    for body in [
+        json!({ "arguments": { "module": "ECU_7E8" }, "initiator": "agent:planner" }),
+        json!({ "arguments": { "module": "ECU_7E8" }, "confirmation": "the-owner" }),
+        json!({ "arguments": { "module": "ECU_7E8" }, "approval": { "id": "x", "typed": "CLEAR" } }),
+    ] {
+        let r = h.client.post(format!("{}/tools/clear_dtcs", h.base)).json(&body).send().await;
+        assert_eq!(r.unwrap().status(), 422, "{body} was accepted");
+    }
+    let (status, cleared) =
+        h.post_raw("/tools/clear_dtcs", json!({ "arguments": { "module": "ECU_7E8" } })).await;
     assert_eq!(status, 200, "the tool ran and refused; that is a 200 envelope");
     assert_eq!(cleared["success"], false);
     assert_eq!(
         cleared["error"]["code"], "permission_level_disabled",
-        "an agent must never be able to clear codes, even though a person can"
+        "nothing through the tool route may clear codes, even though a person can"
     );
     // The codes are still there.
     let after = h.get("/modules/ECU_7E8/dtcs").await;
@@ -343,21 +346,37 @@ async fn the_full_read_only_diagnostic_flow_over_http_and_websocket() {
         assert!(kinds.contains(&expected), "no {expected} event was recorded");
     }
 
-    // The refusal is in the trace, with who asked for it.
-    let refusal = events
+    // The refusal is in the trace, once, under where it really came from and
+    // at the level clearing codes really has.
+    let refusals: Vec<_> = events
         .iter()
-        .find_map(|e| match &e.kind {
-            EventKind::SafetyDecision { operation, allowed, initiator, reason, .. }
+        .filter_map(|e| match &e.kind {
+            EventKind::SafetyDecision { operation, level, allowed, initiator, reason, .. }
                 if operation == "obd2.clear_dtcs" =>
             {
-                Some((*allowed, initiator.clone(), reason.clone()))
+                Some((*level, *allowed, initiator.clone(), reason.clone()))
             }
             _ => None,
         })
-        .expect("the refused clear_dtcs must be recorded");
-    assert!(!refusal.0);
-    assert_eq!(refusal.1, "agent:planner");
-    assert_eq!(refusal.2.as_deref(), Some("permission_level_disabled"));
+        .collect();
+    assert_eq!(
+        refusals,
+        vec![(
+            Some(aim_types::PermissionLevel::L1),
+            false,
+            String::from("user:api"),
+            Some(String::from("permission_level_disabled")),
+        )],
+        "the refused clear_dtcs must be recorded as what it was"
+    );
+    assert!(
+        !events.iter().any(|e| matches!(
+            &e.kind,
+            EventKind::ToolInvoked { initiator, .. } | EventKind::SafetyDecision { initiator, .. }
+                if initiator.starts_with("agent")
+        )),
+        "nothing over HTTP may be filed as the agent's"
+    );
 
     // A decoded value's evidence_ref resolves to the exact adapter exchange.
     let evidence_ref = identify["values"][0]["provenance"]["evidence_ref"].as_i64().unwrap();

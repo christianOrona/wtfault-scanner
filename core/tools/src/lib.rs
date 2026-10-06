@@ -28,7 +28,7 @@
 pub mod validate;
 
 use aim_diagnostics::{capabilities, DiagnosticService};
-use aim_safety::MAX_ENABLED_LEVEL;
+use aim_safety::{CapabilityRegistry, MAX_ENABLED_LEVEL};
 use aim_types::{AimError, ErrorCode, PermissionLevel, ToolResult};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -61,14 +61,23 @@ pub struct ToolSchema {
 }
 
 impl ToolSchema {
+    /// A tool over one capability.
+    ///
+    /// The permission level is read from the capability registry and not
+    /// stated here. It used to be written out again beside every tool, which
+    /// made two lists that had to be kept the same by hand; the one in the
+    /// registry is the one the gate decides by, so it is the only one.
     fn new(
         name: &str,
         capability: &str,
-        level: PermissionLevel,
         description: &str,
         returns: &str,
         parameters: Value,
     ) -> Self {
+        let level = CapabilityRegistry::phase1()
+            .get(capability)
+            .unwrap_or_else(|| panic!("tool {name} names unregistered capability {capability}"))
+            .level;
         ToolSchema {
             name: name.to_string(),
             description: description.to_string(),
@@ -191,7 +200,6 @@ impl ToolRegistry {
             ToolSchema::new(
                 "identify_vehicle",
                 capabilities::IDENTIFY_VEHICLE,
-                PermissionLevel::L0,
                 "Read the vehicle identification number and calibration identifiers from the \
                  vehicle. Decodes only the fields the VIN standard actually encodes; model, trim \
                  and engine are not inferred.",
@@ -201,7 +209,6 @@ impl ToolRegistry {
             ToolSchema::new(
                 "scan_modules",
                 capabilities::SCAN_MODULES,
-                PermissionLevel::L0,
                 "Discover which control modules answer on the diagnostic bus. Modules are named \
                  by what they report about themselves, or by their address when they report \
                  nothing.",
@@ -211,7 +218,6 @@ impl ToolRegistry {
             ToolSchema::new(
                 "get_module_identity",
                 capabilities::MODULE_IDENTITY,
-                PermissionLevel::L0,
                 "Read one module's identity: ECU name, calibration identifiers and calibration \
                  verification numbers.",
                 "The module record with its identity fields filled in.",
@@ -220,7 +226,6 @@ impl ToolRegistry {
             ToolSchema::new(
                 "read_calibration_identity",
                 capabilities::MODULE_IDENTITY,
-                PermissionLevel::L0,
                 "Read everything one module will say about the software it runs: calibration \
                  identification, calibration verification number, and the standard part, \
                  hardware and software identifiers. Reads only. An identifier the module \
@@ -235,7 +240,6 @@ impl ToolRegistry {
             ToolSchema::new(
                 "find_calibration",
                 capabilities::MODULE_IDENTITY,
-                PermissionLevel::L0,
                 "Look for a calibration file that is the software one module runs. Reads what \
                  the module says about its software (the same reads as \
                  read_calibration_identity), then searches the calibration files on this \
@@ -264,7 +268,6 @@ impl ToolRegistry {
             ToolSchema::new(
                 "read_supported_pids",
                 capabilities::READ_SUPPORTED_PIDS,
-                PermissionLevel::L0,
                 "Enumerate the live-data parameters a module supports, and say which of them \
                  this build can decode.",
                 "Supported PID numbers with signal ids, units and decoder availability.",
@@ -273,7 +276,6 @@ impl ToolRegistry {
             ToolSchema::new(
                 "read_monitor_tests",
                 capabilities::READ_MONITOR_TESTS,
-                PermissionLevel::L0,
                 "Read the vehicle's own emissions self-test results (OBD service 06): for each \
                  monitor, the value it measured next to the limit it is judged by. Use this to \
                  find components that are still passing but close to their limit — a converter \
@@ -289,7 +291,6 @@ impl ToolRegistry {
             ToolSchema::new(
                 "scan_all_modules",
                 capabilities::SCAN_ALL_MODULES,
-                PermissionLevel::L0,
                 "Find every control module on the vehicle and read its fault memory. This \
                  reaches far beyond the emissions system that `read_dtcs` covers - brakes, \
                  airbag, body, transmission - and is the only way to see a fault in a module \
@@ -311,7 +312,6 @@ impl ToolRegistry {
             ToolSchema::new(
                 "list_catalog_signals",
                 capabilities::LIST_CATALOG_SIGNALS,
-                PermissionLevel::L0,
                 "List the community-recorded signals that might apply to this vehicle - things \
                  beyond the standard emissions PIDs, like transmission temperature or odometer, \
                  which manufacturers define themselves. Use this when the user asks for a value \
@@ -327,7 +327,6 @@ impl ToolRegistry {
             ToolSchema::new(
                 "read_catalog_signal",
                 capabilities::READ_CATALOG_SIGNAL,
-                PermissionLevel::L0,
                 "Ask the vehicle one signal from `list_catalog_signals` and report what it \
                  answers. This is a read, and it is the way to find out whether a community \
                  definition actually describes this vehicle: if the identifier is not there, the \
@@ -343,7 +342,6 @@ impl ToolRegistry {
             ToolSchema::new(
                 "probe_module_capabilities",
                 capabilities::PROBE_MODULE_CAPABILITIES,
-                PermissionLevel::L0,
                 "Ask one module what it actually supports, instead of guessing. Reports which \
                  data identifiers exist and their contents, which diagnostic sessions it \
                  grants, and whether it implements security access at all. Use this when a \
@@ -359,7 +357,6 @@ impl ToolRegistry {
             ToolSchema::new(
                 "list_vehicle_features",
                 capabilities::LIST_FEATURES,
-                PermissionLevel::L0,
                 "List the settings this vehicle could have configured — things like automatic \
                  folding mirrors or a startup chime, which are switched on and off in a module \
                  rather than repaired. Use this when the user asks to change how the vehicle \
@@ -372,7 +369,6 @@ impl ToolRegistry {
             ToolSchema::new(
                 "preview_configuration_change",
                 capabilities::PREVIEW_CHANGE,
-                PermissionLevel::L0,
                 "Work out what changing one setting would involve, WITHOUT changing anything. \
                  Returns every check that has to pass and whether it does, so you can tell the \
                  user precisely what stands in the way — a wrong adapter, a flat battery, or a \
@@ -406,7 +402,6 @@ impl ToolRegistry {
             ToolSchema::new(
                 "read_dtcs",
                 capabilities::READ_DTCS,
-                PermissionLevel::L0,
                 "Read stored, pending and permanent diagnostic trouble codes. This is the only \
                  read of the emissions codes: `scan_all_modules` does not include them, so a \
                  full scan alone never shows that the engine has no codes. Descriptions come \
@@ -419,7 +414,6 @@ impl ToolRegistry {
             ToolSchema::new(
                 "read_freeze_frame",
                 capabilities::READ_FREEZE_FRAME,
-                PermissionLevel::L0,
                 "Read the stored snapshot of conditions captured when a fault was recorded. This \
                  is historical data, not a live reading.",
                 "The causing trouble code and the frozen parameter values.",
@@ -444,7 +438,6 @@ impl ToolRegistry {
             ToolSchema::new(
                 "read_pid",
                 capabilities::READ_PID,
-                PermissionLevel::L0,
                 "Read one live parameter from a module, by signal id (\"engine_rpm\") or by PID \
                  number (\"0x0C\").",
                 "One or more decoded values, each carrying the raw bytes it came from.",
@@ -467,7 +460,6 @@ impl ToolRegistry {
             ToolSchema::new(
                 "read_live_data",
                 capabilities::READ_LIVE_DATA,
-                PermissionLevel::L0,
                 "Read several live parameters from a module as one sample. Signals that cannot \
                  be read are reported as warnings rather than dropped silently.",
                 "Decoded values for the signals that could be read, plus warnings for those that \
@@ -493,7 +485,6 @@ impl ToolRegistry {
             ToolSchema::new(
                 "check_procedure",
                 capabilities::READ_LIVE_DATA,
-                PermissionLevel::L0,
                 &format!(
                     "Check whether the vehicle is in the state a guided procedure needs, by \
                      reading it: never take the person's word for it. Read-only, and meant to \
@@ -511,7 +502,6 @@ impl ToolRegistry {
             ToolSchema::new(
                 "run_procedure",
                 capabilities::READ_LIVE_DATA,
-                PermissionLevel::L0,
                 "Take a procedure's measurement, once check_procedure says its conditions hold. \
                  The conditions are read again before and after, and the result says whether \
                  they held throughout and whether everything the procedure exists to measure \
@@ -523,7 +513,6 @@ impl ToolRegistry {
             ToolSchema::new(
                 "adapter_health",
                 capabilities::HEALTH,
-                PermissionLevel::L0,
                 "Read the adapter link's health: state, request and failure counts, latency, \
                  measured capabilities and their caveats.",
                 "Adapter health counters and the observed capability snapshot.",
@@ -548,7 +537,6 @@ impl ToolRegistry {
             ToolSchema::new(
                 "clear_dtcs",
                 capabilities::CLEAR_DTCS,
-                PermissionLevel::L1,
                 "Clear stored trouble codes, freeze frames and readiness monitors. NOT available \
                  to you. If the user wants codes cleared, tell them the Codes screen has a Clear \
                  button, and tell them what it costs: the readiness monitors reset, which fails \
@@ -582,7 +570,12 @@ impl ToolRegistry {
 }
 
 /// A request to run a tool.
+///
+/// Which tool, with what arguments, for whom. Nothing else: a person's
+/// approval is not something a tool call can carry, so nothing that speaks
+/// through this interface can present one.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ToolCall {
     /// Tool name.
     pub tool: String,
@@ -592,31 +585,17 @@ pub struct ToolCall {
     /// Who is asking. Recorded with every operation; handoff §10 makes this
     /// mandatory rather than optional.
     pub initiator: String,
-    /// Username confirming an operation that requires confirmation.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub confirmation: Option<String>,
 }
 
 impl ToolCall {
     /// A call with no arguments.
     pub fn new(tool: impl Into<String>, initiator: impl Into<String>) -> Self {
-        ToolCall {
-            tool: tool.into(),
-            arguments: json!({}),
-            initiator: initiator.into(),
-            confirmation: None,
-        }
+        ToolCall { tool: tool.into(), arguments: json!({}), initiator: initiator.into() }
     }
 
     /// Attach arguments.
     pub fn with_arguments(mut self, arguments: Value) -> Self {
         self.arguments = arguments;
-        self
-    }
-
-    /// Attach a human confirmation.
-    pub fn confirmed_by(mut self, user: impl Into<String>) -> Self {
-        self.confirmation = Some(user.into());
         self
     }
 }
@@ -770,7 +749,10 @@ pub fn execute(
                 call.arguments.get("procedure").and_then(Value::as_str).unwrap_or_default();
             service.run_procedure(procedure, initiator)
         }
-        "clear_dtcs" => service.clear_dtcs(module, initiator, call.confirmation.as_deref()),
+        // No approval, because there is none to pass: a call through this
+        // interface has nowhere to carry one. Not reached while the tool is
+        // disabled, and refused by the gate if it ever were.
+        "clear_dtcs" => service.clear_dtcs(module, initiator, None),
         // A tool that is registered but has no dispatch arm is a bug in this
         // crate, and it fails closed like everything else.
         other => ToolResult::failure(
@@ -852,28 +834,37 @@ mod tests {
     }
 
     #[test]
-    fn no_tool_is_less_restricted_than_the_capability_behind_it() {
-        // These two levels answer different questions and are allowed to
-        // differ: the capability says what the *product* permits, the tool
-        // schema says what a *model* may ask for. `clear_dtcs` is the case that
-        // forced the distinction — a person may clear codes, an agent may not.
+    fn every_tool_carries_the_level_of_the_capability_behind_it() {
+        // One list, not two. A tool's level is read from the capability it
+        // runs under, so the level a model is shown, the level the gate decides
+        // by and the level the audit trail records are the same number.
         //
-        // What must never happen is the reverse. A tool more permissive than
-        // its capability would be a model asking for something the product has
-        // decided needs more care, and relying on a downstream check to notice.
+        // What a *model* may ask for is a separate question with its own
+        // switch: `clear_dtcs` is L1 for a person and disabled for the agent,
+        // and saying so does not take a second, different level.
         let tools = ToolRegistry::phase1();
         let caps = CapabilityRegistry::phase1();
         for t in tools.all() {
             let cap = caps.get(&t.capability).unwrap_or_else(|| {
                 panic!("tool {} names unregistered capability {}", t.name, t.capability)
             });
-            assert!(
-                t.permission_level >= cap.level,
-                "tool {} is less restricted ({:?}) than its capability ({:?})",
-                t.name,
-                t.permission_level,
-                cap.level
-            );
+            assert_eq!(t.permission_level, cap.level, "tool {}", t.name);
+        }
+        assert_eq!(tools.get("clear_dtcs").unwrap().permission_level, PermissionLevel::L1);
+    }
+
+    /// Nothing a model is handed runs under a capability that may put a
+    /// state-changing service on the bus, or one that needs a person.
+    #[test]
+    fn no_enabled_tool_runs_under_a_capability_that_changes_the_vehicle() {
+        let tools = ToolRegistry::phase1();
+        let caps = CapabilityRegistry::phase1();
+        for t in tools.enabled() {
+            let cap = caps.get(&t.capability).unwrap();
+            assert!(cap.wire_services.is_empty(), "{} can send a write", t.name);
+            assert!(!cap.mutating, "{} runs under a mutating capability", t.name);
+            assert!(!cap.level.requires_confirmation(), "{} needs a person", t.name);
+            assert!(!cap.agent_forbidden, "{} is closed to models", t.name);
         }
     }
 
@@ -948,7 +939,27 @@ mod tests {
             .with_arguments(json!({ "module": "ECU_7E8", "signals": ["engine_rpm"] }));
         let text = serde_json::to_string(&call).unwrap();
         assert_eq!(serde_json::from_str::<ToolCall>(&text).unwrap(), call);
-        // Confirmation is omitted when absent rather than serialized as null.
-        assert!(!text.contains("confirmation"));
+    }
+
+    /// A tool call has a tool, its arguments and who asked. There is no field
+    /// a confirmation could travel in, and one that is sent anyway is refused
+    /// as malformed rather than read past.
+    #[test]
+    fn a_tool_call_has_nowhere_to_carry_a_confirmation() {
+        let text = serde_json::to_string(&ToolCall::new("clear_dtcs", "user")).unwrap();
+        assert!(!text.contains("confirm"));
+        assert!(!text.contains("approv"));
+
+        for smuggled in [
+            json!({ "tool": "clear_dtcs", "initiator": "user", "confirmation": "owner" }),
+            json!({ "tool": "clear_dtcs", "initiator": "user", "confirmed_by": "human" }),
+            json!({ "tool": "clear_dtcs", "initiator": "user", "approval": { "id": "x" } }),
+            json!({ "tool": "clear_dtcs", "initiator": "user", "is_human": true }),
+        ] {
+            assert!(
+                serde_json::from_value::<ToolCall>(smuggled.clone()).is_err(),
+                "{smuggled} was accepted as a tool call"
+            );
+        }
     }
 }

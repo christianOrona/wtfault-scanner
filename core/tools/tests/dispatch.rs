@@ -11,7 +11,7 @@ use aim_safety::SafetyGate;
 use aim_session::SessionStore;
 use aim_simulator::{ScenarioId, SimulatedTransport};
 use aim_tools::{execute, ToolCall, ToolRegistry};
-use aim_types::{ErrorCode, EventKind};
+use aim_types::{ErrorCode, EventKind, PermissionLevel};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -123,13 +123,12 @@ fn the_write_tool_is_refused_through_the_registry_too() {
     call(&mut service, "scan_modules", json!({}));
     let registry = ToolRegistry::phase1();
 
-    // Even a well-formed, confirmed call from a named initiator.
+    // Even a well-formed call from a named initiator. There is nothing more it
+    // could add: a tool call has no field for a confirmation.
     let result = execute(
         &mut service,
         &registry,
-        &ToolCall::new("clear_dtcs", AGENT)
-            .with_arguments(json!({ "module": "ECU_7E8" }))
-            .confirmed_by("the-owner"),
+        &ToolCall::new("clear_dtcs", AGENT).with_arguments(json!({ "module": "ECU_7E8" })),
     );
     assert!(!result.success);
     assert_eq!(result.error.unwrap().code, ErrorCode::PermissionLevelDisabled);
@@ -188,29 +187,41 @@ fn an_agent_cannot_clear_codes_even_though_a_person_can() {
     let result = execute(
         &mut service,
         &registry,
-        &ToolCall::new("clear_dtcs", AGENT)
-            .with_arguments(json!({ "module": "ECU_7E8" }))
-            // Even with a confirmation the model made up for itself.
-            .confirmed_by("the-owner"),
+        &ToolCall::new("clear_dtcs", AGENT).with_arguments(json!({ "module": "ECU_7E8" })),
     );
 
     assert!(!result.success);
     assert_eq!(
         result.error.unwrap().code,
         ErrorCode::PermissionLevelDisabled,
-        "the model must not reach service 04 whatever it confirms"
+        "the model must not reach service 04"
     );
 
     // And the refusal is in the flight recorder. A refusal that leaves no trace
     // is the one shape an audit log must never have.
+    //
+    // At the level the operation really has. Clearing codes is L1, and this
+    // record used to say L2 whatever had been refused.
     let events = service.store().events_since(service.session_id(), 0, 500).unwrap();
-    assert!(
-        events.iter().any(|e| matches!(
-            &e.kind,
-            EventKind::SafetyDecision { operation, allowed, initiator, .. }
-                if operation == "obd2.clear_dtcs" && !*allowed && initiator == "agent:planner"
-        )),
-        "the refusal must be recorded"
+    let recorded: Vec<_> = events
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EventKind::SafetyDecision {
+                operation, level, allowed, initiator, confirmed, ..
+            } if operation == "obd2.clear_dtcs" => {
+                Some((*level, *allowed, initiator.clone(), *confirmed))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        recorded,
+        vec![(Some(PermissionLevel::L1), false, String::from("agent:planner"), false)],
+        "the refusal must be recorded once, as what it was"
+    );
+    assert_eq!(
+        aim_safety::CapabilityRegistry::phase1().get("obd2.clear_dtcs").unwrap().level,
+        PermissionLevel::L1
     );
 }
 

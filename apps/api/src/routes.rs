@@ -55,6 +55,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/features/{id}/preview", post(preview_feature_change))
         .route("/api/v1/features/{id}/apply", post(apply_feature_change))
         .route("/api/v1/features/{id}/write-gate", post(probe_feature_write_gate))
+        .route("/api/v1/approvals", post(ask_for_approval))
         .route("/api/v1/tools", get(tools))
         .route("/api/v1/tools/{name}", post(run_tool))
         // ---- adapter ----
@@ -150,6 +151,8 @@ pub fn router(state: AppState) -> Router {
         )
         // ---- live data websocket ----
         .route("/api/v1/live", get(ws::live_data_ws))
+        // Every route above, the WebSockets included. See `crate::local`.
+        .layer(axum::middleware::from_fn(crate::local::local_only))
         .with_state(state)
 }
 
@@ -272,12 +275,101 @@ async fn preview_feature_change(
     ))
 }
 
+/// A person's answer to a challenge from `POST /approvals`.
+///
+/// This replaces a `confirmation` string. That string was whatever the caller
+/// chose to send, checked for being non-empty, so the typed confirmation the
+/// interface asked for was enforced by the interface and by nothing else.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ApprovalAnswer {
+    /// The challenge's `id`.
+    id: String,
+    /// What the person typed.
+    typed: String,
+}
+
+/// What a person is being asked to approve.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+enum ApprovalRequest {
+    /// Change one setting to one value. Covers asking that setting's module
+    /// whether it accepts writes first, when the plan says that is needed.
+    ChangeSetting {
+        /// A feature id from the catalogue.
+        feature_id: String,
+        /// What it would be changed to.
+        desired: aim_diagnostics::DesiredValue,
+    },
+    /// Clear the stored codes of one module, or of every module.
+    ClearCodes {
+        /// One module, or every module that answers when absent.
+        #[serde(default)]
+        module: Option<String>,
+    },
+    /// Ask one module whether it accepts writes.
+    ProbeWriteGate {
+        /// A module key from a scan.
+        module: String,
+    },
+}
+
+/// `POST /api/v1/approvals`
+///
+/// Ask for a person's approval of one specific change. The answer says what to
+/// type; the change itself is then asked for with the `id` and what was typed.
+///
+/// Touches no vehicle and needs none connected. Each approval is for exactly
+/// what was named here, is used once, and is withdrawn if it is not answered.
+async fn ask_for_approval(
+    State(state): State<AppState>,
+    Json(body): Json<ApprovalRequest>,
+) -> ApiResult<Json<Value>> {
+    use aim_diagnostics::{approvals, capabilities, DesiredValue};
+    let challenge = match body {
+        ApprovalRequest::ChangeSetting { feature_id, desired } => {
+            if state.decoders().features.get(&feature_id).is_none() {
+                return Err(ApiError::new(AimError::not_found(format!(
+                    "no feature {feature_id:?} in the catalogue, so there is nothing to approve"
+                ))));
+            }
+            let value = match desired {
+                DesiredValue::On => "on",
+                DesiredValue::Off => "off",
+            };
+            state.approvals.issue(
+                &[capabilities::PROBE_WRITE_GATE, capabilities::WRITE_FEATURE],
+                &approvals::change(&feature_id, desired),
+                "CHANGE",
+                &format!("typed CHANGE to turn {feature_id} {value}"),
+            )
+        }
+        ApprovalRequest::ClearCodes { module } => state.approvals.issue(
+            &[capabilities::CLEAR_DTCS],
+            &approvals::clear(module.as_deref()),
+            "CLEAR",
+            &match &module {
+                Some(key) => format!("typed CLEAR to clear the stored codes of {key}"),
+                None => String::from("typed CLEAR to clear the stored codes of every module"),
+            },
+        ),
+        ApprovalRequest::ProbeWriteGate { module } => state.approvals.issue(
+            &[capabilities::PROBE_WRITE_GATE],
+            &approvals::probe(&module),
+            "PROBE",
+            &format!("typed PROBE to ask {module} whether it accepts writes"),
+        ),
+    };
+    Ok(Json(json!({ "approval": challenge })))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ApplyBody {
     /// What the feature should be set to.
     desired: aim_diagnostics::DesiredValue,
-    /// Who authorised this, typed by a person.
-    confirmation: String,
+    /// The person's approval of exactly this change.
+    approval: ApprovalAnswer,
 }
 
 /// Change a vehicle setting.
@@ -296,15 +388,16 @@ async fn apply_feature_change(
     Path(id): Path<String>,
     Json(body): Json<ApplyBody>,
 ) -> ApiResult<Json<ToolResult>> {
-    if body.confirmation.trim().is_empty() {
-        return Err(ApiError::bad_request(
-            "changing a vehicle setting needs an explicit confirmation naming who authorised it",
-        ));
-    }
+    let approval = state.approvals.redeem(
+        &body.approval.id,
+        &body.approval.typed,
+        aim_diagnostics::capabilities::WRITE_FEATURE,
+        &aim_diagnostics::approvals::change(&id, body.desired),
+    )?;
     Ok(Json(
         state
             .with_service_named("changing a setting on the vehicle", move |s| {
-                s.apply_configuration_change(&id, body.desired, "user:api", &body.confirmation)
+                s.apply_configuration_change(&id, body.desired, "user:api", Some(approval))
             })
             .await?,
     ))
@@ -316,20 +409,25 @@ async fn apply_feature_change(
 /// double horn chirp" never has to know that it lives at 72E and is requested
 /// at 726. Writes nothing that can land: see
 /// [`aim_diagnostics::DiagnosticService::probe_write_gate_for_feature`].
+///
+/// The body is the same as the change's, and so is the approval: asking is the
+/// first half of changing this setting to this value, which is what the person
+/// was shown and confirmed.
 async fn probe_feature_write_gate(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    Json(body): Json<ClearBody>,
+    Json(body): Json<ApplyBody>,
 ) -> ApiResult<Json<ToolResult>> {
-    if body.confirmation.trim().is_empty() {
-        return Err(ApiError::bad_request(
-            "asking a module whether it accepts writes needs an explicit confirmation",
-        ));
-    }
+    let approval = state.approvals.redeem(
+        &body.approval.id,
+        &body.approval.typed,
+        aim_diagnostics::capabilities::PROBE_WRITE_GATE,
+        &aim_diagnostics::approvals::change(&id, body.desired),
+    )?;
     Ok(Json(
         state
             .with_service_named("asking a module whether it accepts changes", move |s| {
-                s.probe_write_gate_for_feature(&id, "user:api", Some(body.confirmation.as_str()))
+                s.probe_write_gate_for_feature(&id, body.desired, "user:api", Some(approval))
             })
             .await?,
     ))
@@ -408,32 +506,29 @@ async fn tools(State(state): State<AppState>) -> Json<Value> {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ToolBody {
     #[serde(default)]
     arguments: Value,
-    #[serde(default)]
-    initiator: Option<String>,
-    #[serde(default)]
-    confirmation: Option<String>,
 }
 
-/// Generic tool dispatch — the same path the future agent runtime will use.
+/// Generic tool dispatch — the same registry the agent runtime runs through.
+///
+/// The body is the arguments and nothing else. It used to take an `initiator`
+/// and a `confirmation`, which let whoever called this say who they were: a
+/// caller could file its requests in the flight recorder under `agent:` or
+/// under any name it liked. What is recorded now is where the call came from,
+/// which is here. The agent's own calls are made in-process, and that is the
+/// only place `agent:` is written.
 async fn run_tool(
     State(state): State<AppState>,
     Path(name): Path<String>,
     body: Option<Json<ToolBody>>,
 ) -> ApiResult<Json<ToolResult>> {
-    let body = body.map(|Json(b)| b);
-    let mut call = aim_tools::ToolCall::new(
-        name,
-        body.as_ref().and_then(|b| b.initiator.clone()).unwrap_or_else(|| String::from("user:api")),
-    );
-    if let Some(b) = &body {
+    let mut call = aim_tools::ToolCall::new(name, "user:api");
+    if let Some(Json(b)) = &body {
         if !b.arguments.is_null() {
             call = call.with_arguments(b.arguments.clone());
-        }
-        if let Some(c) = &b.confirmation {
-            call = call.confirmed_by(c.clone());
         }
     }
     let tools = std::sync::Arc::clone(&state.tools);
@@ -1012,16 +1107,24 @@ async fn module_monitor_tests(
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ClearBody {
-    /// Who authorised it. Recorded in the audit trail verbatim.
+    /// The person's approval of clearing exactly this.
     ///
     /// Required, and deliberately not defaulted: the safety gate refuses an L1
     /// operation without one, and a route that supplied its own would be
     /// forging the consent the gate exists to check for.
-    confirmation: String,
+    approval: ApprovalAnswer,
     /// One module, or every module that answers when absent.
     #[serde(default)]
     module: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ModuleGateBody {
+    /// The person's approval of asking this module.
+    approval: ApprovalAnswer,
 }
 
 /// Sweep the diagnostic address range and read every module's fault memory.
@@ -1049,7 +1152,13 @@ async fn last_full_scan(State(state): State<AppState>) -> ApiResult<Json<Value>>
             s.last_full_scan().map(|scan| {
                 json!({
                     "result": scan.result,
-                    "by": if scan.by.starts_with("agent") { "assistant" } else { "person" },
+                    "by": if aim_safety::InitiatorKind::of(&scan.by)
+                        == aim_safety::InitiatorKind::Agent
+                    {
+                        "assistant"
+                    } else {
+                        "person"
+                    },
                     "age_seconds": scan.age().as_secs(),
                 })
             })
@@ -1078,16 +1187,15 @@ async fn clear_dtcs(
     State(state): State<AppState>,
     Json(body): Json<ClearBody>,
 ) -> ApiResult<Json<ToolResult>> {
-    if body.confirmation.trim().is_empty() {
-        return Err(ApiError::bad_request(
-            "clearing codes needs an explicit confirmation naming who authorised it",
-        ));
-    }
+    let approval = state.approvals.redeem(
+        &body.approval.id,
+        &body.approval.typed,
+        aim_diagnostics::capabilities::CLEAR_DTCS,
+        &aim_diagnostics::approvals::clear(body.module.as_deref()),
+    )?;
     Ok(Json(
         state
-            .with_service(move |s| {
-                s.clear_dtcs(body.module.as_deref(), "user:api", Some(&body.confirmation))
-            })
+            .with_service(move |s| s.clear_dtcs(body.module.as_deref(), "user:api", Some(approval)))
             .await?,
     ))
 }
@@ -1725,6 +1833,13 @@ struct FindingBody {
 /// A POST rather than something the app infers: a finding is a claim, and a
 /// claim needs somebody or something willing to stand behind it. Evidence is
 /// required by the type, because a finding nobody can attribute is a rumour.
+///
+/// What arrives here is a person's statement, and it is stored as one. It used
+/// to be stored as `measured_this_session` unless the caller said otherwise,
+/// which filed a typed sentence beside readings taken off the vehicle; one
+/// such sentence about a module's write gate was enough to have the gate
+/// treated as measured open. The measurement authorities are written only by
+/// the code that takes the measurement.
 async fn record_vehicle_knowledge(
     State(state): State<AppState>,
     Json(body): Json<FindingBody>,
@@ -1744,7 +1859,16 @@ async fn record_vehicle_knowledge(
             )))
         }
     };
-    let authority = body.authority.unwrap_or_else(|| String::from("measured_this_session"));
+    let authority = aim_diagnostics::knowledge::USER_STATEMENT.to_string();
+    if let Some(claimed) = body.authority.as_deref() {
+        if !claimed.trim().eq_ignore_ascii_case(&authority) {
+            return Err(ApiError::bad_request(format!(
+                "a finding recorded here is a person's statement and is stored as {authority:?}. \
+                 {claimed:?} cannot be claimed for it: the application writes its measurement \
+                 authorities itself, when it measures."
+            )));
+        }
+    }
 
     match body.vin {
         // Named explicitly: goes straight to the store, because there may be no
@@ -1898,14 +2022,16 @@ async fn capture_configuration(
 async fn probe_write_gate(
     State(state): State<AppState>,
     Path(key): Path<String>,
-    Json(body): Json<ClearBody>,
+    Json(body): Json<ModuleGateBody>,
 ) -> ApiResult<Json<ToolResult>> {
+    let approval = state.approvals.redeem(
+        &body.approval.id,
+        &body.approval.typed,
+        aim_diagnostics::capabilities::PROBE_WRITE_GATE,
+        &aim_diagnostics::approvals::probe(&key),
+    )?;
     Ok(Json(
-        state
-            .with_service(move |s| {
-                s.probe_write_gate(&key, "user:api", Some(body.confirmation.as_str()))
-            })
-            .await?,
+        state.with_service(move |s| s.probe_write_gate(&key, "user:api", Some(approval))).await?,
     ))
 }
 

@@ -9,8 +9,9 @@
 //!    never "best effort" executed.
 //! 2. **Fail closed.** Every path that cannot prove an operation is safe
 //!    rejects it. There is no default-allow branch in [`SafetyGate::authorize`].
-//! 3. **Two ceilings.** L0 runs freely; L1 and L2 need an explicit confirmation
-//!    token; L3 (programming) is compiled off via [`MAX_ENABLED_LEVEL`]. A
+//! 3. **Two ceilings.** L0 runs freely; L1 and L2 need a [`HumanApproval`],
+//!    which only an [`ApprovalDesk`] can make; L3 (programming) is compiled off
+//!    via [`MAX_ENABLED_LEVEL`]. A
 //!    second, independent ceiling — [`MAX_ENABLED_RISK`] — refuses on
 //!    consequence rather than privilege, because a mirror-fold preference and a
 //!    brake calibration are the same permission level and must not be the same
@@ -19,13 +20,20 @@
 //!    an [`AuditRecord`] naming the initiator. A non-read operation cannot be
 //!    authorized without one.
 //!
+//! 5. **Nothing leaves without permission.** A capability names the
+//!    state-changing services it may put on the vehicle bus, and the
+//!    [`Authorization`] the gate grants is what the diagnostic core has to show
+//!    before it sends one. Only this crate can make an [`Authorization`].
+//!
 //! The future agent runtime calls tools, tools call this gate. The gate has no
 //! idea a model exists, which is the point.
 
 #![warn(missing_docs)]
 
+pub mod approval;
 pub mod preconditions;
 
+pub use approval::{ApprovalDesk, Challenge, HumanApproval};
 pub use preconditions::{Precondition, VehicleConditions};
 
 use aim_types::{AimError, AimResult, ErrorCode, PermissionLevel, RiskClass, Timestamp};
@@ -67,6 +75,13 @@ pub const MAX_ENABLED_LEVEL: PermissionLevel = PermissionLevel::L2;
 /// what this tool is for.
 pub const MAX_ENABLED_RISK: RiskClass = RiskClass::Service;
 
+/// OBD-II service 04: clear the emissions codes, freeze frames and monitors.
+pub const CLEAR_EMISSIONS_CODES: u8 = 0x04;
+/// UDS service 14: clear one module's fault memory.
+pub const CLEAR_DIAGNOSTIC_INFORMATION: u8 = 0x14;
+/// UDS service 2E: write one data identifier.
+pub const WRITE_DATA_BY_IDENTIFIER: u8 = 0x2E;
+
 /// Risk class for a capability deserialized from an older record that predates
 /// the field. Read is the safe default: it under-claims rather than over-claims.
 fn default_risk() -> RiskClass {
@@ -100,6 +115,15 @@ pub struct Capability {
     /// be the thing that raised the idea.
     #[serde(default)]
     pub agent_forbidden: bool,
+    /// The state-changing services this operation may put on the vehicle bus,
+    /// by service identifier. Empty for anything that only reads.
+    ///
+    /// Stated here, beside the level and the preconditions, so that what an
+    /// operation is permitted to send has the same single source as whether it
+    /// is permitted at all. The diagnostic core will not send a service that is
+    /// not a read unless the [`Authorization`] it holds lists it.
+    #[serde(default)]
+    pub wire_services: Vec<u8>,
 }
 
 impl Capability {
@@ -114,7 +138,14 @@ impl Capability {
             risk: RiskClass::Read,
             mutating: false,
             agent_forbidden: false,
+            wire_services: Vec::new(),
         }
+    }
+
+    /// Name the state-changing services this operation sends.
+    pub fn sending(mut self, services: Vec<u8>) -> Self {
+        self.wire_services = services;
+        self
     }
 
     /// Mark this as something a model may never initiate.
@@ -287,7 +318,8 @@ impl CapabilityRegistry {
             )
             .at_level(PermissionLevel::L1)
             .with_risk(RiskClass::Convenience)
-            .never_for_agents(),
+            .never_for_agents()
+            .sending(vec![WRITE_DATA_BY_IDENTIFIER]),
             Capability::read_only("config.write_feature", "Change a vehicle configuration setting")
                 .at_level(PermissionLevel::L2)
                 .with_risk(RiskClass::Convenience)
@@ -299,7 +331,8 @@ impl CapabilityRegistry {
                     Precondition::VehicleStationary,
                     Precondition::BatteryVoltageAtLeast(12.4),
                 ])
-                .needing_adapter(vec![AdapterFlag::SupportsTransmit]),
+                .needing_adapter(vec![AdapterFlag::SupportsTransmit])
+                .sending(vec![WRITE_DATA_BY_IDENTIFIER]),
             // Clearing codes is the one write every twenty-pound code reader
             // performs, and refusing it made this tool strictly less capable
             // than the thing it is meant to replace. It is L1: implemented,
@@ -325,7 +358,8 @@ impl CapabilityRegistry {
                 Precondition::VehicleStationary,
                 Precondition::StableConnection,
             ])
-            .needing_adapter(vec![AdapterFlag::SupportsTransmit]),
+            .needing_adapter(vec![AdapterFlag::SupportsTransmit])
+            .sending(vec![CLEAR_EMISSIONS_CODES, CLEAR_DIAGNOSTIC_INFORMATION]),
             // There is deliberately no unbounded "write any configuration"
             // capability. One existed while L2 was compiled off, as a
             // placeholder whose only job was to be refused explicitly. Enabling
@@ -375,21 +409,61 @@ impl CapabilityRegistry {
     }
 }
 
+/// What kind of caller an initiator label names.
+///
+/// The label is whatever the caller wrote, so this can only ever be used to
+/// refuse. `user:api` proves nothing about who is asking; what it does is fail
+/// to be `agent:`, and the operations a model may never start are refused for
+/// anything that is not recognisably a person. Permission to change something
+/// comes from a [`HumanApproval`] and from nowhere else.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InitiatorKind {
+    /// `user` or `user:<where>`.
+    Person,
+    /// `agent` or `agent:<name>`.
+    Agent,
+    /// `system` or `system:<what>`: the application acting for itself.
+    System,
+    /// Anything else. Treated as not a person.
+    Unrecognised,
+}
+
+impl InitiatorKind {
+    /// Classify an initiator label.
+    ///
+    /// Case and surrounding space are ignored, so `Agent:planner` and
+    /// ` agent:planner` are an agent, as they would be to anybody reading the
+    /// log. A label that fits none of the three families is unrecognised
+    /// rather than assumed to be a person.
+    pub fn of(initiator: &str) -> InitiatorKind {
+        let label = initiator.trim().to_ascii_lowercase();
+        match label.split(':').next().unwrap_or_default() {
+            "user" => InitiatorKind::Person,
+            "agent" => InitiatorKind::Agent,
+            "system" => InitiatorKind::System,
+            _ => InitiatorKind::Unrecognised,
+        }
+    }
+}
+
 /// A request to perform an allowlisted operation.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug)]
 pub struct OperationRequest {
     /// Capability id being requested.
     pub operation: String,
     /// Who or what asked: `user`, `agent:<name>`, `system`.
     ///
     /// Mandatory. §10 requires that every write-capable operation records its
-    /// initiator, and the gate refuses to authorize one without it.
+    /// initiator, and the gate refuses to authorize one without it. It is a
+    /// label for the audit trail: see [`InitiatorKind`] for what it can and
+    /// cannot decide.
     pub initiator: String,
-    /// A confirmation token supplied by a human, for L1 and above.
-    #[serde(default)]
-    pub confirmation: Option<Confirmation>,
+    /// What the operation would act on, in the words an approval names it by.
+    /// Empty for an operation that needs no approval.
+    pub subject: String,
+    /// A person's approval, for L1 and above.
+    pub approval: Option<HumanApproval>,
     /// Free-form context recorded in the audit trail.
-    #[serde(default)]
     pub context: Option<serde_json::Value>,
 }
 
@@ -399,54 +473,75 @@ impl OperationRequest {
         OperationRequest {
             operation: operation.into(),
             initiator: initiator.into(),
-            confirmation: None,
+            subject: String::new(),
+            approval: None,
             context: None,
         }
     }
 
-    /// Attach a human confirmation.
-    pub fn confirmed_by(mut self, user: impl Into<String>) -> Self {
-        self.confirmation =
-            Some(Confirmation { confirmed_by: user.into(), confirmed_at: aim_types::now() });
+    /// Say what the operation would act on.
+    pub fn about(mut self, subject: impl Into<String>) -> Self {
+        self.subject = subject.into();
+        self
+    }
+
+    /// Attach a person's approval.
+    pub fn approved(mut self, approval: HumanApproval) -> Self {
+        self.approval = Some(approval);
         self
     }
 }
 
-/// Evidence that a human confirmed an operation.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Confirmation {
-    /// Who confirmed. Must be a human identity, never an agent.
-    pub confirmed_by: String,
-    /// When.
-    pub confirmed_at: Timestamp,
-}
-
-impl Confirmation {
-    /// True when the confirming identity is a human rather than an agent.
-    ///
-    /// An agent cannot confirm its own request: that would make the
-    /// confirmation requirement decorative.
-    pub fn is_human(&self) -> bool {
-        !self.confirmed_by.is_empty()
-            && !self.confirmed_by.starts_with("agent:")
-            && self.confirmed_by != "system"
-    }
-}
-
-/// Permission granted by the gate. Only the gate can construct one, so a tool
-/// cannot execute without having gone through authorization.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// Permission granted by the gate.
+///
+/// Only the gate can make one: the fields are private, nothing outside this
+/// crate constructs it, it cannot be cloned and it cannot be read out of JSON.
+/// That is what lets the diagnostic core treat holding one as proof that
+/// authorization happened, and ask to see it before a state-changing service
+/// is sent.
+#[derive(Debug)]
 pub struct Authorization {
+    capability: String,
+    level: PermissionLevel,
+    initiator: String,
+    confirmed: bool,
+    granted_at: Timestamp,
+    wire_services: Vec<u8>,
+}
+
+impl Authorization {
     /// The capability that was authorized.
-    pub capability: String,
+    pub fn capability(&self) -> &str {
+        &self.capability
+    }
+
     /// Its level.
-    pub level: PermissionLevel,
+    pub fn level(&self) -> PermissionLevel {
+        self.level
+    }
+
     /// Who asked.
-    pub initiator: String,
-    /// Whether a human confirmation accompanied it.
-    pub confirmed: bool,
+    pub fn initiator(&self) -> &str {
+        &self.initiator
+    }
+
+    /// Whether a person's approval accompanied it.
+    pub fn confirmed(&self) -> bool {
+        self.confirmed
+    }
+
     /// When permission was granted.
-    pub granted_at: Timestamp,
+    pub fn granted_at(&self) -> Timestamp {
+        self.granted_at
+    }
+
+    /// Whether this permits sending the state-changing service `service`.
+    ///
+    /// From the capability's own definition, so an authorization to clear
+    /// codes is not one to write a setting.
+    pub fn permits_service(&self, service: u8) -> bool {
+        self.wire_services.contains(&service)
+    }
 }
 
 /// The audit record produced by every decision, allowed or not.
@@ -458,8 +553,12 @@ pub struct AuditRecord {
     pub level: Option<PermissionLevel>,
     /// Who or what asked.
     pub initiator: String,
-    /// Whether a confirmation was supplied.
+    /// Whether a person's approval, from the desk this gate trusts and for
+    /// this operation, came with the request.
     pub confirmed: bool,
+    /// What that person was told they were approving.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval: Option<String>,
     /// Whether it was allowed.
     pub allowed: bool,
     /// Rejection reason code, when rejected.
@@ -472,7 +571,7 @@ pub struct AuditRecord {
 ///
 /// The audit record is produced even when the request is refused, so refusals
 /// are recorded in the flight recorder rather than vanishing.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Decision {
     /// `Ok` with permission, or `Err` with the structured refusal.
     pub result: AimResult<Authorization>,
@@ -493,15 +592,29 @@ impl Decision {
 }
 
 /// The permission gate.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SafetyGate {
     registry: CapabilityRegistry,
+    /// The one desk whose approvals count here.
+    trusted_desk: Option<approval::DeskId>,
+}
+
+impl std::fmt::Debug for SafetyGate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SafetyGate")
+            .field("registry", &self.registry)
+            .field("trusts_a_desk", &self.trusted_desk.is_some())
+            .finish()
+    }
 }
 
 impl SafetyGate {
     /// Build a gate over an allowlist.
+    ///
+    /// It trusts no [`ApprovalDesk`], so everything that needs a person's
+    /// approval is refused until [`SafetyGate::trusting`] names one.
     pub fn new(registry: CapabilityRegistry) -> Self {
-        SafetyGate { registry }
+        SafetyGate { registry, trusted_desk: None }
     }
 
     /// The Phase 1 gate.
@@ -509,15 +622,44 @@ impl SafetyGate {
         SafetyGate::new(CapabilityRegistry::phase1())
     }
 
+    /// Accept approvals issued by `desk`, and by no other.
+    ///
+    /// Which desk is trusted is decided once, where the gate is built, by
+    /// whatever also decides who is handed the desk. An approval from any
+    /// other desk is refused, so making one is not a way round this.
+    pub fn trusting(mut self, desk: &ApprovalDesk) -> Self {
+        self.trusted_desk = Some(desk.id());
+        self
+    }
+
     /// The allowlist behind this gate.
     pub fn registry(&self) -> &CapabilityRegistry {
         &self.registry
     }
 
+    /// The audit record for a refusal made before this gate was asked.
+    ///
+    /// The tool interface refuses some calls on its own. Their record is built
+    /// here so the level in it comes from the same registry entry a decision
+    /// would have used, instead of being written down a second time somewhere
+    /// that can disagree.
+    pub fn refusal(&self, operation: &str, initiator: &str, reason: &str) -> AuditRecord {
+        AuditRecord {
+            operation: operation.to_string(),
+            level: self.registry.get(operation).map(|c| c.level),
+            initiator: initiator.to_string(),
+            confirmed: false,
+            approval: None,
+            allowed: false,
+            reason: Some(reason.to_string()),
+            decided_at: aim_types::now(),
+        }
+    }
+
     /// Decide whether `request` may proceed.
     ///
     /// Checks run in fixed order — existence, level ceiling, initiator,
-    /// confirmation, adapter capability, preconditions — and the first failure
+    /// approval, adapter capability, preconditions — and the first failure
     /// wins, so a refusal always names the most fundamental reason.
     pub fn authorize(
         &self,
@@ -530,7 +672,8 @@ impl SafetyGate {
             operation: request.operation.clone(),
             level: None,
             initiator: request.initiator.clone(),
-            confirmed: request.confirmation.is_some(),
+            confirmed: false,
+            approval: None,
             allowed: false,
             reason: None,
             decided_at: now,
@@ -625,62 +768,97 @@ impl SafetyGate {
         // an unrelated ceiling would have handed an agent the ability to erase
         // somebody's readiness monitors. A property this important should not
         // be a side effect of an unrelated constant, so it is stated here as
-        // itself: initiator is a model, operation mutates, refused.
+        // itself: the operation is closed to models, the caller is not
+        // recognisably a person, refused.
+        //
+        // Not "the caller is an agent". That was a prefix test on a label the
+        // caller writes, and `Agent:planner` walked through it. Anything that
+        // is not a person is refused, which a misspelling cannot get round.
         //
         // Refused *after* the initiator check so the audit record names who
-        // asked, and before confirmation so that a model cannot get further by
-        // supplying one.
-        if cap.agent_forbidden && request.initiator.starts_with("agent:") {
-            audit.reason = Some(String::from("agent_may_not_mutate"));
-            return Decision {
-                result: Err(AimError::new(
-                    ErrorCode::OperationNotAllowed,
-                    format!(
-                        "{} changes the vehicle, and a model is not permitted to do that by any \
-                         route. A person can, from the interface, after being told what it costs.",
-                        cap.id
-                    ),
-                )
-                .with_details(serde_json::json!({
-                    "operation": cap.id,
-                    "initiator": request.initiator,
-                }))),
-                audit,
-            };
+        // asked, and before the approval so that a model cannot get further by
+        // presenting one.
+        if cap.agent_forbidden {
+            let kind = InitiatorKind::of(&request.initiator);
+            if kind != InitiatorKind::Person {
+                let (reason, message) = if kind == InitiatorKind::Agent {
+                    (
+                        "agent_may_not_mutate",
+                        format!(
+                            "{} changes the vehicle, and a model is not permitted to do that by \
+                             any route. A person can, from the interface, after being told what \
+                             it costs.",
+                            cap.id
+                        ),
+                    )
+                } else {
+                    (
+                        "initiator_not_a_person",
+                        format!(
+                            "{} changes the vehicle and can only be started by a person. {:?} is \
+                             not recognised as one.",
+                            cap.id, request.initiator
+                        ),
+                    )
+                };
+                audit.reason = Some(String::from(reason));
+                return Decision {
+                    result: Err(AimError::new(ErrorCode::OperationNotAllowed, message)
+                        .with_details(serde_json::json!({
+                            "operation": cap.id,
+                            "initiator": request.initiator,
+                        }))),
+                    audit,
+                };
+            }
         }
 
-        // 4. Confirmation for L1 and above, and it must come from a human.
+        // 4. A person's approval, for L1 and above.
+        //
+        // Not a string. An approval is a value only the trusted desk can make,
+        // for this operation on this subject, and it goes stale.
         if cap.level.requires_confirmation() {
-            match &request.confirmation {
-                None => {
-                    audit.reason = Some(String::from("confirmation_required"));
-                    return Decision {
-                        result: Err(AimError::new(
-                            ErrorCode::ConfirmationRequired,
-                            format!("{} requires explicit user confirmation", cap.id),
-                        )
+            let refusal = match &request.approval {
+                None => Some((
+                    "confirmation_required",
+                    format!("{} requires a person's approval", cap.id),
+                )),
+                Some(a) if self.trusted_desk != Some(a.desk()) => Some((
+                    "approval_not_trusted",
+                    format!("{} was approved somewhere this gate does not trust", cap.id),
+                )),
+                Some(a) if a.operation() != cap.id || a.subject() != request.subject => Some((
+                    "approval_for_something_else",
+                    format!(
+                        "the approval presented is for {} on {:?}, not for {} on {:?}",
+                        a.operation(),
+                        a.subject(),
+                        cap.id,
+                        request.subject
+                    ),
+                )),
+                Some(a) if !a.is_fresh() => Some((
+                    "approval_expired",
+                    format!("the approval for {} was given too long ago; confirm it again", cap.id),
+                )),
+                Some(a) => {
+                    audit.confirmed = true;
+                    audit.approval = Some(a.statement().to_string());
+                    None
+                }
+            };
+            if let Some((reason, message)) = refusal {
+                audit.reason = Some(String::from(reason));
+                return Decision {
+                    result: Err(AimError::new(ErrorCode::ConfirmationRequired, message)
                         .with_details(serde_json::json!({
                             "operation": cap.id,
                             "level": cap.level.as_str(),
                             "preconditions": cap.preconditions,
+                            "reason": reason,
                         }))),
-                        audit,
-                    };
-                }
-                Some(c) if !c.is_human() => {
-                    audit.reason = Some(String::from("confirmation_not_human"));
-                    return Decision {
-                        result: Err(AimError::new(
-                            ErrorCode::ConfirmationRequired,
-                            format!(
-                                "{} was confirmed by {:?}, which is not a human identity",
-                                cap.id, c.confirmed_by
-                            ),
-                        )),
-                        audit,
-                    };
-                }
-                Some(_) => {}
+                    audit,
+                };
             }
         }
 
@@ -719,8 +897,9 @@ impl SafetyGate {
                 capability: cap.id.clone(),
                 level: cap.level,
                 initiator: request.initiator.clone(),
-                confirmed: request.confirmation.is_some(),
+                confirmed: audit.confirmed,
                 granted_at: now,
+                wire_services: cap.wire_services.clone(),
             }),
             audit,
         }
@@ -749,6 +928,19 @@ mod tests {
         }
     }
 
+    /// A gate and the desk it trusts.
+    fn gate_and_desk() -> (SafetyGate, ApprovalDesk) {
+        let desk = ApprovalDesk::new();
+        (SafetyGate::phase1().trusting(&desk), desk)
+    }
+
+    /// `operation` asked for by `initiator`, approved by a person at `desk`.
+    fn approved(desk: &ApprovalDesk, operation: &str, initiator: &str) -> OperationRequest {
+        let challenge = desk.issue(&[operation], "the vehicle", "YES", "approved in a test");
+        let approval = desk.redeem(&challenge.id, "YES", operation, "the vehicle").unwrap();
+        OperationRequest::new(operation, initiator).about("the vehicle").approved(approval)
+    }
+
     #[test]
     fn read_operations_are_allowed_without_confirmation() {
         let gate = SafetyGate::phase1();
@@ -762,8 +954,8 @@ mod tests {
         assert_eq!(d.audit.level, Some(PermissionLevel::L0));
         assert_eq!(d.audit.initiator, "user");
         let auth = d.into_result().unwrap();
-        assert_eq!(auth.level, PermissionLevel::L0);
-        assert!(!auth.confirmed);
+        assert_eq!(auth.level(), PermissionLevel::L0);
+        assert!(!auth.confirmed());
     }
 
     #[test]
@@ -784,6 +976,7 @@ mod tests {
             );
             assert!(!d.is_allowed(), "{op:?} must be rejected");
             assert_eq!(d.audit.reason.as_deref(), Some("operation_not_allowed"));
+            assert_eq!(d.audit.level, None, "an unknown operation has no level to record");
             assert_eq!(d.into_result().unwrap_err().code, ErrorCode::OperationNotAllowed);
         }
     }
@@ -799,10 +992,10 @@ mod tests {
     }
 
     #[test]
-    fn clearing_codes_needs_a_confirmation_and_never_happens_by_accident() {
-        let gate = SafetyGate::phase1();
+    fn clearing_codes_needs_an_approval_and_never_happens_by_accident() {
+        let (gate, desk) = gate_and_desk();
 
-        // Unconfirmed: refused, and the reason names what is missing.
+        // Unapproved: refused, and the reason names what is missing.
         let d = gate.authorize(
             &OperationRequest::new("obd2.clear_dtcs", "user"),
             Some(&caps(true)),
@@ -810,14 +1003,17 @@ mod tests {
         );
         assert!(!d.is_allowed());
         assert_eq!(d.audit.reason.as_deref(), Some("confirmation_required"));
+        assert!(!d.audit.confirmed);
 
-        // Confirmed, engine off, stationary, link healthy: allowed.
+        // Approved, engine off, stationary, link healthy: allowed.
         let d = gate.authorize(
-            &OperationRequest::new("obd2.clear_dtcs", "user").confirmed_by("owner"),
+            &approved(&desk, "obd2.clear_dtcs", "user"),
             Some(&caps(true)),
             &ready(),
         );
         assert!(d.is_allowed(), "{:?}", d.audit.reason);
+        assert!(d.audit.confirmed);
+        assert_eq!(d.audit.approval.as_deref(), Some("approved in a test"));
     }
 
     #[test]
@@ -825,11 +1021,11 @@ mod tests {
         // Service 04 on a running engine is refused by many modules anyway, and
         // attempting it mid-drive is how a person ends up with a half-cleared
         // state they cannot explain.
-        let gate = SafetyGate::phase1();
+        let (gate, desk) = gate_and_desk();
         let mut conditions = ready();
         conditions.engine_running = true;
         let d = gate.authorize(
-            &OperationRequest::new("obd2.clear_dtcs", "user").confirmed_by("owner"),
+            &approved(&desk, "obd2.clear_dtcs", "user"),
             Some(&caps(true)),
             &conditions,
         );
@@ -839,9 +1035,9 @@ mod tests {
 
     #[test]
     fn programming_stays_refused_by_level() {
-        let gate = SafetyGate::phase1();
+        let (gate, desk) = gate_and_desk();
         let d = gate.authorize(
-            &OperationRequest::new("program.program_module", "user").confirmed_by("owner"),
+            &approved(&desk, "program.program_module", "user"),
             Some(&caps(true)),
             &ready(),
         );
@@ -855,16 +1051,17 @@ mod tests {
     /// the second ceiling refuses on consequence, and says it is policy.
     #[test]
     fn a_dangerous_change_is_refused_on_risk_even_at_an_enabled_level() {
+        let desk = ApprovalDesk::new();
         let mut registry = CapabilityRegistry::phase1();
         registry.register(
             Capability::read_only("config.calibrate_brakes", "Calibrate the ABS module")
                 .at_level(PermissionLevel::L2)
                 .with_risk(RiskClass::SafetyCritical),
         );
-        let gate = SafetyGate::new(registry);
+        let gate = SafetyGate::new(registry).trusting(&desk);
 
         let d = gate.authorize(
-            &OperationRequest::new("config.calibrate_brakes", "user").confirmed_by("owner"),
+            &approved(&desk, "config.calibrate_brakes", "user"),
             Some(&caps(true)),
             &ready(),
         );
@@ -880,34 +1077,37 @@ mod tests {
 
     /// The change this whole seam exists for now actually goes through.
     #[test]
-    fn a_convenience_write_is_allowed_once_confirmed() {
-        let gate = SafetyGate::phase1();
+    fn a_convenience_write_is_allowed_once_a_person_approves_it() {
+        let (gate, desk) = gate_and_desk();
 
-        let unconfirmed = gate.authorize(
+        let unapproved = gate.authorize(
             &OperationRequest::new("config.write_feature", "user"),
             Some(&caps(true)),
             &ready(),
         );
         assert_eq!(
-            unconfirmed.into_result().unwrap_err().code,
+            unapproved.into_result().unwrap_err().code,
             ErrorCode::ConfirmationRequired,
-            "a write must never happen without a confirmation"
+            "a write must never happen without an approval"
         );
 
-        let confirmed = gate.authorize(
-            &OperationRequest::new("config.write_feature", "user").confirmed_by("owner"),
+        let d = gate.authorize(
+            &approved(&desk, "config.write_feature", "user"),
             Some(&caps(true)),
             &ready(),
         );
+        let auth = d.into_result().expect("an approved convenience write should be authorised");
+        assert!(auth.confirmed());
+        assert!(auth.permits_service(WRITE_DATA_BY_IDENTIFIER));
         assert!(
-            confirmed.into_result().is_ok(),
-            "a confirmed convenience write should be authorised"
+            !auth.permits_service(CLEAR_EMISSIONS_CODES),
+            "permission to write a setting is not permission to clear codes"
         );
     }
 
     #[test]
-    fn l1_requires_confirmation() {
-        let gate = SafetyGate::phase1();
+    fn l1_requires_an_approval() {
+        let (gate, desk) = gate_and_desk();
         let d = gate.authorize(
             &OperationRequest::new("obd2.run_self_test", "agent:planner"),
             Some(&caps(true)),
@@ -916,32 +1116,15 @@ mod tests {
         assert_eq!(d.audit.reason.as_deref(), Some("confirmation_required"));
         assert_eq!(d.into_result().unwrap_err().code, ErrorCode::ConfirmationRequired);
 
+        // A model proposing a self test that a person then approves is the
+        // product working as intended: this one is not closed to models.
         let d = gate.authorize(
-            &OperationRequest::new("obd2.run_self_test", "agent:planner").confirmed_by("owner"),
+            &approved(&desk, "obd2.run_self_test", "agent:planner"),
             Some(&caps(true)),
             &ready(),
         );
         assert!(d.is_allowed());
-        assert!(d.into_result().unwrap().confirmed);
-    }
-
-    #[test]
-    fn an_agent_cannot_confirm_its_own_request() {
-        let gate = SafetyGate::phase1();
-        let d = gate.authorize(
-            &OperationRequest::new("obd2.run_self_test", "agent:planner")
-                .confirmed_by("agent:planner"),
-            Some(&caps(true)),
-            &ready(),
-        );
-        assert!(!d.is_allowed());
-        assert_eq!(d.audit.reason.as_deref(), Some("confirmation_not_human"));
-        let d = gate.authorize(
-            &OperationRequest::new("obd2.run_self_test", "system").confirmed_by("system"),
-            Some(&caps(true)),
-            &ready(),
-        );
-        assert!(!d.is_allowed());
+        assert!(d.into_result().unwrap().confirmed());
     }
 
     #[test]
@@ -958,30 +1141,26 @@ mod tests {
 
     #[test]
     fn missing_adapter_capabilities_fail_closed() {
-        let gate = SafetyGate::phase1();
+        let (gate, desk) = gate_and_desk();
         // Adapter cannot transmit.
         let d = gate.authorize(
-            &OperationRequest::new("obd2.run_self_test", "user").confirmed_by("owner"),
+            &approved(&desk, "obd2.run_self_test", "user"),
             Some(&caps(false)),
             &ready(),
         );
         assert_eq!(d.into_result().unwrap_err().code, ErrorCode::CapabilityMissing);
         // No adapter connected at all: also closed.
-        let d = gate.authorize(
-            &OperationRequest::new("obd2.run_self_test", "user").confirmed_by("owner"),
-            None,
-            &ready(),
-        );
+        let d = gate.authorize(&approved(&desk, "obd2.run_self_test", "user"), None, &ready());
         assert_eq!(d.into_result().unwrap_err().code, ErrorCode::CapabilityMissing);
     }
 
     #[test]
     fn failed_preconditions_block_execution() {
-        let gate = SafetyGate::phase1();
+        let (gate, desk) = gate_and_desk();
         let mut conditions = ready();
         conditions.ignition_on = false;
         let d = gate.authorize(
-            &OperationRequest::new("obd2.run_self_test", "user").confirmed_by("owner"),
+            &approved(&desk, "obd2.run_self_test", "user"),
             Some(&caps(true)),
             &conditions,
         );
@@ -1007,6 +1186,43 @@ mod tests {
                 assert!(d.audit.reason.is_some(), "{op} must record why");
             }
         }
+    }
+
+    /// The level in an audit record is the registry's, whoever writes the
+    /// record and whichever way the decision went.
+    #[test]
+    fn the_audit_level_is_the_capabilitys_own_level() {
+        let (gate, desk) = gate_and_desk();
+        for cap in CapabilityRegistry::phase1().all() {
+            let refused = gate.authorize(
+                &OperationRequest::new(&cap.id, "agent:planner"),
+                None,
+                &VehicleConditions::unknown(),
+            );
+            assert_eq!(refused.audit.level, Some(cap.level), "{} decided", cap.id);
+
+            let early = gate.refusal(&cap.id, "agent:planner", "permission_level_disabled");
+            assert_eq!(early.level, Some(cap.level), "{} refused before the gate", cap.id);
+            assert!(!early.allowed);
+            assert!(!early.confirmed);
+        }
+        // The two the audit names: clearing codes is L1, a setting change L2.
+        let cleared = gate.authorize(
+            &approved(&desk, "obd2.clear_dtcs", "user"),
+            Some(&caps(true)),
+            &ready(),
+        );
+        assert!(cleared.audit.allowed);
+        assert_eq!(cleared.audit.level, Some(PermissionLevel::L1));
+        let written = gate.authorize(
+            &approved(&desk, "config.write_feature", "user"),
+            Some(&caps(true)),
+            &ready(),
+        );
+        assert!(written.audit.allowed);
+        assert_eq!(written.audit.level, Some(PermissionLevel::L2));
+        // And nothing is made up for an operation that is not in the registry.
+        assert_eq!(gate.refusal("does.not.exist", "user", "x").level, None);
     }
 
     #[test]
@@ -1058,6 +1274,159 @@ mod tests {
     }
 }
 
+/// A person's approval cannot be made out of words.
+#[cfg(test)]
+mod approval_tests {
+    use super::*;
+
+    fn caps() -> aim_types::AdapterCapabilities {
+        let mut c = aim_types::AdapterCapabilities::unknown(aim_types::TransportKind::Usb);
+        c.supports_transmit = true;
+        c
+    }
+
+    fn ready() -> VehicleConditions {
+        VehicleConditions {
+            ignition_on: true,
+            engine_running: false,
+            battery_voltage: Some(13.0),
+            connection_stable: true,
+            vehicle_speed_kph: Some(0.0),
+        }
+    }
+
+    const NEEDS_A_PERSON: [&str; 3] =
+        ["obd2.clear_dtcs", "config.write_feature", "config.probe_write_gate"];
+
+    /// There is nowhere to put a string. Whatever a caller calls itself, a
+    /// request with no approval is refused for lacking one.
+    #[test]
+    fn calling_yourself_a_person_approves_nothing() {
+        let desk = ApprovalDesk::new();
+        let gate = SafetyGate::phase1().trusting(&desk);
+        for initiator in ["user", "user:api", "user:owner", "user:human", "USER", "User:the-owner"]
+        {
+            for operation in NEEDS_A_PERSON {
+                let d = gate.authorize(
+                    &OperationRequest::new(operation, initiator).about("owner"),
+                    Some(&caps()),
+                    &ready(),
+                );
+                assert!(!d.is_allowed(), "{operation} as {initiator:?}");
+                assert_eq!(d.audit.reason.as_deref(), Some("confirmation_required"));
+                assert!(!d.audit.confirmed);
+            }
+        }
+    }
+
+    /// An approval from a desk the gate was not built to trust is worth
+    /// nothing, so making a desk is not a way to make an approval.
+    #[test]
+    fn an_approval_from_another_desk_is_refused() {
+        let trusted = ApprovalDesk::new();
+        let gate = SafetyGate::phase1().trusting(&trusted);
+        let mine = ApprovalDesk::new();
+        for operation in NEEDS_A_PERSON {
+            let c = mine.issue(&[operation], "it", "YES", "self-issued");
+            let approval = mine.redeem(&c.id, "YES", operation, "it").unwrap();
+            let d = gate.authorize(
+                &OperationRequest::new(operation, "user").about("it").approved(approval),
+                Some(&caps()),
+                &ready(),
+            );
+            assert!(!d.is_allowed(), "{operation}");
+            assert_eq!(d.audit.reason.as_deref(), Some("approval_not_trusted"));
+            assert!(!d.audit.confirmed);
+        }
+    }
+
+    /// A gate nobody told which desk to trust approves nothing that needs a
+    /// person. Forgetting to wire the desk fails closed.
+    #[test]
+    fn a_gate_that_trusts_no_desk_refuses_every_approval() {
+        let desk = ApprovalDesk::new();
+        let gate = SafetyGate::phase1();
+        let c = desk.issue(&["obd2.clear_dtcs"], "it", "YES", "x");
+        let approval = desk.redeem(&c.id, "YES", "obd2.clear_dtcs", "it").unwrap();
+        let d = gate.authorize(
+            &OperationRequest::new("obd2.clear_dtcs", "user").about("it").approved(approval),
+            Some(&caps()),
+            &ready(),
+        );
+        assert_eq!(d.audit.reason.as_deref(), Some("approval_not_trusted"));
+    }
+
+    /// What was approved is what may be done, and nothing next to it.
+    #[test]
+    fn an_approval_covers_one_operation_on_one_subject() {
+        let desk = ApprovalDesk::new();
+        let gate = SafetyGate::phase1().trusting(&desk);
+        let approval_for = |operation: &str, subject: &str| {
+            let c = desk.issue(&[operation], subject, "YES", "x");
+            desk.redeem(&c.id, "YES", operation, subject).unwrap()
+        };
+
+        // Approved turning one setting on; asked to turn another on.
+        let d = gate.authorize(
+            &OperationRequest::new("config.write_feature", "user")
+                .about("feature:brakes=on")
+                .approved(approval_for("config.write_feature", "feature:chime=on")),
+            Some(&caps()),
+            &ready(),
+        );
+        assert_eq!(d.audit.reason.as_deref(), Some("approval_for_something_else"));
+
+        // Approved clearing codes; asked to write a setting.
+        let d = gate.authorize(
+            &OperationRequest::new("config.write_feature", "user")
+                .about("it")
+                .approved(approval_for("obd2.clear_dtcs", "it")),
+            Some(&caps()),
+            &ready(),
+        );
+        assert_eq!(d.audit.reason.as_deref(), Some("approval_for_something_else"));
+    }
+
+    #[test]
+    fn a_stale_approval_is_refused() {
+        let desk =
+            ApprovalDesk::with_lifetimes(approval::CHALLENGE_LIFETIME, std::time::Duration::ZERO);
+        let gate = SafetyGate::phase1().trusting(&desk);
+        let c = desk.issue(&["obd2.clear_dtcs"], "it", "YES", "x");
+        let approval = desk.redeem(&c.id, "YES", "obd2.clear_dtcs", "it").unwrap();
+        let d = gate.authorize(
+            &OperationRequest::new("obd2.clear_dtcs", "user").about("it").approved(approval),
+            Some(&caps()),
+            &ready(),
+        );
+        assert_eq!(d.audit.reason.as_deref(), Some("approval_expired"));
+        assert_eq!(d.into_result().unwrap_err().code, ErrorCode::ConfirmationRequired);
+    }
+
+    /// Only an operation closed to models may put a state-changing service on
+    /// the bus, and reads may put none.
+    #[test]
+    fn only_operations_closed_to_models_may_send_a_state_changing_service() {
+        for cap in CapabilityRegistry::phase1().all() {
+            if cap.wire_services.is_empty() {
+                continue;
+            }
+            assert!(cap.agent_forbidden, "{} sends a write and is open to a model", cap.id);
+            assert!(cap.level.requires_confirmation(), "{} sends a write unapproved", cap.id);
+            assert!(cap.mutating, "{} sends a write and is not declared mutating", cap.id);
+        }
+        let desk = ApprovalDesk::new();
+        let gate = SafetyGate::phase1().trusting(&desk);
+        let read = gate
+            .authorize(&OperationRequest::new("obd2.read_catalog_signal", "user"), None, &ready())
+            .into_result()
+            .unwrap();
+        for service in 0..=u8::MAX {
+            assert!(!read.permits_service(service), "a read permits service {service:02X}");
+        }
+    }
+}
+
 #[cfg(test)]
 mod agent_write_tests {
     use super::*;
@@ -1082,28 +1451,73 @@ mod agent_write_tests {
         }
     }
 
+    /// `operation` with a real approval from the trusted desk attached.
+    fn approved(desk: &ApprovalDesk, operation: &str, initiator: &str) -> OperationRequest {
+        let c = desk.issue(&[operation], "it", "YES", "the owner approved");
+        let approval = desk.redeem(&c.id, "YES", operation, "it").unwrap();
+        OperationRequest::new(operation, initiator).about("it").approved(approval)
+    }
+
     /// The property, stated over the whole registry rather than a list of ids.
     ///
     /// A new mutating capability added later is covered by this without anyone
     /// remembering to extend a list, which is the only way a rule like this
     /// survives contact with future edits.
+    ///
+    /// Every one of these requests carries a genuine approval. The refusal is
+    /// for who is asking, and no spelling of "agent" gets round it.
     #[test]
     fn nothing_marked_agent_forbidden_is_reachable_by_an_agent() {
-        let gate = SafetyGate::phase1();
+        let desk = ApprovalDesk::new();
+        let gate = SafetyGate::phase1().trusting(&desk);
         for cap in CapabilityRegistry::phase1().all() {
             if !cap.agent_forbidden {
                 continue;
             }
-            let decision = gate.authorize(
-                &OperationRequest::new(&cap.id, "agent:planner").confirmed_by("the-owner"),
-                Some(&caps()),
-                &ready(),
-            );
-            assert!(
-                !decision.is_allowed(),
-                "{} is agent-forbidden and an agent was allowed to run it",
-                cap.id
-            );
+            for initiator in [
+                "agent:planner",
+                "agent",
+                "Agent:planner",
+                "AGENT:planner",
+                " agent:planner",
+                "agent:user",
+                "assistant",
+                "model:claude",
+                "system",
+                "system:preconditions",
+                "the-owner",
+                "human",
+            ] {
+                let decision =
+                    gate.authorize(&approved(&desk, &cap.id, initiator), Some(&caps()), &ready());
+                assert!(
+                    !decision.is_allowed(),
+                    "{} is closed to models and {initiator:?} was allowed to run it",
+                    cap.id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn an_initiator_is_a_person_only_when_it_says_user() {
+        for (label, kind) in [
+            ("user", InitiatorKind::Person),
+            ("user:api", InitiatorKind::Person),
+            (" User:test ", InitiatorKind::Person),
+            ("agent", InitiatorKind::Agent),
+            ("agent:planner", InitiatorKind::Agent),
+            ("Agent:planner", InitiatorKind::Agent),
+            (" agent:x", InitiatorKind::Agent),
+            ("system", InitiatorKind::System),
+            ("system:preconditions", InitiatorKind::System),
+            ("", InitiatorKind::Unrecognised),
+            ("owner", InitiatorKind::Unrecognised),
+            ("human", InitiatorKind::Unrecognised),
+            ("username", InitiatorKind::Unrecognised),
+            ("agents", InitiatorKind::Unrecognised),
+        ] {
+            assert_eq!(InitiatorKind::of(label), kind, "{label:?}");
         }
     }
 
@@ -1114,7 +1528,7 @@ mod agent_write_tests {
     #[test]
     fn the_destructive_operations_are_the_ones_marked() {
         let r = CapabilityRegistry::phase1();
-        for id in ["obd2.clear_dtcs", "config.write_feature"] {
+        for id in ["obd2.clear_dtcs", "config.write_feature", "config.probe_write_gate"] {
             assert!(
                 r.get(id).expect("registered").agent_forbidden,
                 "{id} must be closed to the agent"
@@ -1126,24 +1540,31 @@ mod agent_write_tests {
     /// the test above would pass on a gate that simply refused everything.
     #[test]
     fn a_person_can_still_do_what_the_agent_cannot() {
-        let gate = SafetyGate::phase1();
-        let decision = gate.authorize(
-            &OperationRequest::new("obd2.clear_dtcs", "user").confirmed_by("the-owner"),
-            Some(&caps()),
-            &ready(),
-        );
+        let desk = ApprovalDesk::new();
+        let gate = SafetyGate::phase1().trusting(&desk);
+        let decision =
+            gate.authorize(&approved(&desk, "obd2.clear_dtcs", "user"), Some(&caps()), &ready());
         assert!(decision.is_allowed(), "a person must still be able to clear codes");
     }
 
     #[test]
     fn the_refusal_names_who_asked_so_it_is_auditable() {
-        let gate = SafetyGate::phase1();
+        let desk = ApprovalDesk::new();
+        let gate = SafetyGate::phase1().trusting(&desk);
         let decision = gate.authorize(
-            &OperationRequest::new("obd2.clear_dtcs", "agent:planner").confirmed_by("the-owner"),
+            &approved(&desk, "obd2.clear_dtcs", "agent:planner"),
             Some(&caps()),
             &ready(),
         );
         assert_eq!(decision.audit.reason.as_deref(), Some("agent_may_not_mutate"));
         assert_eq!(decision.audit.initiator, "agent:planner");
+        assert!(!decision.audit.confirmed, "refused before the approval was looked at");
+
+        let decision = gate.authorize(
+            &approved(&desk, "obd2.clear_dtcs", "the-owner"),
+            Some(&caps()),
+            &ready(),
+        );
+        assert_eq!(decision.audit.reason.as_deref(), Some("initiator_not_a_person"));
     }
 }

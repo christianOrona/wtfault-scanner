@@ -10,11 +10,12 @@
 use aim_adapter::{DiagnosticAdapter, Elm327Adapter, Elm327Config};
 use aim_decoders::DecoderSet;
 use aim_diagnostics::DiagnosticService;
-use aim_safety::SafetyGate;
 use aim_session::SessionStore;
 use aim_simulator::{AdapterPersonality, ScenarioId, SimulatedTransport, VirtualVehicle};
 use aim_types::ErrorCode;
 use std::sync::Arc;
+
+mod common;
 
 const USER: &str = "user:test";
 
@@ -29,7 +30,7 @@ fn toyota(scenario: ScenarioId) -> DiagnosticService {
         adapter,
         SessionStore::open_in_memory().unwrap(),
         Arc::new(DecoderSet::generic_obd().unwrap()),
-        SafetyGate::phase1(),
+        common::gate(),
         None,
     )
     .unwrap();
@@ -174,7 +175,7 @@ fn what_needs_uds_says_the_k_line_does_not_carry_it() {
     assert!(service.scan_modules(USER).success);
     for result in [
         service.probe_module_capabilities("ECU_10", USER),
-        service.probe_write_gate("ECU_10", USER, Some(USER)),
+        service.probe_write_gate("ECU_10", USER, common::approve_probe("ECU_10")),
         service.capture_configuration("ECU_10", &[0xF190], None, USER),
     ] {
         assert!(!result.success);
@@ -215,7 +216,7 @@ fn a_second_bus_beside_the_k_line_is_still_swept() {
         adapter,
         SessionStore::open_in_memory().unwrap(),
         Arc::new(DecoderSet::generic_obd().unwrap()),
-        SafetyGate::phase1(),
+        common::gate(),
         None,
     )
     .unwrap();
@@ -241,13 +242,13 @@ fn a_clear_for_one_module_is_not_silently_sent_to_all() {
     // Parked is key on, engine off, stopped: the state a clear needs.
     let _ = service.read_live_data("ECU_10", &["engine_rpm".into(), "vehicle_speed".into()], USER);
 
-    let one = service.clear_dtcs(Some("ECU_10"), USER, Some(USER));
+    let one = service.clear_dtcs(Some("ECU_10"), USER, common::approve_clear(Some("ECU_10")));
     assert!(!one.success);
     let error = one.error.unwrap();
     assert_eq!(error.code, ErrorCode::PreconditionFailed, "{}", error.message);
     assert_eq!(error.details.unwrap()["would_reach_every_module"], true);
 
-    let all = service.clear_dtcs(None, USER, Some(USER));
+    let all = service.clear_dtcs(None, USER, common::approve_clear(None));
     assert!(all.success, "{:?}", all.error);
     assert_eq!(all.data.unwrap()["cleared_by"], serde_json::json!(["10", "18"]));
 }

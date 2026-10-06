@@ -293,10 +293,7 @@ async fn a_model_and_the_screen_get_the_same_answer() {
 
     // As a model asks: a module, and nothing else.
     let by_tool = b
-        .post(
-            "/tools/find_calibration",
-            json!({ "arguments": { "module": "ECU_18DAF110" }, "initiator": "agent:test" }),
-        )
+        .post("/tools/find_calibration", json!({ "arguments": { "module": "ECU_18DAF110" } }))
         .await;
     assert_eq!(by_tool["success"], true, "{}", by_tool["error"]);
     assert_eq!(by_tool["tool"], "find_calibration");

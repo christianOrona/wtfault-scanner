@@ -7,11 +7,12 @@
 use aim_adapter::{DiagnosticAdapter, Elm327Adapter, Elm327Config};
 use aim_decoders::DecoderSet;
 use aim_diagnostics::DiagnosticService;
-use aim_safety::SafetyGate;
 use aim_session::SessionStore;
 use aim_simulator::{ScenarioId, SimulatedTransport};
 use aim_types::{ConnectionState, DtcStatus, ErrorCode, EventKind};
 use std::sync::Arc;
+
+mod common;
 
 const USER: &str = "user:test";
 
@@ -26,7 +27,7 @@ fn cold_start_on(db: &std::path::Path) -> DiagnosticService {
     let store = SessionStore::open(db).unwrap();
     let decoders = Arc::new(DecoderSet::generic_obd().unwrap());
     let mut service =
-        DiagnosticService::start(adapter, store, decoders, SafetyGate::phase1(), None).unwrap();
+        DiagnosticService::start(adapter, store, decoders, common::gate(), None).unwrap();
     assert!(service.connect(USER).success, "connect");
     service
 }
@@ -38,8 +39,7 @@ fn service(scenario: ScenarioId) -> (DiagnosticService, aim_simulator::SharedEmu
         Box::new(Elm327Adapter::new(Box::new(transport), Elm327Config::fast()));
     let store = SessionStore::open_in_memory().unwrap();
     let decoders = Arc::new(DecoderSet::generic_obd().unwrap());
-    let service =
-        DiagnosticService::start(adapter, store, decoders, SafetyGate::phase1(), None).unwrap();
+    let service = DiagnosticService::start(adapter, store, decoders, common::gate(), None).unwrap();
     (service, emulator)
 }
 
@@ -425,7 +425,7 @@ fn clearing_codes_needs_confirmation_and_a_stopped_engine() {
 
     // Confirmed, but the DPF scenario has the engine running, which is a
     // precondition failure rather than a permission one. Still nothing sent.
-    let result = service.clear_dtcs(Some("ECU_7E8"), USER, Some("the-owner"));
+    let result = service.clear_dtcs(Some("ECU_7E8"), USER, common::approve_clear(Some("ECU_7E8")));
     if !result.success {
         assert_eq!(result.error.unwrap().code, ErrorCode::PreconditionFailed);
     }
@@ -1016,7 +1016,7 @@ fn service_with_profile_and_emulator(
         adapter,
         SessionStore::open_in_memory().unwrap(),
         Arc::new(decoders),
-        SafetyGate::phase1(),
+        common::gate(),
         None,
     )
     .unwrap();
@@ -1142,7 +1142,7 @@ fn capturing_twice_around_a_change_identifies_the_bits_that_moved() {
         "test_body_setting",
         aim_diagnostics::DesiredValue::On,
         USER,
-        "the-owner",
+        common::approve_change("test_body_setting", aim_diagnostics::DesiredValue::On),
     );
     assert!(changed.success, "the change failed: {:?}", changed.error);
 
@@ -1213,7 +1213,7 @@ fn a_write_the_module_accepts_and_ignores_is_reported_as_unverified() {
         "test_body_setting",
         aim_diagnostics::DesiredValue::On,
         USER,
-        "the-owner",
+        common::approve_change("test_body_setting", aim_diagnostics::DesiredValue::On),
     );
 
     assert!(r.success, "the operation ran; what it reports is the point");
@@ -1237,7 +1237,7 @@ fn a_write_the_module_refuses_is_an_error_naming_the_refusal() {
         "test_body_setting",
         aim_diagnostics::DesiredValue::On,
         USER,
-        "the-owner",
+        common::approve_change("test_body_setting", aim_diagnostics::DesiredValue::On),
     );
     assert!(!r.success, "a refused write must not read as a success");
 
@@ -1258,7 +1258,7 @@ fn a_change_to_the_value_already_set_writes_nothing() {
         "test_body_setting",
         aim_diagnostics::DesiredValue::Off,
         USER,
-        "the-owner",
+        common::approve_change("test_body_setting", aim_diagnostics::DesiredValue::Off),
     );
     assert!(r.success);
     let data = r.data.as_ref().unwrap();
@@ -1607,7 +1607,7 @@ fn a_silent_bus_mentions_the_last_time_this_adapter_worked() {
         Box::new(Elm327Adapter::new(Box::new(transport), Elm327Config::fast()));
     let decoders = Arc::new(DecoderSet::generic_obd().unwrap());
     let mut service =
-        DiagnosticService::start(adapter, store, decoders, SafetyGate::phase1(), None).unwrap();
+        DiagnosticService::start(adapter, store, decoders, common::gate(), None).unwrap();
 
     let r = service.connect(USER);
     let codes: Vec<&str> = r.warnings.iter().map(|w| w.code.as_str()).collect();
@@ -1884,7 +1884,7 @@ fn service_on_disk(
         adapter,
         SessionStore::open(db).unwrap(),
         Arc::new(decoders),
-        SafetyGate::phase1(),
+        common::gate(),
         None,
     )
     .unwrap();
@@ -1924,7 +1924,12 @@ fn a_change_blocked_only_by_an_unasked_module_is_offered_and_asking_opens_it() {
         before.checks.iter().filter(|c| !c.passed).map(|c| c.id.as_str()).collect();
     assert_eq!(failed, vec!["mapping_known"]);
 
-    let probe = service.probe_write_gate_for_feature("test_body_setting", USER, Some("the-owner"));
+    let probe = service.probe_write_gate_for_feature(
+        "test_body_setting",
+        aim_diagnostics::DesiredValue::On,
+        USER,
+        common::approve_gate_for_change("test_body_setting", aim_diagnostics::DesiredValue::On),
+    );
     assert!(probe.success, "probe failed: {:?}", probe.error);
     assert_eq!(probe.data.as_ref().unwrap()["writes_open_without_security"], true);
 
@@ -1975,8 +1980,12 @@ fn a_write_gate_measured_before_a_restart_is_still_known_after_it() {
         assert!(first.identify_vehicle(USER).success);
         key_on_engine_off(&emulator);
         prepare_for_write(&mut first);
-        let probe =
-            first.probe_write_gate_for_feature("test_body_setting", USER, Some("the-owner"));
+        let probe = first.probe_write_gate_for_feature(
+            "test_body_setting",
+            aim_diagnostics::DesiredValue::On,
+            USER,
+            common::approve_gate_for_change("test_body_setting", aim_diagnostics::DesiredValue::On),
+        );
         assert!(probe.success, "probe failed: {:?}", probe.error);
     }
 
@@ -2137,7 +2146,7 @@ fn a_uds_only_module_is_cleared_in_its_own_language() {
         |r: &aim_types::ToolResult| r.data.as_ref().unwrap()["dtcs"].as_array().unwrap().len();
     assert_eq!(count(&before), 2);
 
-    let cleared = service.clear_dtcs(Some("ECU_768"), USER, Some("the-owner"));
+    let cleared = service.clear_dtcs(Some("ECU_768"), USER, common::approve_clear(Some("ECU_768")));
     assert!(cleared.success, "{:?}", cleared.error);
     assert_eq!(cleared.data.as_ref().unwrap()["service"], "uds_0x14");
     assert!(cleared.warnings.iter().any(|w| w.code == "cleared_over_uds"));

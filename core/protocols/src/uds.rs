@@ -84,8 +84,12 @@ impl UdsService {
         self.id().wrapping_add(0x40)
     }
 
-    /// Whether this service can change ECU state or configuration. Used by the
-    /// safety layer to refuse anything that is not plainly a read.
+    /// Whether this service can change ECU state or configuration.
+    ///
+    /// A description of the service, not the check that stops one being sent.
+    /// That is the allowlist the diagnostic core keeps in front of the
+    /// adapter, which is stricter: it also looks at the sub-function, so a
+    /// session request is only ever the default or the extended one.
     pub fn is_mutating(&self) -> bool {
         matches!(
             self,

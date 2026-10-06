@@ -20,13 +20,17 @@
 
 use crate::identity::VehicleIdentity;
 use crate::recorder::SessionRecorder;
+use crate::wire::Wire;
 use aim_adapter::{DiagnosticAdapter, EcuMessage, RequestTarget, VehicleBus};
 use aim_decoders::{Authority, DecoderSet, KnowledgeProvider};
 use aim_protocols::{
     decode_dtc_list, decode_monitor_response, decode_supported_pids, strip_dtc_count, ObdRequest,
     ObdResponse, Service,
 };
-use aim_safety::{OperationRequest, SafetyGate, VehicleConditions};
+use aim_safety::{
+    AuditRecord, Authorization, HumanApproval, InitiatorKind, OperationRequest, SafetyGate,
+    VehicleConditions,
+};
 use aim_session::{measurement_from, SessionStore};
 use aim_types::{
     now, AdapterCapabilities, AdapterHealth, AimError, AimResult, ConnectionId, ConnectionState,
@@ -382,6 +386,76 @@ const FREEZE_FRAME_PIDS: [u8; 14] =
 
 /// What one UDS exchange produced, kept as three distinct outcomes.
 ///
+/// How many times the record is read after a write before its state is
+/// called unknown.
+const READ_BACK_ATTEMPTS: usize = 3;
+
+/// How long a module is given between those reads, and before the first of
+/// them when it has not said the write was done.
+const READ_BACK_PAUSE: Duration = Duration::from_millis(250);
+
+/// What came back to a configuration write.
+///
+/// This is what the module *said*, which is one fact. What the record holds
+/// afterwards is another, and only the second decides what is reported.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WriteReply {
+    /// A positive response naming the identifier that was written.
+    Accepted,
+    /// A negative response that is the module's last word.
+    Refused(aim_protocols::NegativeResponseCode),
+    /// "Still working on it", and then nothing before the adapter stopped
+    /// listening.
+    Pending,
+    /// Nothing that can be read as an answer to the write.
+    NoAnswer,
+}
+
+impl WriteReply {
+    /// Read the replies to a write of `did`, from `from` when that is known.
+    fn of(replies: &[EcuMessage], did: u16, from: Option<&str>) -> WriteReply {
+        let accepted = aim_protocols::UdsService::WriteDataByIdentifier.response_id();
+        let mut pending = false;
+        let mut refused = None;
+        for m in replies {
+            if from.is_some_and(|a| !m.address.eq_ignore_ascii_case(a)) {
+                continue;
+            }
+            // 0x6E, then the identifier echoed. A positive response to some
+            // other identifier is not an answer to this write.
+            if m.payload.first() == Some(&accepted)
+                && m.payload.get(1..3) == Some(&did.to_be_bytes()[..])
+            {
+                return WriteReply::Accepted;
+            }
+            if let Ok(aim_protocols::UdsResponse::Negative { nrc, .. }) =
+                aim_protocols::UdsResponse::parse(&m.payload)
+            {
+                if nrc.is_response_pending() {
+                    pending = true;
+                } else {
+                    refused = Some(nrc);
+                }
+            }
+        }
+        match (refused, pending) {
+            (Some(nrc), _) => WriteReply::Refused(nrc),
+            (None, true) => WriteReply::Pending,
+            (None, false) => WriteReply::NoAnswer,
+        }
+    }
+
+    /// Stable name for results and the flight recorder.
+    fn code(&self) -> &'static str {
+        match self {
+            WriteReply::Accepted => "accepted",
+            WriteReply::Refused(_) => "refused",
+            WriteReply::Pending => "pending",
+            WriteReply::NoAnswer => "no_answer",
+        }
+    }
+}
+
 /// "Refused" and "no answer" are different facts and must not collapse into
 /// each other: a refusal means the module is there and said no, and carries a
 /// reason worth showing.
@@ -566,7 +640,8 @@ pub struct DtcReport {
 
 /// The service.
 pub struct DiagnosticService {
-    adapter: Box<dyn DiagnosticAdapter>,
+    /// The adapter, behind the one type that decides what may be sent to it.
+    adapter: Wire,
     store: SessionStore,
     decoders: Arc<DecoderSet>,
     gate: SafetyGate,
@@ -632,7 +707,7 @@ impl DiagnosticService {
         adapter.set_observer(recorder.clone());
 
         Ok(DiagnosticService {
-            adapter,
+            adapter: Wire::new(adapter),
             store,
             decoders,
             gate,
@@ -748,7 +823,32 @@ impl DiagnosticService {
     /// Needs a settled VIN: knowledge is keyed on the vehicle it is about, and
     /// a finding filed against an unidentified truck would be a finding nobody
     /// could ever attribute or trust.
+    ///
+    /// `authority` says whose word this is, and it cannot be one of the
+    /// authorities this application gives its own measurements. Those are
+    /// written only by code that took the measurement. A finding that arrived
+    /// from outside under one of them would be a sentence somebody typed,
+    /// filed as something read off the vehicle, and at least one safety check
+    /// reads those.
     pub fn record_finding(
+        &mut self,
+        subject: &str,
+        outcome: aim_session::FindingOutcome,
+        claim: &str,
+        evidence: &str,
+        authority: &str,
+    ) -> AimResult<()> {
+        if crate::knowledge::is_measurement_authority(authority) {
+            return Err(AimError::bad_request(format!(
+                "{authority:?} is how this application marks what it measured itself, and \
+                 cannot be claimed for a finding recorded from outside. Record it as {:?}.",
+                crate::knowledge::USER_STATEMENT
+            )));
+        }
+        self.record_finding_as(subject, outcome, claim, evidence, authority)
+    }
+
+    fn record_finding_as(
         &mut self,
         subject: &str,
         outcome: aim_session::FindingOutcome,
@@ -794,9 +894,13 @@ impl DiagnosticService {
         evidence: impl Into<String>,
     ) {
         let claim = claim.into();
-        if let Err(e) =
-            self.record_finding(subject, outcome, &claim, &evidence.into(), "measured_this_session")
-        {
+        if let Err(e) = self.record_finding_as(
+            subject,
+            outcome,
+            &claim,
+            &evidence.into(),
+            crate::knowledge::MEASURED_THIS_SESSION,
+        ) {
             tracing::debug!(error = %e, subject, "nothing recorded about this vehicle");
         }
     }
@@ -852,7 +956,10 @@ impl DiagnosticService {
     /// one shape a log must never have.
     ///
     /// Written as an invocation followed by a rejected decision, so it reads
-    /// identically to a gate refusal to anything consuming the log.
+    /// identically to a gate refusal to anything consuming the log. The record
+    /// is the gate's own, so its level is the capability's: this used to write
+    /// `L2` whatever was refused, and a refused `clear_dtcs`, which is L1, went
+    /// into the trail as something it was not.
     pub fn record_refusal(
         &self,
         tool: &str,
@@ -862,46 +969,60 @@ impl DiagnosticService {
         arguments: serde_json::Value,
     ) {
         self.record_invocation(tool, initiator, arguments);
+        self.record_decision(&self.gate.refusal(capability, initiator, reason));
+    }
+
+    /// Write one safety decision to the flight recorder. The only place that
+    /// does, so every decision in the trail has the same source.
+    fn record_decision(&self, audit: &AuditRecord) {
         let _ = self.store.append_event(
             &self.session.id,
             EventKind::SafetyDecision {
-                operation: capability.to_string(),
-                level: aim_types::PermissionLevel::L2,
-                allowed: false,
-                initiator: initiator.to_string(),
-                confirmed: false,
-                reason: Some(reason.to_string()),
+                operation: audit.operation.clone(),
+                level: audit.level,
+                allowed: audit.allowed,
+                initiator: audit.initiator.clone(),
+                confirmed: audit.confirmed,
+                approval: audit.approval.clone(),
+                reason: audit.reason.clone(),
             },
         );
     }
 
-    /// Ask the gate. The decision is recorded whichever way it goes, because
-    /// handoff §10 requires an audit trail for refusals as much as approvals.
-    fn authorize(
+    /// Ask the gate about something that only reads.
+    fn authorize(&mut self, capability: &str, initiator: &str) -> AimResult<Authorization> {
+        self.decide(OperationRequest::new(capability, initiator))
+    }
+
+    /// Ask the gate about something that changes the vehicle.
+    ///
+    /// `subject` is what this call would actually act on, built from its own
+    /// arguments, and the gate holds the approval to it: an approval for one
+    /// setting is not one for another.
+    fn authorize_change(
         &mut self,
         capability: &str,
         initiator: &str,
-        confirmation: Option<&str>,
-    ) -> AimResult<()> {
-        let mut request = OperationRequest::new(capability, initiator);
-        if let Some(user) = confirmation {
-            request = request.confirmed_by(user);
+        subject: &str,
+        approval: Option<HumanApproval>,
+    ) -> AimResult<Authorization> {
+        let mut request = OperationRequest::new(capability, initiator).about(subject);
+        if let Some(approval) = approval {
+            request = request.approved(approval);
         }
+        self.decide(request)
+    }
+
+    /// Ask the gate. The decision is recorded whichever way it goes, because
+    /// handoff §10 requires an audit trail for refusals as much as approvals.
+    ///
+    /// What comes back on a yes is the gate's [`Authorization`], and it is what
+    /// the adapter asks to see before a request that changes anything is sent.
+    fn decide(&mut self, request: OperationRequest) -> AimResult<Authorization> {
         let caps = self.adapter.capabilities();
         let decision = self.gate.authorize(&request, Some(&caps), &self.conditions);
-
-        let _ = self.store.append_event(
-            &self.session.id,
-            EventKind::SafetyDecision {
-                operation: decision.audit.operation.clone(),
-                level: decision.audit.level.unwrap_or(aim_types::PermissionLevel::L0),
-                allowed: decision.audit.allowed,
-                initiator: decision.audit.initiator.clone(),
-                confirmed: decision.audit.confirmed,
-                reason: decision.audit.reason.clone(),
-            },
-        );
-        decision.into_result().map(|_| ())
+        self.record_decision(&decision.audit);
+        decision.into_result()
     }
 
     /// Wrap a completed operation in the §7 envelope and record its completion.
@@ -1332,9 +1453,8 @@ impl DiagnosticService {
     pub fn connect(&mut self, initiator: &str) -> ToolResult {
         let t0 = Instant::now();
         self.record_invocation("connect", initiator, serde_json::json!({}));
-        let outcome = self
-            .authorize(capabilities::CONNECT, initiator, None)
-            .and_then(|_| self.connect_inner());
+        let outcome =
+            self.authorize(capabilities::CONNECT, initiator).and_then(|_| self.connect_inner());
         self.finish("connect", capabilities::CONNECT, t0, outcome)
     }
 
@@ -1430,7 +1550,7 @@ impl DiagnosticService {
     pub fn disconnect(&mut self, initiator: &str) -> ToolResult {
         let t0 = Instant::now();
         self.record_invocation("disconnect", initiator, serde_json::json!({}));
-        let outcome = self.authorize(capabilities::DISCONNECT, initiator, None).and_then(|_| {
+        let outcome = self.authorize(capabilities::DISCONNECT, initiator).and_then(|_| {
             self.adapter.disconnect()?;
             if let Some(id) = &self.connection_id {
                 self.store.close_connection(id)?;
@@ -1457,7 +1577,7 @@ impl DiagnosticService {
         // see what the agent had done — and the recorder is meant to be the
         // complete account of a session, not most of one.
         self.record_invocation("adapter_health", initiator, serde_json::json!({}));
-        let outcome = self.authorize(capabilities::HEALTH, initiator, None).map(|_| {
+        let outcome = self.authorize(capabilities::HEALTH, initiator).map(|_| {
             let health = self.adapter.health();
             let caps = self.adapter.capabilities();
             Payload::with_data(serde_json::json!({
@@ -1481,7 +1601,7 @@ impl DiagnosticService {
         let t0 = Instant::now();
         self.record_invocation("identify_vehicle", initiator, serde_json::json!({}));
         let outcome = self
-            .authorize(capabilities::IDENTIFY_VEHICLE, initiator, None)
+            .authorize(capabilities::IDENTIFY_VEHICLE, initiator)
             .and_then(|_| self.identify_vehicle_inner());
         self.finish("identify_vehicle", capabilities::IDENTIFY_VEHICLE, t0, outcome)
     }
@@ -1658,7 +1778,7 @@ impl DiagnosticService {
         let t0 = Instant::now();
         self.record_invocation("scan_modules", initiator, serde_json::json!({}));
         let outcome = self
-            .authorize(capabilities::SCAN_MODULES, initiator, None)
+            .authorize(capabilities::SCAN_MODULES, initiator)
             .and_then(|_| self.scan_modules_inner());
         self.finish("scan_modules", capabilities::SCAN_MODULES, t0, outcome)
     }
@@ -2077,7 +2197,7 @@ impl DiagnosticService {
             serde_json::json!({ "module": module_key }),
         );
         let outcome = self
-            .authorize(capabilities::MODULE_IDENTITY, initiator, None)
+            .authorize(capabilities::MODULE_IDENTITY, initiator)
             .and_then(|_| self.software_identity(module_key))
             .map(|(identity, warnings)| Payload {
                 data: Some(serde_json::json!({
@@ -2111,7 +2231,7 @@ impl DiagnosticService {
             serde_json::json!({ "module": module_key }),
         );
         let outcome = self
-            .authorize(capabilities::MODULE_IDENTITY, initiator, None)
+            .authorize(capabilities::MODULE_IDENTITY, initiator)
             .and_then(|_| match self.calibration_library.clone() {
                 Some(library) => Ok(library),
                 None => Err(AimError::bad_request(
@@ -2451,7 +2571,7 @@ impl DiagnosticService {
             serde_json::json!({ "module": module_key }),
         );
         let outcome = self
-            .authorize(capabilities::MODULE_IDENTITY, initiator, None)
+            .authorize(capabilities::MODULE_IDENTITY, initiator)
             .and_then(|_| self.module_identity_inner(module_key));
         self.finish("get_module_identity", capabilities::MODULE_IDENTITY, t0, outcome)
     }
@@ -2534,7 +2654,7 @@ impl DiagnosticService {
             serde_json::json!({ "module": module_key }),
         );
         let outcome = self
-            .authorize(capabilities::READ_SUPPORTED_PIDS, initiator, None)
+            .authorize(capabilities::READ_SUPPORTED_PIDS, initiator)
             .and_then(|_| self.supported_pids_inner(module_key));
         self.finish("read_supported_pids", capabilities::READ_SUPPORTED_PIDS, t0, outcome)
     }
@@ -2617,7 +2737,7 @@ impl DiagnosticService {
             serde_json::json!({ "module": module_key }),
         );
         let outcome = self
-            .authorize(capabilities::READ_MONITOR_TESTS, initiator, None)
+            .authorize(capabilities::READ_MONITOR_TESTS, initiator)
             .and_then(|_| self.monitor_tests_inner(module_key));
         self.finish("read_monitor_tests", capabilities::READ_MONITOR_TESTS, t0, outcome)
     }
@@ -2844,9 +2964,8 @@ impl DiagnosticService {
     pub fn list_features(&mut self, initiator: &str) -> ToolResult {
         let t0 = Instant::now();
         self.record_invocation("list_features", initiator, serde_json::json!({}));
-        let outcome = self
-            .authorize(capabilities::LIST_FEATURES, initiator, None)
-            .map(|_| self.features_inner());
+        let outcome =
+            self.authorize(capabilities::LIST_FEATURES, initiator).map(|_| self.features_inner());
         self.finish("list_features", capabilities::LIST_FEATURES, t0, outcome)
     }
 
@@ -2958,7 +3077,7 @@ impl DiagnosticService {
             serde_json::json!({ "procedure": procedure_id }),
         );
         let outcome = self
-            .authorize(capabilities::READ_LIVE_DATA, initiator, None)
+            .authorize(capabilities::READ_LIVE_DATA, initiator)
             .and_then(|_| self.check_procedure_inner(procedure_id));
         self.finish("check_procedure", capabilities::READ_LIVE_DATA, t0, outcome)
     }
@@ -3076,7 +3195,7 @@ impl DiagnosticService {
             serde_json::json!({ "procedure": procedure_id }),
         );
         let outcome = self
-            .authorize(capabilities::READ_LIVE_DATA, initiator, None)
+            .authorize(capabilities::READ_LIVE_DATA, initiator)
             .and_then(|_| self.run_procedure_inner(procedure_id));
         self.finish("run_procedure", capabilities::READ_LIVE_DATA, t0, outcome)
     }
@@ -3434,7 +3553,7 @@ impl DiagnosticService {
         let t0 = Instant::now();
         self.record_invocation("as_built_status", initiator, serde_json::json!({}));
         let outcome = self
-            .authorize(capabilities::IMPORT_AS_BUILT, initiator, None)
+            .authorize(capabilities::IMPORT_AS_BUILT, initiator)
             .map(|_| self.as_built_status_inner());
         self.finish("as_built_status", capabilities::IMPORT_AS_BUILT, t0, outcome)
     }
@@ -3543,7 +3662,7 @@ impl DiagnosticService {
             serde_json::json!({ "bytes": text.len(), "source": source }),
         );
         let outcome = self
-            .authorize(capabilities::IMPORT_AS_BUILT, initiator, None)
+            .authorize(capabilities::IMPORT_AS_BUILT, initiator)
             .and_then(|_| self.import_as_built_inner(text, source));
         self.finish("import_as_built", capabilities::IMPORT_AS_BUILT, t0, outcome)
     }
@@ -3648,21 +3767,20 @@ impl DiagnosticService {
     pub fn forget_as_built(&mut self, initiator: &str) -> ToolResult {
         let t0 = Instant::now();
         self.record_invocation("forget_as_built", initiator, serde_json::json!({}));
-        let outcome =
-            self.authorize(capabilities::IMPORT_AS_BUILT, initiator, None).and_then(|_| {
-                let identity = self.identity();
-                let Some(vin) = identity.settled("vin") else {
-                    return Err(AimError::new(
-                        ErrorCode::PreconditionFailed,
-                        "no VIN has been established, so there is nothing to forget.",
-                    ));
-                };
-                let removed = self.store.forget_as_built(vin)?;
-                Ok(Payload {
-                    data: Some(serde_json::json!({ "removed": removed, "vin": vin })),
-                    ..Default::default()
-                })
-            });
+        let outcome = self.authorize(capabilities::IMPORT_AS_BUILT, initiator).and_then(|_| {
+            let identity = self.identity();
+            let Some(vin) = identity.settled("vin") else {
+                return Err(AimError::new(
+                    ErrorCode::PreconditionFailed,
+                    "no VIN has been established, so there is nothing to forget.",
+                ));
+            };
+            let removed = self.store.forget_as_built(vin)?;
+            Ok(Payload {
+                data: Some(serde_json::json!({ "removed": removed, "vin": vin })),
+                ..Default::default()
+            })
+        });
         self.finish("forget_as_built", capabilities::IMPORT_AS_BUILT, t0, outcome)
     }
 
@@ -3685,7 +3803,7 @@ impl DiagnosticService {
             serde_json::json!({ "feature_id": feature_id, "desired": desired }),
         );
         let outcome = self
-            .authorize(capabilities::PREVIEW_CHANGE, initiator, None)
+            .authorize(capabilities::PREVIEW_CHANGE, initiator)
             .and_then(|_| self.preview_inner(feature_id, desired));
         self.finish("preview_configuration_change", capabilities::PREVIEW_CHANGE, t0, outcome)
     }
@@ -3811,7 +3929,7 @@ impl DiagnosticService {
             serde_json::json!({ "feature_id": feature_id }),
         );
         let outcome = self
-            .authorize(capabilities::READ_FEATURE, initiator, None)
+            .authorize(capabilities::READ_FEATURE, initiator)
             .and_then(|_| self.read_feature_inner(feature_id));
         self.finish("read_feature", capabilities::READ_FEATURE, t0, outcome)
     }
@@ -3841,7 +3959,7 @@ impl DiagnosticService {
         let t0 = Instant::now();
         self.record_invocation("compare_to_factory", initiator, serde_json::json!({}));
         let outcome = self
-            .authorize(capabilities::READ_FEATURE, initiator, None)
+            .authorize(capabilities::READ_FEATURE, initiator)
             .and_then(|_| self.compare_to_factory_inner());
         self.finish("compare_to_factory", capabilities::READ_FEATURE, t0, outcome)
     }
@@ -4151,7 +4269,7 @@ impl DiagnosticService {
         // and a person told "AutoLock is off" when the app never spoke to the
         // door module has been told something it does not know.
         let (record, from_the_file) =
-            match self.read_did(&request, &addr, Duration::from_millis(2000), target.did) {
+            match self.read_did(&request, &addr, Duration::from_millis(2000), target.did, None) {
                 Ok(record) => (record, false),
                 Err(live_error) => {
                     let fallback = self.as_built().and_then(|file| {
@@ -4311,7 +4429,7 @@ impl DiagnosticService {
             serde_json::json!({ "module": module, "identifiers": dids.len() }),
         );
         let outcome = self
-            .authorize(capabilities::READ_FEATURE, initiator, None)
+            .authorize(capabilities::READ_FEATURE, initiator)
             .and_then(|_| self.capture_inner(module, dids, label));
         self.finish("capture_configuration", capabilities::READ_FEATURE, t0, outcome)
     }
@@ -4355,7 +4473,7 @@ impl DiagnosticService {
 
         for &did in dids {
             let request = aim_protocols::UdsRequest::read_data_by_identifier(did).to_bytes();
-            match self.read_did(&request, &addr, request_budget, did) {
+            match self.read_did(&request, &addr, request_budget, did, None) {
                 Ok(record) => {
                     records.insert(did, record);
                 }
@@ -4477,7 +4595,7 @@ impl DiagnosticService {
         let t0 = Instant::now();
         self.record_invocation("list_captures", initiator, serde_json::json!({}));
         let outcome = self
-            .authorize(capabilities::READ_FEATURE, initiator, None)
+            .authorize(capabilities::READ_FEATURE, initiator)
             .and_then(|_| self.list_captures_inner());
         self.finish("list_captures", capabilities::READ_FEATURE, t0, outcome)
     }
@@ -4522,16 +4640,20 @@ impl DiagnosticService {
     ///   pass. A preview that passed ten minutes ago is not authority to write
     ///   now, because the engine may have been started since.
     /// * The record is **read, modified and written whole**, then **read back
-    ///   and verified**. A write this app reports as successful is one it has
-    ///   seen take effect, not one that merely returned a positive response.
-    /// * `confirmation` is mandatory and must name a human. The agent is
-    ///   registered with read-only tools and cannot reach this function at all.
+    ///   and verified**. A write this app reports as verified is one it has
+    ///   seen take effect, not one that merely returned a positive response,
+    ///   and one it could not check is reported as unknown rather than as
+    ///   either.
+    /// * `approval` is a person's, for this feature and this value. It is not
+    ///   a string and cannot be made from one: see [`aim_safety::approval`].
+    ///   The agent is registered with read-only tools and cannot reach this
+    ///   function at all.
     pub fn apply_configuration_change(
         &mut self,
         feature_id: &str,
         desired: crate::config::DesiredValue,
         initiator: &str,
-        confirmation: &str,
+        approval: Option<HumanApproval>,
     ) -> ToolResult {
         let t0 = Instant::now();
         self.record_invocation(
@@ -4558,9 +4680,10 @@ impl DiagnosticService {
         // not read the speed" must still block a write; it is not a reason to
         // assume the truck is parked.
         let note = self.establish_write_conditions();
+        let subject = crate::approvals::change(feature_id, desired);
         let outcome = self
-            .authorize(capabilities::WRITE_FEATURE, initiator, Some(confirmation))
-            .and_then(|_| self.apply_change_inner(feature_id, desired))
+            .authorize_change(capabilities::WRITE_FEATURE, initiator, &subject, approval)
+            .and_then(|permit| self.apply_change_inner(&permit, feature_id, desired))
             .map(|mut p| {
                 if let Some(n) = note {
                     p.warnings.push(Warning::info("write_conditions_measured", n));
@@ -4589,8 +4712,15 @@ impl DiagnosticService {
 
         let home = self.reach_module(&target.module);
         let addr = RequestTarget::Physical(target.module.clone());
+        let responder = self.response_address_for(&target.module);
         let read = aim_protocols::UdsRequest::read_data_by_identifier(target.did).to_bytes();
-        let before = self.read_did(&read, &addr, Duration::from_millis(2000), target.did);
+        let before = self.read_did(
+            &read,
+            &addr,
+            Duration::from_millis(2000),
+            target.did,
+            responder.as_deref(),
+        );
         self.restore_bus(home);
 
         let before = before.ok()?;
@@ -4673,6 +4803,7 @@ impl DiagnosticService {
     /// them would break every unrelated request afterwards.
     fn apply_change_inner(
         &mut self,
+        permit: &Authorization,
         feature_id: &str,
         desired: crate::config::DesiredValue,
     ) -> AimResult<Payload> {
@@ -4687,7 +4818,7 @@ impl DiagnosticService {
             Some(address) => self.reach_module(address),
             None => None,
         };
-        let outcome = self.apply_change_on_its_bus(feature_id, desired);
+        let outcome = self.apply_change_on_its_bus(permit, feature_id, desired);
         self.restore_bus(home);
 
         // Recorded as what it is: bytes written and read back.
@@ -4699,10 +4830,14 @@ impl DiagnosticService {
         // through an ignition cycle, and the mirrors did not move. Only a
         // person looking at the vehicle can close that gap, and recording this
         // as established would have written down the opposite of what happened.
+        //
+        // Only for a write that read back as asked. A record that moved to
+        // something else has changed too, and "written and read back as asked"
+        // is not what happened to it.
         if let Ok(payload) = &outcome {
-            let changed =
-                payload.data.as_ref().and_then(|d| d["changed"].as_bool()).unwrap_or(false);
-            if changed {
+            let verified =
+                payload.data.as_ref().and_then(|d| d["verified"].as_bool()).unwrap_or(false);
+            if verified {
                 let before = payload.data.as_ref().and_then(|d| d["before"].as_str()).unwrap_or("");
                 let after = payload.data.as_ref().and_then(|d| d["after"].as_str()).unwrap_or("");
                 let module = module.clone().unwrap_or_default();
@@ -4724,6 +4859,7 @@ impl DiagnosticService {
 
     fn apply_change_on_its_bus(
         &mut self,
+        permit: &Authorization,
         feature_id: &str,
         desired: crate::config::DesiredValue,
     ) -> AimResult<Payload> {
@@ -4746,7 +4882,13 @@ impl DiagnosticService {
             .with_details(serde_json::to_value(&plan).unwrap_or(serde_json::Value::Null)));
         }
 
-        // 2. The mapping, which must be executable and verified.
+        // 2. The mapping, which must be executable.
+        //
+        // Whether it has been verified was settled by the plan: a mapping
+        // nobody has verified gets this far only as the experiment the plan
+        // describes, on a cosmetic or convenience setting whose module was
+        // measured accepting writes.
+        //
         // Copied out rather than borrowed: everything below needs `self`
         // mutably to talk to the adapter, and the catalogue entry is only
         // needed for these two facts.
@@ -4768,6 +4910,9 @@ impl DiagnosticService {
         let want_on = matches!(desired, crate::config::DesiredValue::On);
         let addr = RequestTarget::Physical(target.module.clone());
         let budget = Duration::from_millis(2000);
+        // Where this module answers from, when a scan has established it. A
+        // record that comes back from anywhere else is not this module's.
+        let responder = self.response_address_for(&target.module);
 
         // 3. An extended session. Most modules refuse writes in the default
         //    session, and a refusal here costs nothing.
@@ -4776,7 +4921,7 @@ impl DiagnosticService {
 
         // 4. Read the record as it stands.
         let read = aim_protocols::UdsRequest::read_data_by_identifier(target.did).to_bytes();
-        let before = self.read_did(&read, &addr, budget, target.did)?;
+        let before = self.read_did(&read, &addr, budget, target.did, responder.as_deref())?;
         let before_state = target.current(&before);
 
         let after_bytes = target
@@ -4802,72 +4947,178 @@ impl DiagnosticService {
             });
         }
 
-        // 5. Write the whole record back.
+        // 5. Write the whole record back. This is the one request in the
+        //    function that changes anything, and the only one the adapter asks
+        //    to see the authorization for.
         let write = aim_protocols::UdsRequest::write_data_by_identifier(target.did, &after_bytes)
             .to_bytes();
-        let write_reply = self.adapter.request_pdu(&write, &addr, budget)?;
-        let wrote_ok = write_reply.iter().any(|m| {
-            m.payload.first()
-                == Some(&aim_protocols::UdsService::WriteDataByIdentifier.response_id())
-        });
-        if !wrote_ok {
+        let reply = match self.adapter.send_changing(permit, &write, &addr, budget) {
+            Ok(replies) => WriteReply::of(&replies, target.did, responder.as_deref()),
+            // Refused before it left: not authorised for this, an adapter that
+            // cannot send a record this long, a link that is not up. Nothing
+            // reached the vehicle, and that is a definite answer.
+            Err(e)
+                if matches!(
+                    e.code,
+                    ErrorCode::OperationNotAllowed
+                        | ErrorCode::AdapterRejectedCommand
+                        | ErrorCode::NoActiveSession
+                ) =>
+            {
+                return Err(e)
+            }
+            // It may have left. Whether it arrived is not something an error
+            // from the link can say.
+            Err(_) => WriteReply::NoAnswer,
+        };
+        let details = |outcome: &str, read_back: Option<&[u8]>| {
+            serde_json::json!({
+                "module": target.module,
+                "did": format!("{:04X}", target.did),
+                "outcome": outcome,
+                "write_reply": reply.code(),
+                "before": aim_types::hex(&before),
+                "bytes_offered": aim_types::hex(&after_bytes),
+                "read_back": read_back.map(aim_types::hex),
+            })
+        };
+
+        if let WriteReply::Refused(nrc) = &reply {
+            self.record_write(feature_id, &target, &before, &after_bytes, &reply, None, "refused");
             // Why it refused is the whole point. A module that says
             // `securityAccessDenied` has told us something completely
             // different from one that says `requestOutOfRange`, and reporting
             // both as "did not accept the write" throws away the only useful
             // part of the answer - which is what this project built
             // `RefusalKind` to stop happening.
-            let refusal =
-                write_reply.iter().find_map(|m| {
-                    match aim_protocols::UdsResponse::parse(&m.payload) {
-                        Ok(aim_protocols::UdsResponse::Negative { nrc, .. }) => {
-                            Some((nrc.description(), nrc.refusal(), nrc.what_to_change()))
-                        }
-                        _ => None,
-                    }
-                });
-            let detail = match refusal {
-                // A refused write is exactly where the specific condition
-                // matters most: "put the gearbox in park" is a thing somebody
-                // can do, and "conditions not correct" is not.
-                Some((name, kind, Some(fix))) => {
-                    format!(" It refused with {name}: {} {fix}", kind.explain())
-                }
-                Some((name, kind, None)) => format!(" It refused with {name}: {}", kind.explain()),
-                None => String::from(
-                    " It did not answer the write at all, which is different from refusing it.",
-                ),
+            let kind = nrc.refusal();
+            // A refused write is exactly where the specific condition matters
+            // most: "put the gearbox in park" is a thing somebody can do, and
+            // "conditions not correct" is not.
+            let fix = nrc.what_to_change();
+            let detail = match fix {
+                Some(fix) => format!("{}: {} {fix}", nrc.description(), kind.explain()),
+                None => format!("{}: {}", nrc.description(), kind.explain()),
             };
+            let mut extra = details("refused", None);
+            extra["refused_because"] = serde_json::json!(kind.code());
+            // The instruction, separate from the classification, so an
+            // interface can put it where somebody will act on it.
+            extra["what_to_change"] = serde_json::json!(fix);
             return Err(AimError::new(
                 ErrorCode::VehicleNotResponding,
                 format!(
-                    "the module did not accept the write.{detail} Nothing about the earlier \
-                     read suggests the setting changed, but verify it before assuming so."
+                    "the module did not accept the write. It refused with {detail} Nothing about \
+                     the earlier read suggests the setting changed, but verify it before assuming \
+                     so."
                 ),
             )
-            .with_details(serde_json::json!({
-                "module": target.module,
-                "did": format!("{:04X}", target.did),
-                "refused_because": refusal.map(|(_, k, _)| k.code()),
-                // The instruction, separate from the classification, so an
-                // interface can put it where somebody will act on it.
-                "what_to_change": refusal.and_then(|(_, _, fix)| fix),
-                "bytes_offered": aim_types::hex(&after_bytes),
-            })));
+            .with_details(extra));
         }
 
-        // 6. Read it back. A write is not believed until it is seen.
-        let verify = self.read_did(&read, &addr, budget, target.did)?;
+        // 6. Read it back. A write is not believed until it is seen, and a
+        //    write whose answer never arrived is not disbelieved until it is
+        //    seen either.
+        //
+        //    A module that said "working on it" and one whose answer was lost
+        //    have both been reported here as not accepting the write, on a
+        //    record that had in fact changed. The answer to the write says
+        //    what the module said. Only the record says what happened.
+        let heard = matches!(reply, WriteReply::Accepted);
+        let mut verify: Option<Vec<u8>> = None;
+        for attempt in 0..READ_BACK_ATTEMPTS {
+            if attempt > 0 || !heard {
+                std::thread::sleep(READ_BACK_PAUSE);
+            }
+            let Ok(record) = self.read_did(&read, &addr, budget, target.did, responder.as_deref())
+            else {
+                continue;
+            };
+            let settled = record == after_bytes || heard;
+            verify = Some(record);
+            if settled {
+                break;
+            }
+        }
+
+        let outcome = match &verify {
+            Some(record) if *record == after_bytes => "verified",
+            Some(record) if *record == before => "not_applied",
+            Some(_) => "changed_unexpectedly",
+            None => "unknown",
+        };
+        self.record_write(
+            feature_id,
+            &target,
+            &before,
+            &after_bytes,
+            &reply,
+            verify.as_deref(),
+            outcome,
+        );
+
+        let Some(verify) = verify else {
+            // Nothing can be said about the setting, so nothing is. Not that
+            // it changed, and not that it did not.
+            let said = match reply {
+                WriteReply::Accepted => "The module accepted the write",
+                WriteReply::Pending => {
+                    "The module said it was still working on the write when the adapter stopped \
+                     listening"
+                }
+                _ => "The write was sent and no answer to it arrived",
+            };
+            return Err(AimError::new(
+                ErrorCode::NoData,
+                format!(
+                    "{said}, and the setting could not be read afterwards. Whether it changed is \
+                     not known. Read the setting again before doing anything else, and do not \
+                     assume either way."
+                ),
+            )
+            .with_details(details("unknown", None)));
+        };
+        if outcome == "not_applied" && !heard {
+            return Err(AimError::new(
+                ErrorCode::VehicleNotResponding,
+                format!(
+                    "the module did not accept the write. {} The setting was read afterwards and \
+                     is exactly as it was, so nothing was written.",
+                    match reply {
+                        WriteReply::Pending =>
+                            "It said it was still working on it and never said it had finished.",
+                        _ =>
+                            "It did not answer the write at all, which is different from \
+                              refusing it.",
+                    }
+                ),
+            )
+            .with_details(details("not_applied", Some(&verify))));
+        }
+
         let now_state = target.current(&verify);
-        let verified = verify == after_bytes;
+        let verified = outcome == "verified";
 
         let mut warnings = Vec::new();
-        if !verified {
-            warnings.push(Warning::caution(
+        match outcome {
+            "not_applied" => warnings.push(Warning::caution(
                 "write_not_verified",
-                "The module accepted the write but reading the setting back did not return \
-                 what was written. Treat this change as not having happened, and check the \
-                 vehicle before trying again.",
+                "The module accepted the write and the setting reads back exactly as it was \
+                 before. Nothing changed.",
+            )),
+            "changed_unexpectedly" => warnings.push(Warning::caution(
+                "write_not_verified",
+                "The record now holds something that is neither what was there before nor what \
+                 was written. The setting is not known to be either on or off: check the vehicle, \
+                 and read the setting again, before trying anything else.",
+            )),
+            _ => {}
+        }
+        if verified && !heard {
+            warnings.push(Warning::info(
+                "write_reply_not_heard",
+                "The module's own answer to the write did not arrive. The setting was read \
+                 afterwards and holds what was written, so the write took effect.",
             ));
         }
         if verification != aim_types::VerificationStatus::Verified {
@@ -4902,8 +5153,12 @@ impl DiagnosticService {
         Ok(Payload {
             data: Some(serde_json::json!({
                 "feature_id": feature_id,
-                "changed": verified,
+                // Whether the record is different now, which is not the same
+                // question as whether it is what was asked for.
+                "changed": verify != before,
                 "verified": verified,
+                "outcome": outcome,
+                "write_reply": reply.code(),
                 "module": target.module,
                 "did": format!("{:04X}", target.did),
                 "before": aim_types::hex(&before),
@@ -4919,17 +5174,75 @@ impl DiagnosticService {
         })
     }
 
+    /// Put what became of one write in the flight recorder, as one event.
+    #[allow(clippy::too_many_arguments)]
+    fn record_write(
+        &self,
+        feature_id: &str,
+        target: &aim_decoders::features::DataIdentifierTarget,
+        before: &[u8],
+        intended: &[u8],
+        reply: &WriteReply,
+        read_back: Option<&[u8]>,
+        outcome: &str,
+    ) {
+        let _ = self.store.append_event(
+            &self.session.id,
+            EventKind::ConfigWrite {
+                feature_id: feature_id.to_string(),
+                module: target.module.clone(),
+                did: format!("{:04X}", target.did),
+                before: aim_types::hex(before),
+                intended: aim_types::hex(intended),
+                reply: reply.code().to_string(),
+                read_back: read_back.map(aim_types::hex),
+                outcome: outcome.to_string(),
+            },
+        );
+    }
+
+    /// The address a module answers from, when a scan in this session has
+    /// established one for the address it is asked at. The primary bus is
+    /// preferred when a gateway exposes the module on both, as it is by
+    /// [`Self::module_key_for_feature`].
+    fn response_address_for(&self, request_address: &str) -> Option<String> {
+        let mut candidates: Vec<Module> = self
+            .store
+            .modules(&self.session.id)
+            .ok()?
+            .into_iter()
+            .filter(|m| {
+                m.request_address
+                    .as_deref()
+                    .is_some_and(|a| a.eq_ignore_ascii_case(request_address))
+            })
+            .collect();
+        candidates.sort_by_key(|m| match VehicleBus::of_module_key(&m.module_key) {
+            VehicleBus::Primary => 0,
+            VehicleBus::Secondary => 1,
+        });
+        candidates.into_iter().next().map(|m| m.address)
+    }
+
     /// Send a ReadDataByIdentifier and return the record without its header.
+    ///
+    /// `from` is where the answer has to come from, when that is known. A
+    /// record with the right identifier from a different module is a different
+    /// module's record.
     fn read_did(
         &mut self,
         request: &[u8],
         addr: &RequestTarget,
         budget: Duration,
         did: u16,
+        from: Option<&str>,
     ) -> AimResult<Vec<u8>> {
         let replies = self.adapter.request_pdu(request, addr, budget)?;
         let expected = aim_protocols::UdsService::ReadDataByIdentifier.response_id();
         for m in replies {
+            if from.is_some_and(|a| !m.address.eq_ignore_ascii_case(a)) {
+                continue;
+            }
             // Positive response: 0x62, then the echoed DID, then the record.
             if m.payload.first() == Some(&expected) && m.payload.len() >= 3 {
                 let echoed = u16::from_be_bytes([m.payload[1], m.payload[2]]);
@@ -4992,7 +5305,7 @@ impl DiagnosticService {
         let t0 = Instant::now();
         self.record_invocation("read_dtcs", initiator, serde_json::json!({ "module": module_key }));
         let outcome = self
-            .authorize(capabilities::READ_DTCS, initiator, None)
+            .authorize(capabilities::READ_DTCS, initiator)
             .and_then(|_| self.read_dtcs_inner(module_key));
         self.finish("read_dtcs", capabilities::READ_DTCS, t0, outcome)
     }
@@ -5222,7 +5535,7 @@ impl DiagnosticService {
             serde_json::json!({ "module": module_key, "frame": frame }),
         );
         let outcome = self
-            .authorize(capabilities::READ_FREEZE_FRAME, initiator, None)
+            .authorize(capabilities::READ_FREEZE_FRAME, initiator)
             .and_then(|_| self.freeze_frame_inner(module_key, frame));
         self.finish("read_freeze_frame", capabilities::READ_FREEZE_FRAME, t0, outcome)
     }
@@ -5357,7 +5670,7 @@ impl DiagnosticService {
             initiator,
             serde_json::json!({ "module": module_key, "signal": signal }),
         );
-        let outcome = self.authorize(capabilities::READ_PID, initiator, None).and_then(|_| {
+        let outcome = self.authorize(capabilities::READ_PID, initiator).and_then(|_| {
             let module = self.module_by_key(module_key)?;
             let pid = self.resolve_signal(signal)?;
             let (values, evidence) = self.sample(&module, pid)?;
@@ -5394,7 +5707,7 @@ impl DiagnosticService {
             serde_json::json!({ "module": module_key, "signals": signals }),
         );
         let outcome = self
-            .authorize(capabilities::READ_LIVE_DATA, initiator, None)
+            .authorize(capabilities::READ_LIVE_DATA, initiator)
             .and_then(|_| self.live_data_inner(module_key, signals));
         self.finish("read_live_data", capabilities::READ_LIVE_DATA, t0, outcome)
     }
@@ -5551,40 +5864,46 @@ impl DiagnosticService {
         let reusable = self
             .last_full_scan
             .as_ref()
-            .filter(|s| initiator.starts_with("agent") && s.age() < FULL_SCAN_STAYS_FRESH)
+            .filter(|s| {
+                InitiatorKind::of(initiator) == InitiatorKind::Agent
+                    && s.age() < FULL_SCAN_STAYS_FRESH
+            })
             .cloned();
         if let Some(prior) = reusable {
             let minutes = prior.age().as_secs() / 60;
-            let who = if prior.by.starts_with("agent") { "the assistant" } else { "the person" };
-            let outcome =
-                self.authorize(capabilities::SCAN_ALL_MODULES, initiator, None).map(|_| {
-                    let mut warnings = prior.result.warnings.clone();
-                    warnings.push(Warning::info(
-                        "full_scan_reused",
-                        format!(
-                            "This is the full scan {who} ran {} in this session, not a new one: \
+            let who = if InitiatorKind::of(&prior.by) == InitiatorKind::Agent {
+                "the assistant"
+            } else {
+                "the person"
+            };
+            let outcome = self.authorize(capabilities::SCAN_ALL_MODULES, initiator).map(|_| {
+                let mut warnings = prior.result.warnings.clone();
+                warnings.push(Warning::info(
+                    "full_scan_reused",
+                    format!(
+                        "This is the full scan {who} ran {} in this session, not a new one: \
                          nothing was asked of the vehicle again. It is everything a new scan \
                          would report unless something has changed on the vehicle since.",
-                            match minutes {
-                                0 => String::from("less than a minute ago"),
-                                1 => String::from("a minute ago"),
-                                n => format!("{n} minutes ago"),
-                            }
-                        ),
-                    ));
-                    Payload {
-                        values: prior.result.values.clone(),
-                        data: prior.result.data.clone(),
-                        warnings,
-                        evidence: prior.result.raw_evidence_ref,
-                        module: None,
-                    }
-                });
+                        match minutes {
+                            0 => String::from("less than a minute ago"),
+                            1 => String::from("a minute ago"),
+                            n => format!("{n} minutes ago"),
+                        }
+                    ),
+                ));
+                Payload {
+                    values: prior.result.values.clone(),
+                    data: prior.result.data.clone(),
+                    warnings,
+                    evidence: prior.result.raw_evidence_ref,
+                    module: None,
+                }
+            });
             return self.finish("scan_all_modules", capabilities::SCAN_ALL_MODULES, t0, outcome);
         }
 
         let outcome = self
-            .authorize(capabilities::SCAN_ALL_MODULES, initiator, None)
+            .authorize(capabilities::SCAN_ALL_MODULES, initiator)
             .and_then(|_| self.scan_all_inner());
         let result = self.finish("scan_all_modules", capabilities::SCAN_ALL_MODULES, t0, outcome);
         if result.success {
@@ -6221,7 +6540,7 @@ impl DiagnosticService {
             serde_json::json!({ "module": module_key }),
         );
         let outcome = self
-            .authorize(capabilities::PROBE_MODULE_CAPABILITIES, initiator, None)
+            .authorize(capabilities::PROBE_MODULE_CAPABILITIES, initiator)
             .and_then(|_| self.probe_capabilities_inner(module_key));
         self.finish(
             "probe_module_capabilities",
@@ -6611,17 +6930,33 @@ impl DiagnosticService {
         &mut self,
         module_key: &str,
         initiator: &str,
-        confirmation: Option<&str>,
+        approval: Option<HumanApproval>,
+    ) -> ToolResult {
+        let subject = crate::approvals::probe(module_key);
+        self.probe_write_gate_about(module_key, &subject, initiator, approval)
+    }
+
+    /// The probe, under an approval for `subject`: the module itself, or the
+    /// setting whose change this is the first half of.
+    fn probe_write_gate_about(
+        &mut self,
+        module_key: &str,
+        subject: &str,
+        initiator: &str,
+        approval: Option<HumanApproval>,
     ) -> ToolResult {
         let t0 = Instant::now();
         self.record_invocation(
             "probe_write_gate",
             initiator,
-            serde_json::json!({ "module": module_key, "confirmed": confirmation.is_some() }),
+            serde_json::json!({
+                "module": module_key,
+                "approval_presented": approval.is_some(),
+            }),
         );
         let outcome = self
-            .authorize(capabilities::PROBE_WRITE_GATE, initiator, confirmation)
-            .and_then(|_| self.probe_write_gate_inner(module_key));
+            .authorize_change(capabilities::PROBE_WRITE_GATE, initiator, subject, approval)
+            .and_then(|permit| self.probe_write_gate_inner(&permit, module_key));
         self.finish("probe_write_gate", capabilities::PROBE_WRITE_GATE, t0, outcome)
     }
 
@@ -6641,10 +6976,17 @@ impl DiagnosticService {
     /// write it permits still needs a person to confirm it and still reads
     /// back. Only `Established` counts: a module that once gave no clear answer
     /// is not remembered as open.
+    ///
+    /// And only what this application measured. The same subject recorded by a
+    /// person, through the API, is a statement that the gate is open, and a
+    /// statement used to open it: a write to a setting nobody had verified went
+    /// ahead on a sentence, with no probe ever sent.
     fn write_gates_known_open(&self) -> Vec<String> {
         let mut gates: std::collections::BTreeSet<String> = self.write_gate_open.clone();
         for finding in self.knowledge() {
-            if finding.outcome != aim_session::FindingOutcome::Established {
+            if finding.outcome != aim_session::FindingOutcome::Established
+                || !crate::knowledge::is_measurement_authority(&finding.authority)
+            {
                 continue;
             }
             if let Some(address) = finding
@@ -6666,15 +7008,23 @@ impl DiagnosticService {
     /// on whichever bus reaches it". That translation already lives here, in
     /// the mapping, and a second copy of it in a screen is a second place for
     /// it to be wrong.
+    ///
+    /// Asking is the first half of changing the setting, so it runs under the
+    /// approval for that change: the same feature and the same value, which is
+    /// what the person was shown and what they confirmed.
     pub fn probe_write_gate_for_feature(
         &mut self,
         feature_id: &str,
+        desired: crate::config::DesiredValue,
         initiator: &str,
-        confirmation: Option<&str>,
+        approval: Option<HumanApproval>,
     ) -> ToolResult {
         let key = self.module_key_for_feature(feature_id);
         match key {
-            Ok(key) => self.probe_write_gate(&key, initiator, confirmation),
+            Ok(key) => {
+                let subject = crate::approvals::change(feature_id, desired);
+                self.probe_write_gate_about(&key, &subject, initiator, approval)
+            }
             Err(e) => {
                 let t0 = Instant::now();
                 self.record_invocation(
@@ -6731,7 +7081,11 @@ impl DiagnosticService {
         })
     }
 
-    fn probe_write_gate_inner(&mut self, module_key: &str) -> AimResult<Payload> {
+    fn probe_write_gate_inner(
+        &mut self,
+        permit: &Authorization,
+        module_key: &str,
+    ) -> AimResult<Payload> {
         self.require_usable()?;
         self.require_can("A write-gate probe")?;
         let module = self.module_by_key(module_key)?;
@@ -6747,13 +7101,14 @@ impl DiagnosticService {
             RequestTarget::Physical(a) => self.reach_module(a),
             RequestTarget::Functional => None,
         };
-        let outcome = self.probe_write_gate_on_its_bus(module_key, &addr, budget);
+        let outcome = self.probe_write_gate_on_its_bus(permit, module_key, &addr, budget);
         self.restore_bus(home);
         outcome
     }
 
     fn probe_write_gate_on_its_bus(
         &mut self,
+        permit: &Authorization,
         module_key: &str,
         addr: &RequestTarget,
         budget: Duration,
@@ -6796,7 +7151,7 @@ impl DiagnosticService {
         let write =
             aim_protocols::UdsRequest::write_data_by_identifier(ABSENT_DID, &[0x00]).to_bytes();
         let write_outcome =
-            Self::first_uds_outcome(&self.adapter.request_pdu(&write, &addr, budget)?);
+            Self::first_uds_outcome(&self.adapter.send_changing(permit, &write, &addr, budget)?);
 
         // A positive response would mean the module accepted a write to an
         // identifier it had just denied having. Nothing was aimed anywhere real,
@@ -6963,7 +7318,7 @@ impl DiagnosticService {
         let t0 = Instant::now();
         self.record_invocation("list_catalog_signals", initiator, serde_json::json!({}));
         let outcome = self
-            .authorize(capabilities::LIST_CATALOG_SIGNALS, initiator, None)
+            .authorize(capabilities::LIST_CATALOG_SIGNALS, initiator)
             .and_then(|_| self.list_catalog_inner());
         self.finish("list_catalog_signals", capabilities::LIST_CATALOG_SIGNALS, t0, outcome)
     }
@@ -7082,7 +7437,7 @@ impl DiagnosticService {
             serde_json::json!({ "signal": signal_id }),
         );
         let outcome = self
-            .authorize(capabilities::READ_CATALOG_SIGNAL, initiator, None)
+            .authorize(capabilities::READ_CATALOG_SIGNAL, initiator)
             .and_then(|_| self.read_catalog_inner(signal_id));
         self.finish("read_catalog_signal", capabilities::READ_CATALOG_SIGNAL, t0, outcome)
     }
@@ -7343,14 +7698,15 @@ impl DiagnosticService {
     /// confirmation, the engine off, the vehicle stopped. A refusal says why,
     /// and on a vehicle listed as having a security gateway, that the gateway
     /// is the likely reason; this build does not get around one.
-    fn clear_uds_dtcs(&mut self, module: &Module) -> AimResult<Payload> {
+    fn clear_uds_dtcs(&mut self, permit: &Authorization, module: &Module) -> AimResult<Payload> {
         let addr = Self::request_target(module)?;
         let home = match &addr {
             RequestTarget::Physical(a) => self.reach_module(a),
             RequestTarget::Functional => None,
         };
         let request = aim_protocols::UdsRequest::clear_all_dtcs().to_bytes();
-        let replies = self.adapter.request_pdu(&request, &addr, Duration::from_millis(2500));
+        let replies =
+            self.adapter.send_changing(permit, &request, &addr, Duration::from_millis(2500));
         self.restore_bus(home);
         let evidence = self.recorder.last_response_event();
 
@@ -7602,7 +7958,7 @@ impl DiagnosticService {
         let t0 = Instant::now();
         self.record_invocation("read_readiness", initiator, serde_json::json!({}));
         let outcome = self
-            .authorize(capabilities::READ_LIVE_DATA, initiator, None)
+            .authorize(capabilities::READ_LIVE_DATA, initiator)
             .and_then(|_| self.readiness_inner());
         self.finish("read_readiness", capabilities::READ_LIVE_DATA, t0, outcome)
     }
@@ -7796,32 +8152,39 @@ impl DiagnosticService {
 
     /// Clear diagnostic trouble codes.
     ///
-    /// Implemented end to end and permanently refused: the capability is
-    /// registered at L2, which is above this build's ceiling. Handoff §10 asks
-    /// for exactly this — the operation exists, is visible, is auditable, and
-    /// cannot run. The refusal happens before any byte reaches the vehicle.
+    /// L1: a person can, with an approval for exactly this module or for every
+    /// module, the engine off and the vehicle stopped. A model cannot, by any
+    /// route. A refusal happens before any byte reaches the vehicle.
     pub fn clear_dtcs(
         &mut self,
         module_key: Option<&str>,
         initiator: &str,
-        confirmation: Option<&str>,
+        approval: Option<HumanApproval>,
     ) -> ToolResult {
         let t0 = Instant::now();
         self.record_invocation(
             "clear_dtcs",
             initiator,
-            serde_json::json!({ "module": module_key, "confirmed": confirmation.is_some() }),
+            serde_json::json!({
+                "module": module_key,
+                "approval_presented": approval.is_some(),
+            }),
         );
+        let subject = crate::approvals::clear(module_key);
         let outcome = self
-            .authorize(capabilities::CLEAR_DTCS, initiator, confirmation)
-            .and_then(|_| self.clear_dtcs_inner(module_key));
+            .authorize_change(capabilities::CLEAR_DTCS, initiator, &subject, approval)
+            .and_then(|permit| self.clear_dtcs_inner(&permit, module_key));
         // Whatever it did, a scan from before an attempt to clear is not a
         // description of the vehicle any more.
         self.last_full_scan = None;
         self.finish("clear_dtcs", capabilities::CLEAR_DTCS, t0, outcome)
     }
 
-    fn clear_dtcs_inner(&mut self, module_key: Option<&str>) -> AimResult<Payload> {
+    fn clear_dtcs_inner(
+        &mut self,
+        permit: &Authorization,
+        module_key: Option<&str>,
+    ) -> AimResult<Payload> {
         self.require_usable()?;
         let request = ObdRequest::bare(Service::ClearDtcs);
         let target = match module_key {
@@ -7832,7 +8195,7 @@ impl DiagnosticService {
                 // body module says nothing and its codes stay, which is how a
                 // clear after a repair used to fail with "no data".
                 if !VehicleBus::of_module_key(&module.module_key).answers_obd2() {
-                    return self.clear_uds_dtcs(&module);
+                    return self.clear_uds_dtcs(permit, &module);
                 }
                 // One module was confirmed, so one module is asked. Where it
                 // cannot be addressed on its own (the K-line, or an address
@@ -7859,14 +8222,14 @@ impl DiagnosticService {
             }
             None => RequestTarget::Functional,
         };
-        let messages = match self.request(&request, &target) {
+        let messages = match self.adapter.request_changing(permit, &request, &target) {
             Ok(messages) => messages,
             // A module on the primary bus that answers none of the OBD-II
             // services is a body module reached through a gateway, and is
             // cleared the way it was read.
             Err(e) if e.code == ErrorCode::NoData && module_key.is_some() => {
                 let module = self.module_by_key(module_key.unwrap_or_default())?;
-                return self.clear_uds_dtcs(&module);
+                return self.clear_uds_dtcs(permit, &module);
             }
             Err(e) => return Err(e),
         };
@@ -7883,7 +8246,7 @@ impl DiagnosticService {
         ) {
             if nrc.refusal() == aim_protocols::RefusalKind::NotPresent {
                 let module = self.module_by_key(k)?;
-                return self.clear_uds_dtcs(&module);
+                return self.clear_uds_dtcs(permit, &module);
             }
         }
 

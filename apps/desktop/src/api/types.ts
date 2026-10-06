@@ -369,7 +369,8 @@ export type EventKind =
   | { kind: "dtc_read"; module_key: string; code: string; status: DtcStatus }
   | { kind: "fault_list_cut_off"; module_key: string; announced: number; received: number }
   | { kind: "measurement_recorded"; module_key: string; signal_id: string; value: number | null; unit: string | null; raw_hex: string | null }
-  | { kind: "safety_decision"; operation: string; level: PermissionLevel; allowed: boolean; initiator: string; confirmed: boolean; reason: string | null }
+  | { kind: "safety_decision"; operation: string; level: PermissionLevel | null; allowed: boolean; initiator: string; confirmed: boolean; approval?: string; reason: string | null }
+  | { kind: "config_write"; feature_id: string; module: string; did: string; before: string; intended: string; reply: string; read_back: string | null; outcome: string }
   | { kind: "tool_invoked"; tool: string; arguments: unknown; initiator: string }
   | { kind: "tool_completed"; tool: string; success: boolean; execution_time_ms: number | null; warnings: Warning[] }
   | { kind: "user_note"; text: string }
@@ -589,12 +590,37 @@ export interface ProposedChange {
   desired: "on" | "off";
 }
 
+/** What the core asks a person to type before it changes something. */
+export interface ApprovalChallenge {
+  id: string;
+  /** The word to type. */
+  phrase: string;
+  /** What typing it approves, as the audit trail will record it. */
+  statement: string;
+  expires_in_seconds: number;
+}
+
+/** A person's answer to an {@link ApprovalChallenge}. The core checks it. */
+export interface ApprovalAnswer {
+  id: string;
+  typed: string;
+}
+
 /** What a configuration write reports, read back from the module. */
 export interface ApplyResult {
   feature_id: string;
+  /** Whether the record is different from before. Not whether it is what was
+   *  asked for: see `verified` and `outcome`. */
   changed: boolean;
   /** Set when nothing was written, e.g. "already_set". */
   reason?: string;
+  /** What reading the record back showed. `verified`: it holds what was
+   *  written. `not_applied`: it is exactly as it was. `changed_unexpectedly`:
+   *  it holds something else. A write whose record could not be read at all
+   *  comes back as a failure saying so, not as one of these. */
+  outcome?: "verified" | "not_applied" | "changed_unexpectedly";
+  /** What the module answered to the write itself. */
+  write_reply?: "accepted" | "pending" | "no_answer";
   did?: string;
   module?: string;
   before?: string;

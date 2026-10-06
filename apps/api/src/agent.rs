@@ -234,7 +234,6 @@ impl ToolExecutor for CoreExecutor {
             // reading the agent asked for is distinguishable from one a person
             // clicked. Handoff §10 makes this mandatory.
             initiator: format!("agent:{initiator}"),
-            confirmation: None,
         };
 
         let result =

@@ -210,14 +210,29 @@ impl CommandDef {
     /// Returns `None` when the entry is not the single service/parameter pair
     /// the format specifies — malformed catalogue data is skipped rather than
     /// guessed at.
+    ///
+    /// And `None` when the service is not one that reads. A catalogue
+    /// describes readings, and its files come from a folder on disk and from a
+    /// download, so the service byte in one is somebody else's say-so. This
+    /// used to build a request from whatever was written there: an entry
+    /// stating `2E` was a write, and the read that sends a catalogue command
+    /// sent it. See [`READ_SERVICES`].
     pub fn request_bytes(&self) -> Option<Vec<u8>> {
         if self.cmd.len() != 1 {
             return None;
         }
         let (service, parameter) = self.cmd.iter().next()?;
         let mut out = hex_bytes(service)?;
+        if !matches!(out.as_slice(), [s] if READ_SERVICES.contains(s)) {
+            return None;
+        }
         out.extend(hex_bytes(parameter)?);
         Some(out)
+    }
+
+    /// Whether this entry is a reading this build can ask for.
+    pub fn is_read(&self) -> bool {
+        self.request_bytes().is_some()
     }
 
     /// A short description of what this asks for, for a person or a log.
@@ -313,8 +328,11 @@ impl SignalSet {
     }
 
     /// Commands offered for a model year, in catalogue order.
+    ///
+    /// Only the ones that read. An entry that is anything else is not offered
+    /// to a person or to a model, so there is nothing to pick.
     pub fn for_year(&self, year: Option<u16>) -> Vec<&CommandDef> {
-        self.commands.iter().filter(|c| c.applies_to_year(year)).collect()
+        self.commands.iter().filter(|c| c.applies_to_year(year) && c.is_read()).collect()
     }
 
     /// Every signal offered for a model year, with the command that fetches it.
@@ -325,6 +343,11 @@ impl SignalSet {
             .collect()
     }
 }
+
+/// The services a catalogue entry may name: current data (01), read by local
+/// identifier (21) and read by identifier (22). Every signal set OBDb
+/// publishes uses one of these, because a signal is something read.
+pub const READ_SERVICES: [u8; 3] = [0x01, 0x21, 0x22];
 
 /// Parse an even-length hex string into bytes.
 fn hex_bytes(s: &str) -> Option<Vec<u8>> {
@@ -524,6 +547,55 @@ mod tests {
         let set = SignalSet::from_json(json).unwrap();
         for c in &set.commands {
             assert!(c.request_bytes().is_none(), "{:?} should not produce a request", c.cmd);
+        }
+    }
+
+    /// A catalogue file cannot describe anything but a read.
+    ///
+    /// Every service identifier there is, in the place a file states one. The
+    /// ones that produce a request are the three that read, and an entry that
+    /// names any other is not offered at all.
+    #[test]
+    fn a_catalogue_entry_that_is_not_a_read_is_never_a_request() {
+        let mut requested = Vec::new();
+        for service in 0..=u8::MAX {
+            let json = format!(
+                r#"{{"commands":[{{"hdr":"7A0","cmd":{{"{service:02X}":"DE0100"}},
+                    "signals":[{{"id":"X","name":"x","fmt":{{"len":8}}}}]}}]}}"#
+            );
+            let set = SignalSet::from_json(&json).unwrap();
+            let offered = set.for_year(Some(2019)).len() + set.signals_for_year(None).len();
+            match set.commands[0].request_bytes() {
+                Some(bytes) => {
+                    assert_eq!(bytes[0], service);
+                    assert_eq!(offered, 2, "a read is offered");
+                    requested.push(service);
+                }
+                None => assert_eq!(offered, 0, "service {service:02X} was offered"),
+            }
+        }
+        assert_eq!(requested, READ_SERVICES.to_vec());
+
+        // By name, the ones that would do damage: clear, reset, clear fault
+        // memory, security, write, actuator control, routine, programming.
+        for service in ["04", "11", "14", "27", "2E", "2F", "31", "34", "10"] {
+            let json = format!(r#"{{"commands":[{{"hdr":"726","cmd":{{"{service}":"01"}}}}]}}"#);
+            let set = SignalSet::from_json(&json).unwrap();
+            assert!(set.commands[0].request_bytes().is_none(), "service {service}");
+            assert!(!set.commands[0].is_read());
+        }
+    }
+
+    /// Everything shipped is a read, so the rule above costs nothing.
+    #[test]
+    fn every_shipped_catalogue_entry_is_a_read() {
+        let set = SignalSet::from_json(include_str!(
+            "../../../vehicle-profiles/catalog/obdb/Ford-F-150.json"
+        ))
+        .unwrap();
+        assert!(!set.commands.is_empty());
+        for c in &set.commands {
+            assert!(c.is_read(), "{} is not a read", c.describe());
         }
     }
 

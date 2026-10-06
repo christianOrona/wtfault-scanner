@@ -16,7 +16,7 @@ import type {
   AdapterStatus, CapabilitiesResponse, ConnectData, DtcData, FreezeFrameData,
   Health, IdentifyData, Measurement, ModuleIdentity, ModuleRecord, PortsResponse,
   SessionEvent, SessionSummary, SignalsData, ToolResult, ApiError, Dtc, MonitorTestsData,
-  VpicHeld, VpicLookup, ObdbStatus, ObdbFetch,
+  VpicHeld, VpicLookup, ObdbStatus, ObdbFetch, ApprovalAnswer, ApprovalChallenge,
   AgentStatus, InspectResponse, ChatResponse as AgentChatResponse,
   ProvidersResponse, ProviderView, ProviderKindId, ProbeResult, Speed, ExplanationsResponse, FeaturesData, ChangePlan, ApplyResult, WriteGateResult, ProfilesResponse, ClearResult, ReadinessData, ScanPurpose, Tone, FullScanData, ComparisonResponse, UpdateStatus, DownloadState, ModuleProbeData, VehicleKnowledge, SupportReport, AsBuiltStatus, AsBuiltImport,
 } from "./types";
@@ -416,13 +416,22 @@ export const api = {
   features: () => request<ToolResult<FeaturesData>>("/features"),
   previewFeature: (id: string, desired: "on" | "off") =>
     post<ToolResult<ChangePlan>>(`/features/${enc(id)}/preview`, { desired }),
+  /** Ask the core for an approval of one specific change. It answers with the
+   *  word to type; the change is then sent with the `id` and what was typed,
+   *  and the core checks both. Nothing here reaches the vehicle. */
+  askApproval: (
+    what:
+      | { action: "change_setting"; feature_id: string; desired: "on" | "off" }
+      | { action: "clear_codes"; module?: string },
+  ) => post<{ approval: ApprovalChallenge }>("/approvals", what).then((r) => r.approval),
   /** Ask the module that owns a feature whether it takes writes. Writes to an
-   *  identifier the module has just said it does not have, so nothing lands. */
-  probeFeatureGate: (id: string, confirmation: string) =>
-    post<ToolResult<WriteGateResult>>(`/features/${enc(id)}/write-gate`, { confirmation }),
-  /** Change a setting. The confirmation is recorded verbatim in the audit trail. */
-  applyFeature: (id: string, desired: "on" | "off", confirmation: string) =>
-    post<ToolResult<ApplyResult>>(`/features/${enc(id)}/apply`, { desired, confirmation }),
+   *  identifier the module has just said it does not have, so nothing lands.
+   *  Runs under the approval for the change it is the first half of. */
+  probeFeatureGate: (id: string, desired: "on" | "off", approval: ApprovalAnswer) =>
+    post<ToolResult<WriteGateResult>>(`/features/${enc(id)}/write-gate`, { desired, approval }),
+  /** Change a setting, under an approval the core issued for exactly this. */
+  applyFeature: (id: string, desired: "on" | "off", approval: ApprovalAnswer) =>
+    post<ToolResult<ApplyResult>>(`/features/${enc(id)}/apply`, { desired, approval }),
 
   ports: (probe = false) => request<PortsResponse>(`/adapters/ports${probe ? "?probe=true" : ""}`),
   adapter: () => request<AdapterStatus>("/adapter"),
@@ -483,8 +492,8 @@ export const api = {
     post<ToolResult<ProcedureMeasurement>>(`/procedures/${enc(id)}/run`),
   compareSessions: (before: string, after: string) =>
     request<ComparisonResponse>(`/sessions/${enc(before)}/compare/${enc(after)}`),
-  clearDtcs: (confirmation: string, module?: string) =>
-    post<ToolResult<ClearResult>>("/dtcs/clear", { confirmation, module }),
+  clearDtcs: (approval: ApprovalAnswer, module?: string) =>
+    post<ToolResult<ClearResult>>("/dtcs/clear", { approval, module }),
   freezeFrame: (key: string, frame = 0) =>
     request<ToolResult<FreezeFrameData>>(`/modules/${enc(key)}/freeze-frame?frame=${frame}`),
   read: (key: string, signals: string[]) =>

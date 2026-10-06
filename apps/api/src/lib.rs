@@ -18,6 +18,7 @@ pub mod agent_routes;
 pub mod calibration_routes;
 pub mod error;
 pub mod handoff;
+pub mod local;
 pub mod routes;
 pub mod state;
 pub mod support;

@@ -14,9 +14,10 @@
 //   * Nothing is repaired. If the fault is still there the code comes back, and
 //     the only thing that changed is that the evidence is gone.
 //
-// So the dialog states all three, requires the word CLEAR to be typed rather
-// than a button to be clicked twice, and names who authorised it in the audit
-// trail. The agent cannot reach this path at all.
+// So the dialog states all three and requires the word CLEAR to be typed rather
+// than a button to be clicked twice. The core is what checks the word: this
+// asks it for an approval of exactly what is about to be cleared, and sends
+// back what was typed. The agent cannot reach this path at all.
 
 import { useState } from "react";
 import { api, describeError } from "../api/client";
@@ -52,9 +53,11 @@ export function ClearCodesDialog({
     setBusy(true);
     setError(null);
     try {
-      // The confirmation string is recorded verbatim in the audit trail, so it
-      // says who authorised it rather than merely that something did.
-      const r = await api.clearDtcs(`user typed ${PHRASE} in the desktop app`, scope);
+      // An approval for this module, or for all of them, and for nothing else.
+      // What goes in the audit trail is the core's own sentence about what was
+      // approved, not one written here.
+      const challenge = await api.askApproval({ action: "clear_codes", module: scope });
+      const r = await api.clearDtcs({ id: challenge.id, typed }, scope);
       if (!r.success && r.error?.details?.would_reach_every_module) {
         setOnlyAll(r.error.message);
         return;

@@ -16,7 +16,7 @@ use aim_adapter::identify_transport;
 use aim_adapter::{DiagnosticAdapter, Elm327Adapter, Elm327Config};
 use aim_decoders::DecoderSet;
 use aim_diagnostics::DiagnosticService;
-use aim_safety::SafetyGate;
+use aim_safety::{ApprovalDesk, SafetyGate};
 use aim_session::SessionStore;
 use aim_simulator::{AdapterPersonality, ScenarioId, SimulatedTransport};
 use aim_tools::ToolRegistry;
@@ -213,6 +213,13 @@ pub struct AppState {
     decoders: Arc<std::sync::RwLock<Arc<DecoderSet>>>,
     /// Tool schemas.
     pub tools: Arc<ToolRegistry>,
+    /// Where a person's approval is asked for and given.
+    ///
+    /// Held here, by the routes a person's own interface calls, and handed to
+    /// nothing else: not to the tool registry and not to the agent's executor,
+    /// which is how neither can come by an approval. Every session's gate is
+    /// built to trust this desk and no other.
+    pub approvals: Arc<ApprovalDesk>,
     /// Launch configuration.
     pub config: Arc<ServerConfig>,
     /// Model-provider settings. Kept out of the session database on purpose:
@@ -231,6 +238,7 @@ impl AppState {
             store,
             decoders: Arc::new(std::sync::RwLock::new(Arc::new(decoders))),
             tools: Arc::new(ToolRegistry::phase1()),
+            approvals: Arc::new(ApprovalDesk::new()),
             settings: Arc::new(aim_agent::SettingsStore::new(config.settings_path.clone())),
             config: Arc::new(config),
         }
@@ -430,10 +438,10 @@ impl AppState {
         let calibrations = self.config.calibration_library();
 
         let service_slot = Arc::clone(&self.service);
+        let gate = SafetyGate::phase1().trusting(&self.approvals);
         tokio::task::spawn_blocking(move || {
-            let mut service =
-                DiagnosticService::start(adapter, store, decoders, SafetyGate::phase1(), label)
-                    .map_err(ApiError::new)?;
+            let mut service = DiagnosticService::start(adapter, store, decoders, gate, label)
+                .map_err(ApiError::new)?;
             service.set_calibration_library(calibrations);
             let result = service.connect("user:api");
             let mut guard = service_slot

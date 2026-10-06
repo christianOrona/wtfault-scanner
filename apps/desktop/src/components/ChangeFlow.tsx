@@ -18,7 +18,9 @@
 //
 // The record as it is and as it would be, with the byte that moves picked out;
 // every check, failures first; and a confirmation that says in one sentence
-// exactly what will be sent. Nothing is written until the word is typed.
+// exactly what will be sent. Nothing is written until the word is typed, and it
+// is the core that checks it was: this asks for an approval of this setting and
+// this value, and sends back what the person typed.
 //
 // # The write gate, done for them
 //
@@ -34,7 +36,8 @@
 // What the module reports afterwards, read back, and nothing less. A positive
 // response is not a change; a read-back that matches is a change *to the
 // module*; whether the vehicle behaves differently is only known after the key
-// has been cycled and somebody has looked, and the result says so.
+// has been cycled and somebody has looked, and the result says so. A record
+// that reads back as anything else is shown as exactly that, never as done.
 
 import { useCallback, useEffect, useState } from "react";
 import { api, describeError } from "../api/client";
@@ -94,14 +97,19 @@ export function ChangeFlow({
 
   async function go() {
     if (!p || !armed) return;
-    // Recorded verbatim in the audit trail, so it says who authorised what
-    // rather than merely that something did.
-    const confirmation = `user typed ${PHRASE} in the desktop app to turn ${featureId} ${desired}`;
     setError(null);
     try {
+      // One approval, from the core, for this setting and this value. It covers
+      // asking the module first when that is needed, and then the change.
+      const challenge = await api.askApproval({
+        action: "change_setting",
+        feature_id: featureId,
+        desired,
+      });
+      const approval = { id: challenge.id, typed };
       if (!p.can_apply && p.needs_write_gate_probe) {
         setStep({ kind: "working", label: "Asking the module whether it accepts changes" });
-        const gate = await api.probeFeatureGate(featureId, confirmation);
+        const gate = await api.probeFeatureGate(featureId, desired, approval);
         if (!gate.success || !gate.data?.writes_open_without_security) {
           setStep({
             kind: "stopped",
@@ -124,10 +132,12 @@ export function ChangeFlow({
         }
       }
       setStep({ kind: "working", label: "Writing, then reading it back" });
-      const result = await api.applyFeature(featureId, desired, confirmation);
+      const result = await api.applyFeature(featureId, desired, approval);
       setTyped("");
       setStep({ kind: "done", result });
-      if (result.success && result.data?.changed) onChanged?.();
+      // Anything short of "nothing was sent" may have moved the setting, and a
+      // list showing the old value would be the app contradicting itself.
+      if (result.data?.changed || result.error?.details?.outcome === "unknown") onChanged?.();
     } catch (e) {
       setError(describeError(e));
       setStep({ kind: "planned" });
@@ -255,7 +265,7 @@ export function ChangeFlow({
 function Outcome({ result, desired }: { result: ToolResult<ApplyResult>; desired: "on" | "off" }) {
   if (!result.success) return <FailedResult result={result} />;
   const r = result.data;
-  if (r && !r.changed) {
+  if (r?.reason === "already_set") {
     return (
       <div className="banner info" style={{ marginTop: 10 }}>
         <span className="b-code">already set</span>
@@ -263,15 +273,39 @@ function Outcome({ result, desired }: { result: ToolResult<ApplyResult>; desired
       </div>
     );
   }
+  // Only a record that read back as written is a change that was made. The
+  // other two answers used to be shown as "already set" and as a green
+  // "written", and neither was true.
+  if (!r?.verified) {
+    const elsewhere = r?.outcome === "changed_unexpectedly";
+    return (
+      <div style={{ marginTop: 10 }}>
+        <div className="banner serious">
+          <span className="b-code">{elsewhere ? "not what was written" : "not changed"}</span>
+          <span>
+            {elsewhere
+              ? "The record now holds something that is neither what was there before nor what was written. Treat the setting as unknown: read it again and check the vehicle before trying anything else."
+              : "The module accepted the write, and the setting reads back exactly as it was before. Nothing changed."}
+          </span>
+        </div>
+        {r?.before && r?.after && (
+          <div className="provenance" style={{ marginTop: 6 }}>
+            <span>{r.did}</span>
+            <span className="mono">{r.before} → {r.after}</span>
+            {r.module && <span>module {r.module}</span>}
+          </div>
+        )}
+        <Warnings warnings={result.warnings.filter((w) => w.code !== "write_not_verified")} />
+      </div>
+    );
+  }
   return (
     <div style={{ marginTop: 10 }}>
       <div className="banner ok">
-        <span className="b-code">{r?.verified ? "written and read back" : "written"}</span>
+        <span className="b-code">written and read back</span>
         <span>
-          {r?.verified
-            ? `The module now holds the new value — it read back exactly as written.`
-            : `The module accepted the write.`}
-          {r?.cycle_ignition_to_apply !== false && (
+          The module now holds the new value — it read back exactly as written.
+          {r.cycle_ignition_to_apply !== false && (
             <>
               {" "}
               <strong>Turn the key off, wait a few seconds, and turn it back on</strong> before

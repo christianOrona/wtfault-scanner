@@ -134,16 +134,50 @@ pub enum EventKind {
     SafetyDecision {
         /// Operation id requested.
         operation: String,
-        /// Permission level of the operation.
-        level: crate::PermissionLevel,
+        /// Permission level of the operation, from the capability registry.
+        /// Absent only for an operation the registry does not hold, which has
+        /// no level to record.
+        level: Option<crate::PermissionLevel>,
         /// Whether it was allowed.
         allowed: bool,
         /// Who or what asked.
         initiator: String,
-        /// Whether a user confirmation token accompanied the request.
+        /// Whether a person's approval, checked by the gate, came with the
+        /// request. Not whether the caller said one did.
         confirmed: bool,
+        /// What that person was told they were approving.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        approval: Option<String>,
         /// Rejection reason code, when rejected.
         reason: Option<String>,
+    },
+    /// A configuration write was sent to a module, and this is what is known
+    /// about what became of it.
+    ///
+    /// One per write that reached the adapter. The adapter exchanges either
+    /// side of it are in the log as well; this is the sentence they add up to,
+    /// so that "the module accepted it and could not be read afterwards" is in
+    /// the trail as itself rather than as a tool that failed.
+    ConfigWrite {
+        /// The feature being changed.
+        feature_id: String,
+        /// Request address of the module written to.
+        module: String,
+        /// Data identifier written, hex.
+        did: String,
+        /// The record before the write, hex.
+        before: String,
+        /// The record that was sent, hex.
+        intended: String,
+        /// What came back to the write itself: `accepted`, `refused`,
+        /// `pending` or `no_answer`.
+        reply: String,
+        /// The record read back afterwards, hex. Absent when it could not be
+        /// read.
+        read_back: Option<String>,
+        /// `verified`, `not_applied`, `changed_unexpectedly`, `refused` or
+        /// `unknown`.
+        outcome: String,
     },
     /// A tool executed through the registry.
     ToolInvoked {
@@ -210,6 +244,7 @@ impl EventKind {
             EventKind::FaultListCutOff { .. } => "fault_list_cut_off",
             EventKind::MeasurementRecorded { .. } => "measurement_recorded",
             EventKind::SafetyDecision { .. } => "safety_decision",
+            EventKind::ConfigWrite { .. } => "config_write",
             EventKind::ToolInvoked { .. } => "tool_invoked",
             EventKind::ToolCompleted { .. } => "tool_completed",
             EventKind::TestStarted { .. } => "test_started",
@@ -246,14 +281,31 @@ mod tests {
     fn safety_decisions_record_the_initiator() {
         let e = EventKind::SafetyDecision {
             operation: "clear_dtcs".into(),
-            level: crate::PermissionLevel::L2,
+            level: Some(crate::PermissionLevel::L1),
             allowed: false,
             initiator: "agent:planner".into(),
             confirmed: false,
+            approval: None,
             reason: Some("permission_level_disabled".into()),
         };
         let v = serde_json::to_value(&e).unwrap();
         assert_eq!(v["initiator"], "agent:planner");
         assert_eq!(v["allowed"], false);
+        assert_eq!(v["level"], "L1");
+        assert!(v.get("approval").is_none(), "absent rather than null");
+    }
+
+    /// A session recorded before the approval field existed still reads.
+    #[test]
+    fn a_safety_decision_from_an_older_session_still_reads() {
+        let old = r#"{"kind":"safety_decision","operation":"obd2.read_dtcs","level":"L0",
+                      "allowed":true,"initiator":"user:api","confirmed":false,"reason":null}"#;
+        match serde_json::from_str::<EventKind>(old).unwrap() {
+            EventKind::SafetyDecision { level, approval, .. } => {
+                assert_eq!(level, Some(crate::PermissionLevel::L0));
+                assert_eq!(approval, None);
+            }
+            other => panic!("read as {other:?}"),
+        }
     }
 }

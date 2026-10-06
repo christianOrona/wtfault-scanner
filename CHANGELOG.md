@@ -49,8 +49,52 @@ with the caveat that everything below 1.0 is allowed to move.
   only on newer PIDs. They are read now, marked unverified until checked
   against a car.
 
+### Changed
+
+- **Changing a setting or clearing codes takes an approval the app issues,
+  not a sentence the caller sends.** `POST /approvals` asks for one, for one
+  specific change. The change is then sent with its id and the word that was
+  typed, and the core checks both: that it is the right word, that the approval
+  is for exactly this setting and value or this module, that it has not been
+  used, and that it is recent. The `confirmation` field on
+  `/features/{id}/apply`, both `write-gate` routes and `/dtcs/clear` is gone,
+  and so are `initiator` and `confirmation` on `/tools/{name}`. Nothing changes
+  on screen: the same word is typed in the same place. `docs/API.md` has the
+  new shapes.
+- **The API answers this computer only.** A request whose `Host` or `Origin` is
+  not this machine is refused, the live-data and recorder streams included, so
+  a web page open in a browser cannot call it.
+
 ### Fixed
 
+- **A community signal file could make a read send a write.** A signal set
+  says which service each signal is read with, and that was sent exactly as
+  written. A file that named a write, a reset or a clear there would have had
+  it sent when the assistant asked to read that signal, with no confirmation
+  and recorded as a read. The signal set shipped with the app never did. A
+  signal set can now only describe reads, and nothing that is not a read
+  leaves for the vehicle without the safety gate's authorization for exactly
+  that.
+- **A change that could not be checked is no longer reported as one that
+  failed, or as one that did nothing.** When the module accepted a write and
+  then did not answer the read that checks it, the result was a bare read
+  error. When its answer to the write was lost, or was only "still working on
+  it", the result said the module had not accepted the write, on a record that
+  had changed. And a record that came back as neither the old value nor the new
+  one was shown as "already set". The record is now read to settle each of
+  these, and what cannot be settled says that it is not known.
+- **A note typed into a vehicle's knowledge is no longer filed as a
+  measurement.** One recorded through the API was stored as measured this
+  session, and one such note about a module was enough to have it treated as
+  measured accepting changes. It is stored as a person's statement, the
+  assistant is told which lines those are, and only the app's own measurement
+  counts for a module.
+- **The recorder shows a refused operation at its real level.** A refused
+  *clear codes*, which is L1, was written down as L2. The level now comes from
+  the same place the gate decides from.
+- **No spelling of a caller's name gets a model past the gate.** The rule that a
+  model may not change a vehicle matched `agent:` at the start of a name, so
+  `Agent:` did not match. Anything that is not a person is refused.
 - **Ask no longer says the engine has no faults without reading its codes.**
   Asked whether a truck was safe to drive, the assistant read only the full
   scan and answered that there was nothing in the engine module. The engine

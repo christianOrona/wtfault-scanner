@@ -10,10 +10,11 @@ use aim_adapter::{DiagnosticAdapter, Elm327Adapter, Elm327Config};
 use aim_decoders::DecoderSet;
 use aim_diagnostics::transcript::redact_vin;
 use aim_diagnostics::DiagnosticService;
-use aim_safety::SafetyGate;
 use aim_session::SessionStore;
 use aim_simulator::{ReplayMode, ReplayTransport, Transcript};
 use std::sync::Arc;
+
+mod common;
 
 const USER: &str = "user:test";
 const RECORDED: &str = include_str!("replays/simulator-healthy.transcript");
@@ -44,7 +45,7 @@ fn visit(vin: &str) -> DiagnosticService {
     let store = SessionStore::open_in_memory().unwrap();
     let decoders = Arc::new(DecoderSet::generic_obd().unwrap());
     let mut service =
-        DiagnosticService::start(adapter, store, decoders, SafetyGate::phase1(), None).unwrap();
+        DiagnosticService::start(adapter, store, decoders, common::gate(), None).unwrap();
     assert!(service.connect(USER).success);
     assert!(service.identify_vehicle(USER).success);
     assert!(service.scan_modules(USER).success);
@@ -112,7 +113,7 @@ fn a_jeep_is_told_about_its_gateway_when_it_is_identified() {
 #[test]
 fn a_write_gate_probe_on_a_jeep_reports_the_gateway_boundary() {
     let mut service = visit(&jeep_vin());
-    let probe = service.probe_write_gate("ECU_7E8", USER, Some(USER));
+    let probe = service.probe_write_gate("ECU_7E8", USER, common::approve_probe("ECU_7E8"));
     assert!(probe.success, "{:?}", probe.error);
     let data = probe.data.as_ref().unwrap();
     assert_eq!(data["writes_accepted"], false);
@@ -128,7 +129,7 @@ fn a_ford_is_not_told_about_a_gateway_it_is_not_listed_as_having() {
     let mut service = visit(SIMULATOR_VIN);
     let identify = service.identify_vehicle(USER);
     assert!(!identify.warnings.iter().any(|w| w.code == "security_gateway_listed"));
-    let probe = service.probe_write_gate("ECU_7E8", USER, Some(USER));
+    let probe = service.probe_write_gate("ECU_7E8", USER, common::approve_probe("ECU_7E8"));
     assert!(!probe.warnings.iter().any(|w| w.code.starts_with("gateway_")));
 }
 
@@ -159,7 +160,7 @@ fn a_jeep_named_by_brand_and_by_manufacturer_settles_and_is_told_about_its_gatew
     let evidence = &identity.field("make").unwrap().candidates[0].evidence;
     assert!(evidence.iter().any(|e| e.value == "JEEP"), "{evidence:?}");
 
-    let probe = service.probe_write_gate("ECU_7E8", USER, Some(USER));
+    let probe = service.probe_write_gate("ECU_7E8", USER, common::approve_probe("ECU_7E8"));
     assert!(probe.success, "{:?}", probe.error);
     assert!(
         probe.warnings.iter().any(|w| w.code == "gateway_access_required"),

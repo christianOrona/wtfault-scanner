@@ -25,9 +25,9 @@
 //! # What stops a write, and what does not
 //!
 //! Writes are implemented and enabled. `config.write_feature` is L2, which
-//! [`aim_safety::MAX_ENABLED_LEVEL`] permits, behind a typed confirmation that
-//! must name a human — the agent is registered with read-only tools and cannot
-//! reach it.
+//! [`aim_safety::MAX_ENABLED_LEVEL`] permits, behind a person's approval of that
+//! one change, which only the approval desk can make — the agent is registered
+//! with read-only tools and cannot reach it.
 //!
 //! What remains between a person and a change is deliberately two different
 //! kinds of obstacle, and the interface must never blur them:

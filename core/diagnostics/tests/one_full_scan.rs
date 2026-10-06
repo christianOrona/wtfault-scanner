@@ -8,11 +8,12 @@
 use aim_adapter::{DiagnosticAdapter, Elm327Adapter, Elm327Config};
 use aim_decoders::DecoderSet;
 use aim_diagnostics::DiagnosticService;
-use aim_safety::SafetyGate;
 use aim_session::SessionStore;
 use aim_simulator::{ScenarioId, SimulatedTransport};
 use aim_types::EventKind;
 use std::sync::Arc;
+
+mod common;
 
 const PERSON: &str = "user:api";
 const ASSISTANT: &str = "agent:agent";
@@ -25,7 +26,7 @@ fn connected() -> DiagnosticService {
         adapter,
         SessionStore::open_in_memory().unwrap(),
         Arc::new(DecoderSet::generic_obd().unwrap()),
-        SafetyGate::phase1(),
+        common::gate(),
         None,
     )
     .unwrap();
@@ -116,7 +117,7 @@ fn a_scan_from_before_codes_were_cleared_is_not_handed_on() {
     assert!(service.scan_all_modules(PERSON).success);
 
     // Refused or not, an attempt to clear ends the scan's standing.
-    let _ = service.clear_dtcs(None, PERSON, Some("CLEAR"));
+    let _ = service.clear_dtcs(None, PERSON, common::approve_clear(None));
     assert!(service.last_full_scan().is_none());
 
     let before = asked(&service);
@@ -182,7 +183,7 @@ fn a_failed_scan_is_not_kept() {
         adapter,
         SessionStore::open_in_memory().unwrap(),
         Arc::new(DecoderSet::generic_obd().unwrap()),
-        SafetyGate::phase1(),
+        common::gate(),
         None,
     )
     .unwrap();
