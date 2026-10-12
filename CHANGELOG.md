@@ -3,7 +3,24 @@
 Notable changes, newest first. Versions follow [semantic versioning](https://semver.org),
 with the caveat that everything below 1.0 is allowed to move.
 
-## [Unreleased]
+## [0.7.0] — 2026-10-12
+
+Two things. The app is harder to make do something you did not ask for, and it
+understands a car that is not a Ford better than it did.
+
+Changing a setting or clearing codes now takes an approval the app itself
+issues for that one change, a signal file from the community can only ever
+describe a read, and the app answers this computer and nothing else. A 2023
+Honda Odyssey had its first real scan, and what that found is fixed: a minute
+lost on a bus the car does not have, and a coolant temperature that was there
+all along on a reading the app never asked for. The app also reads which
+software a module runs, and can tell you whether a file you have is that
+software.
+
+The newer readings are marked unverified until they have been checked on a
+car, and the Odyssey fixes have only met the virtual one. If you call the
+local API yourself, the four routes that change a vehicle take an `approval`
+where they took a `confirmation`; `docs/API.md` has the new shapes.
 
 ### Added
 

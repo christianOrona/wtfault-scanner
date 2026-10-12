@@ -52,6 +52,12 @@ as a chore for later.
 `docs/HANDOFF.md` is the original specification, not a worklog. It has not
 changed since the initial commit and a release does not touch it.
 
+**Read the README against what this release contains.** Its download button
+leads to the latest release, and it is edited on `main` between releases, so
+it can describe something the download does not have yet (#67). This is the
+one moment it can be made true: anything it says "arrives with the next
+release" either arrives now and loses those words, or still does not.
+
 ## 4. Bump the version — in more places than you think
 
 **Four files CI cross-checks.** The workflow refuses to build if these disagree

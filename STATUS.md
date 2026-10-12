@@ -240,9 +240,23 @@ removed, not yet against the 2012 truck.
 
 ## What is built
 
-- **Configuration writes**, behind a typed confirmation, the full precondition
-  list, and mandatory read-back verification. A module answering "accepted" is
-  not treated as a changed setting.
+- **Configuration writes**, behind an approval the core issues for one
+  specific change, the full precondition list, and mandatory read-back
+  verification. A module answering "accepted" is not treated as a changed
+  setting, and a write whose outcome could not be read is reported as not
+  known rather than as failed.
+- **Nothing reaches the vehicle as a write without the safety gate's
+  authorization for exactly that.** Every request passes one place that lets
+  reads through by service and refuses anything else that does not carry it.
+  A community signal file can only describe reads, and the API answers
+  requests from this computer only. Tested against the simulator and by
+  switching each guard off in turn; the read-back retries have not run on a
+  real module.
+- **A reading is taken from the PID the engine has it on.** Coolant
+  temperature, intake air temperature and air flow asked for by their older
+  names are read from the newer PIDs on an engine that has only those, for
+  live data, the assistant and guided tests alike. On the virtual Odyssey
+  only.
 - **Reading a feature's current setting**, including the case where no mapping
   exists — which reports what is known, what is not, and the four steps that
   would establish the rest.
