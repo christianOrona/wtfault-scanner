@@ -2,7 +2,7 @@
 #
 # Byte names follow the SAE convention: A is the first payload byte after the
 # echoed PID, B the second, and so on.
-version: 6
+version: 7
 source: "SAE J1979 generic OBD-II service 01"
 service: 1
 pids:
@@ -830,10 +830,16 @@ pids:
   # the older PIDs alone this vehicle has no coolant temperature at all.
   #
   # Each starts with a byte saying which sensors are fitted, then one value
-  # per sensor. Only the first sensor is decoded: the file format gives a
-  # numeric PID one value. Layouts are SAE J1979 as the public PID tables give
-  # them, from one source, and stay unverified until read on a vehicle and
-  # checked against something else that vehicle says.
+  # per sensor. A sensor is decoded only when that byte says it is there:
+  # the Odyssey's coolant reply was 03 7F 61, two sensors at 87 and 57 degC,
+  # and its intake air reply 01 64 00 00 00 00 00, one sensor and placeholders.
+  # Layouts are SAE J1979 as the public PID tables give them, from one source,
+  # and stay unverified until read on a vehicle and checked against something
+  # else that vehicle says.
+  #
+  # `stands_in_for` names the older signal each carries the same reading as.
+  # Whatever asks for that one is given this instead on a module that lists
+  # this PID and not the older one.
   - pid: 0x66
     signal_id: maf_sensor_a
     name: "Mass air flow, sensor A (UNVERIFIED)"
@@ -843,6 +849,15 @@ pids:
     formula: "(256 * B + C) / 32"
     range: { min: 0, max: 2047.97 }
     verification: unverified
+    present_when: { byte: 0, bit: 0 }
+    stands_in_for: maf_rate
+    derived:
+      - signal_id: maf_sensor_b
+        name: "Mass air flow, sensor B (UNVERIFIED)"
+        formula: "(256 * D + E) / 32"
+        unit: "g/s"
+        range: { min: 0, max: 2047.97 }
+        present_when: { byte: 0, bit: 1 }
 
   - pid: 0x67
     signal_id: coolant_temp_sensor_1
@@ -853,6 +868,15 @@ pids:
     formula: "B - 40"
     range: { min: -40, max: 215 }
     verification: unverified
+    present_when: { byte: 0, bit: 0 }
+    stands_in_for: coolant_temp
+    derived:
+      - signal_id: coolant_temp_sensor_2
+        name: "Engine coolant temperature, sensor 2 (UNVERIFIED)"
+        formula: "C - 40"
+        unit: "degC"
+        range: { min: -40, max: 215 }
+        present_when: { byte: 0, bit: 1 }
 
   - pid: 0x68
     signal_id: intake_air_temp_sensor_1
@@ -863,6 +887,8 @@ pids:
     formula: "B - 40"
     range: { min: -40, max: 215 }
     verification: unverified
+    present_when: { byte: 0, bit: 0 }
+    stands_in_for: intake_air_temp
 
   # The odometer, as the engine controller reports it: four bytes, tenths of a
   # kilometre. The one reading here a person can check exactly, against the

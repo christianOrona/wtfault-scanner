@@ -46,6 +46,27 @@ pub struct FlagDef {
     pub bit: u8,
 }
 
+/// The bit in a reply that says whether a value is there to read.
+///
+/// The newer service 01 PIDs open with a byte saying which of their sensors
+/// are fitted, and carry a placeholder where one is not. Decoded without
+/// looking, a sensor that does not exist reads -40 degC.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PresenceBit {
+    /// Payload byte index.
+    pub byte: usize,
+    /// Bit position, 0 = least significant.
+    pub bit: u8,
+}
+
+impl PresenceBit {
+    /// Whether `payload` says the value is there. A reply too short to carry
+    /// the bit does not say so.
+    pub fn is_set(&self, payload: &[u8]) -> bool {
+        payload.get(self.byte).is_some_and(|b| b & (1 << self.bit) != 0)
+    }
+}
+
 /// An extra numeric signal computed from the same payload.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DerivedDef {
@@ -61,6 +82,9 @@ pub struct DerivedDef {
     /// Declared plausible range.
     #[serde(default)]
     pub range: Option<ValidRange>,
+    /// The bit that says this value is in the reply. Absent means always.
+    #[serde(default)]
+    pub present_when: Option<PresenceBit>,
 }
 
 /// A PID definition as it appears in a data file.
@@ -108,6 +132,17 @@ pub struct PidDefinition {
     /// Record width for `ascii` / `hex_records` PIDs.
     #[serde(default)]
     pub record_width: Option<usize>,
+    /// The bit that says a `numeric` PID's own value is in the reply. Absent
+    /// means always.
+    #[serde(default)]
+    pub present_when: Option<PresenceBit>,
+    /// The signal this one carries the same reading as, on an older PID.
+    ///
+    /// A 2023 Honda Odyssey has no PID 05: its coolant temperature is on 67
+    /// alone. Whatever asks for `coolant_temp` is given this instead on a
+    /// module that lists this PID and not that one.
+    #[serde(default)]
+    pub stands_in_for: Option<String>,
 }
 
 /// The top-level shape of a PID data file.
@@ -270,6 +305,15 @@ impl PidRegistry {
         self.by_signal_id.get(signal_id).copied()
     }
 
+    /// The signals that carry the same reading as `signal_id` on another
+    /// PID, in service and PID order.
+    pub fn stand_ins_for(&self, signal_id: &str) -> Vec<&CompiledPid> {
+        self.by_service_pid
+            .values()
+            .filter(|c| c.def.stands_in_for.as_deref() == Some(signal_id))
+            .collect()
+    }
+
     /// Every definition for a service, in PID order.
     pub fn for_service(&self, service: u8) -> Vec<&CompiledPid> {
         self.by_service_pid.iter().filter(|((s, _), _)| *s == service).map(|(_, v)| v).collect()
@@ -324,16 +368,30 @@ impl PidRegistry {
         let mut out = Vec::new();
         match c.def.kind {
             PidKind::Numeric => {
-                let f = c.formula.as_ref().expect("checked at load time");
-                let v = f.eval(payload)?;
-                out.push(DecodedValue::new(
-                    c.def.signal_id.clone(),
-                    c.def.name.clone(),
-                    Value::Number(round6(v)),
-                    c.def.unit.clone(),
-                    c.def.range,
-                    prov(payload),
-                ));
+                if c.def.present_when.is_none_or(|bit| bit.is_set(payload)) {
+                    let f = c.formula.as_ref().expect("checked at load time");
+                    let v = f.eval(payload)?;
+                    out.push(DecodedValue::new(
+                        c.def.signal_id.clone(),
+                        c.def.name.clone(),
+                        Value::Number(round6(v)),
+                        c.def.unit.clone(),
+                        c.def.range,
+                        prov(payload),
+                    ));
+                }
+                derived_values(c, payload, &prov, &mut out)?;
+                // The module answered, and said none of these sensors is
+                // fitted. That is not a reading of whatever the placeholder
+                // bytes would scale to.
+                if out.is_empty() {
+                    return Err(AimError::no_data(format!(
+                        "the module answers PID {pid:02X} and reports that {} is not fitted: {}",
+                        c.def.name,
+                        hex(payload)
+                    ))
+                    .with_provenance(prov(payload)));
+                }
             }
             PidKind::SupportedPids => {
                 let pids = aim_protocols::obd2::decode_supported_pids(pid, payload)?;
@@ -368,17 +426,7 @@ impl PidRegistry {
                     None,
                     prov(payload),
                 ));
-                for (d, f) in &c.derived {
-                    let v = f.eval(payload)?;
-                    out.push(DecodedValue::new(
-                        d.signal_id.clone(),
-                        d.name.clone(),
-                        Value::Number(round6(v)),
-                        d.unit.clone(),
-                        d.range,
-                        prov(payload),
-                    ));
-                }
+                derived_values(c, payload, &prov, &mut out)?;
             }
             PidKind::Enum => {
                 let idx = c.def.enum_byte.unwrap_or(0);
@@ -462,6 +510,31 @@ impl PidRegistry {
         }
         Ok(out)
     }
+}
+
+/// The extra signals a definition computes from the same payload, leaving
+/// out any the reply says are not there.
+fn derived_values(
+    c: &CompiledPid,
+    payload: &[u8],
+    prov: &dyn Fn(&[u8]) -> Provenance,
+    out: &mut Vec<DecodedValue>,
+) -> AimResult<()> {
+    for (d, f) in &c.derived {
+        if d.present_when.is_some_and(|bit| !bit.is_set(payload)) {
+            continue;
+        }
+        let v = f.eval(payload)?;
+        out.push(DecodedValue::new(
+            d.signal_id.clone(),
+            d.name.clone(),
+            Value::Number(round6(v)),
+            d.unit.clone(),
+            d.range,
+            prov(payload),
+        ));
+    }
+    Ok(())
 }
 
 /// Round to six decimal places so serialized values do not carry float noise.
@@ -729,5 +802,75 @@ pids:
         let n = r.load_dir(&dir).unwrap();
         assert_eq!(n, 2);
         assert_eq!(r.len(), registry().len(), "disk and embedded copies agree");
+    }
+
+    /// The replies a 2023 Honda Odyssey's engine gave on 2026-10-04, from its
+    /// recorded session. Its coolant reply names two sensors and its intake
+    /// air reply one, with placeholders where the others would be.
+    #[test]
+    fn a_sensor_is_decoded_only_when_the_reply_says_it_is_fitted() {
+        let r = registry();
+        let ts = aim_types::now();
+        let read = |pid: u8, payload: &[u8]| -> Vec<(String, Value)> {
+            r.decode(1, pid, payload, ts)
+                .unwrap()
+                .into_iter()
+                .map(|v| (v.signal_id, v.value))
+                .collect()
+        };
+
+        assert_eq!(
+            read(0x67, &[0x03, 0x7F, 0x61]),
+            [
+                ("coolant_temp_sensor_1".to_string(), Value::Number(87.0)),
+                ("coolant_temp_sensor_2".to_string(), Value::Number(57.0)),
+            ]
+        );
+        assert_eq!(
+            read(0x68, &[0x01, 0x64, 0, 0, 0, 0, 0]),
+            [("intake_air_temp_sensor_1".to_string(), Value::Number(60.0))]
+        );
+        assert_eq!(
+            read(0x66, &[0x01, 0x00, 0x98, 0x00, 0x00]),
+            [("maf_sensor_a".to_string(), Value::Number(4.75))],
+            "sensor B is not fitted, so its zero bytes are not a reading of no air"
+        );
+
+        // The second sensor alone, and none at all.
+        assert_eq!(
+            read(0x67, &[0x02, 0x00, 0x61]),
+            [("coolant_temp_sensor_2".to_string(), Value::Number(57.0))]
+        );
+        let none = r.decode(1, 0x67, &[0x00, 0x00, 0x00], ts).unwrap_err();
+        assert_eq!(none.code, ErrorCode::NoData, "not -40 degC: {}", none.message);
+    }
+
+    /// A stand-in is handed to whatever asked for the older signal, so it has
+    /// to be the same quantity in the same unit.
+    #[test]
+    fn every_stand_in_names_a_signal_with_its_own_unit() {
+        let r = registry();
+        let mut found = Vec::new();
+        for c in r.by_service_pid.values() {
+            let Some(older) = c.def.stands_in_for.as_deref() else { continue };
+            let target = r.by_signal(older).unwrap_or_else(|| {
+                panic!("{} stands in for {older}, which does not exist", c.def.signal_id)
+            });
+            assert_eq!(target.def.unit, c.def.unit, "{} for {older}", c.def.signal_id);
+            assert_eq!(r.address_of(older).unwrap().0, 1);
+            found.push((older.to_string(), c.def.signal_id.clone()));
+        }
+        assert!(
+            found.contains(&("coolant_temp".into(), "coolant_temp_sensor_1".into())),
+            "{found:?}"
+        );
+
+        let ids = |signal: &str| -> Vec<&str> {
+            r.stand_ins_for(signal).iter().map(|c| c.def.signal_id.as_str()).collect()
+        };
+        assert_eq!(ids("coolant_temp"), ["coolant_temp_sensor_1"]);
+        assert_eq!(ids("intake_air_temp"), ["intake_air_temp_sensor_1"]);
+        assert_eq!(ids("maf_rate"), ["maf_sensor_a"]);
+        assert!(ids("engine_rpm").is_empty());
     }
 }
