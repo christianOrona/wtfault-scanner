@@ -158,9 +158,9 @@ impl Scenario {
                 // Everything comfortably inside its limits, so the monitor
                 // panel has a "nothing to say" case to render.
                 monitor_tests: vec![
-                    SimMonitorTest::new(0x71, 0x80, 0x24, 30, 0, 200),
-                    SimMonitorTest::new(0x86, 0x80, 0x1A, 4, 0, 40),
-                    SimMonitorTest::new(0x86, 0x81, 0x24, 120, 0, 900),
+                    SimMonitorTest::new(0x98, 0x80, 0x24, 30, 0, 200),
+                    SimMonitorTest::new(0xB0, 0x80, 0x1A, 4, 0, 40),
+                    SimMonitorTest::new(0xB0, 0x81, 0x24, 120, 0, 900),
                 ],
             },
             ScenarioId::DpfRegen => {
@@ -189,7 +189,7 @@ impl Scenario {
                     ],
                     vehicle_answers: true,
                     freeze_frame: Some(ff),
-                    // The point of this set: MID 0x86 test 0x80 is *passing*,
+                    // The point of this set: MID 0xB0 test 0x80 is *passing*,
                     // so no code exists for it, yet it sits at 38 of a 40-count
                     // limit. That is the reading service 06 exists to give and
                     // that a code reader cannot. Test 0x82 has actually failed,
@@ -198,9 +198,9 @@ impl Scenario {
                     // where an unnamed monitor is still reported by number with
                     // its verdict intact.
                     monitor_tests: vec![
-                        SimMonitorTest::new(0x71, 0x80, 0x24, 96, 0, 200),
-                        SimMonitorTest::new(0x86, 0x80, 0x1A, 38, 0, 40),
-                        SimMonitorTest::new(0x86, 0x82, 0x24, 940, 0, 900),
+                        SimMonitorTest::new(0x98, 0x80, 0x24, 96, 0, 200),
+                        SimMonitorTest::new(0xB0, 0x80, 0x1A, 38, 0, 40),
+                        SimMonitorTest::new(0xB0, 0x82, 0x24, 940, 0, 900),
                         SimMonitorTest::new(0xC4, 0x80, 0xFE, 12, 0, 100),
                     ],
                 }

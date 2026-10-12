@@ -3,6 +3,19 @@
 Notable changes, newest first. Versions follow [semantic versioning](https://semver.org),
 with the caveat that everything below 1.0 is allowed to move.
 
+## [Unreleased]
+
+### Fixed
+
+- **Self-tests are called what they are.** The table that names each of the
+  car's self-tests was wrong for most of them: a petrol Honda's fuel system
+  tests were shown as diesel NOx tests, a fuel vapour leak check as valve
+  timing, and an oxygen sensor heater as purge flow. Whether a test passed, and
+  how close it was to its limit, were always right; the name beside it often
+  was not. The names now follow the standard, and oxygen sensor heaters,
+  valve timing, secondary air and banks 3 and 4 are named where they were
+  listed by number.
+
 ## [0.7.0] — 2026-10-12
 
 Two things. The app is harder to make do something you did not ask for, and it

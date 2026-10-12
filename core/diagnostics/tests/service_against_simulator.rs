@@ -547,7 +547,7 @@ fn monitor_tests_report_the_measured_value_against_the_vehicles_own_limit() {
 
     let near = monitors
         .iter()
-        .find(|m| m["mid"] == 0x86 && m["tid"] == 0x80)
+        .find(|m| m["mid"] == 0xB0 && m["tid"] == 0x80)
         .expect("the marginal particulate filter test");
     assert_eq!(near["passed"], true, "still inside its limits");
     assert!(near["margin"].as_f64().unwrap() < 0.10, "and within a tenth of them: {near:?}");
@@ -555,7 +555,7 @@ fn monitor_tests_report_the_measured_value_against_the_vehicles_own_limit() {
 
     let failed = monitors
         .iter()
-        .find(|m| m["mid"] == 0x86 && m["tid"] == 0x82)
+        .find(|m| m["mid"] == 0xB0 && m["tid"] == 0x82)
         .expect("the failing particulate filter test");
     assert_eq!(failed["passed"], false);
 

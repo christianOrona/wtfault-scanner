@@ -94,6 +94,20 @@ results were read from the engine. What it showed that the truck could not:
 The owner read 27,224 on the odometer that day, which is what PID A6 will be
 checked against.
 
+### Self-tests were shown under the wrong names
+
+Found at a desk on 2026-10-12, from the Odyssey's recording. Its engine reports
+self-test results at 01, 02, 05, 06, 21, 22, 31, 35, 36, 3A, 3C, 3D, 81, 82
+and A2 to A7: a petrol V6's oxygen sensors, catalysts, valve timing, vapour
+leak checks, fuel system and six cylinders. The table this build shipped
+called 3A valve timing, 3D a filler-cap leak check, 81 and 82 NOx
+aftertreatment, and had no name for 35 or 36. It had been wrong from 39
+upward since the first commit, and the simulator had been written to match it.
+
+**Fixed.** The names follow SAE J1979 as python-OBD lists them, which is what
+the Odyssey's own set of ids fits. Pass, fail and margin never used the name
+and were not affected. Not looked at on a vehicle since.
+
 ### Certain PIDs time out repeatedly and we keep asking
 
 `0121`, `011C` and `011F` each hit the 6-second request ceiling, across ~1,350

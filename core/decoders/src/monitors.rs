@@ -246,6 +246,24 @@ mod tests {
         // Sanity: the SAE-defined range is present rather than an empty file
         // silently loading.
         assert!(c.known_monitors() >= 30, "only {} monitors", c.known_monitors());
-        assert_eq!(c.interpret(&test(0x86, 0x01, 1, 0, 2)).name, "Particulate filter, bank 1");
+        assert_eq!(c.interpret(&test(0xB0, 0x01, 1, 0, 2)).name, "Particulate filter, bank 1");
+        // The ids a 2023 Honda Odyssey reported, a petrol V6. This table once
+        // called its fuel system tests NOx aftertreatment.
+        for (mid, name) in [
+            (0x05, "Oxygen sensor, bank 2 sensor 1"),
+            (0x22, "Catalytic converter, bank 2"),
+            (0x36, "Variable valve timing, bank 2"),
+            (0x3A, "Fuel vapour leak check (0.090 inch)"),
+            (0x3C, "Fuel vapour leak check (0.020 inch)"),
+            (0x3D, "Fuel vapour purge flow"),
+            (0x41, "Oxygen sensor heater, bank 1 sensor 1"),
+            (0x82, "Fuel system, bank 2"),
+            (0x86, "Boost pressure control, bank 2"),
+            (0xA7, "Misfire, cylinder 6"),
+        ] {
+            assert_eq!(c.interpret(&test(mid, 0x01, 1, 0, 2)).name, name, "{mid:02X}");
+        }
+        // A list of supported ids is not a monitor.
+        assert!(c.interpret(&test(0x40, 0x01, 1, 0, 2)).unknown_monitor);
     }
 }
