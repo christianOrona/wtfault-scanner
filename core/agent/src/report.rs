@@ -167,6 +167,26 @@ pub struct Finding {
 }
 
 impl Finding {
+    /// The trouble codes this finding names, in the order it names them.
+    ///
+    /// From the title, the explanation and the evidence lines, which is where
+    /// a model writes them. Used to say roughly where the finding is: that is
+    /// read from the codes it cites and never asked of the model.
+    pub fn cited_codes(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        let texts = [self.title.as_str(), self.plain_english.as_str()]
+            .into_iter()
+            .chain(self.evidence.iter().map(String::as_str));
+        for text in texts {
+            for code in extract_codes(text) {
+                if !out.contains(&code) {
+                    out.push(code);
+                }
+            }
+        }
+        out
+    }
+
     /// Whether this finding rests on something actually read from the vehicle.
     pub fn is_evidenced(&self) -> bool {
         self.source == Source::Measured && !self.evidence_refs.is_empty()

@@ -1,0 +1,163 @@
+# The kinds of part a finding can be about: what one looks like, and roughly
+# where on a vehicle to look for it.
+#
+# What this is, and is not. Each entry describes a KIND of part, the way a
+# parts counter would describe it to somebody who has never seen one. It is
+# true of that kind of part on every vehicle. It is not a description of the
+# part on any particular vehicle: this project has part locations and part
+# pictures for no vehicle, and will not invent one. So `zone` is one of the
+# coarse areas in `aim_decoders::Region`, and `find_it` says only what follows
+# from what the part is for ("screwed into the exhaust pipe"), never how one
+# manufacturer laid a vehicle out.
+#
+# What points at a part:
+#
+#   codes     generic SAE J2012 trouble codes, singly ("P0457") or as an
+#             inclusive range ("P0130-P0167"). Only ranges the standard gives
+#             to one kind of part. A code whose subject could be several parts
+#             is not listed: a misfire is not a spark plug, and a lean mixture
+#             is not an air flow sensor. Manufacturer-specific codes are never
+#             matched, whatever their number.
+#   monitors  service 06 monitor ids from `monitors/mode06.yaml`, in hex,
+#             singly or as a range.
+#
+# `sketch` names the drawing the interface uses, where a part shares one with
+# another entry. Without it the drawing is the entry's own `id`, and an id
+# with no drawing is shown in words alone.
+#
+# Rules for writing `looks_like`: size it against something in a kitchen or a
+# hand, say what it is made of, and say what is attached to it, because the
+# wire or the hose is usually how somebody finds it.
+
+version: 1
+
+parts:
+  # ---- exhaust ---------------------------------------------------------------
+  - id: oxygen_sensor
+    name: "Oxygen sensor"
+    zone: exhaust
+    looks_like: "A metal plug about the size of your thumb, with a hex nut around its middle, screwed into the exhaust pipe. A wire one or two hand-lengths long comes out of its back and ends in a plastic plug."
+    find_it: "Screwed into the exhaust pipe. Sensor 1 is before the catalytic converter, close to the engine; sensor 2 is after it, further back under the vehicle. A V engine has a set on each side."
+    codes: ["P0030-P0064", "P0130-P0167"]
+    monitors: ["01-10", "41-50"]
+
+  - id: nox_sensor
+    name: "NOx sensor"
+    zone: exhaust
+    sketch: oxygen_sensor
+    looks_like: "Like an oxygen sensor: a thumb-sized metal plug screwed into the exhaust pipe. Its wire runs to a small sealed box, about the size of a matchbox, fixed to the underside nearby."
+    find_it: "Screwed into the exhaust pipe of a diesel, before or after the last catalyst, with its small control box bolted to the body close by."
+    codes: ["P2200-P2213"]
+
+  - id: catalytic_converter
+    name: "Catalytic converter"
+    zone: exhaust
+    looks_like: "A metal canister built into the exhaust pipe, round or oval and about the size of a loaf of bread, usually wrapped in a thin heat shield. There is an oxygen sensor in the pipe on each side of it."
+    find_it: "In the exhaust, the first large canister after the engine. On many vehicles it is bolted almost directly to the engine; on others it is under the floor."
+    codes: ["P0420-P0439"]
+    monitors: ["21-24", "61-64"]
+
+  - id: particulate_filter
+    name: "Diesel particulate filter"
+    zone: exhaust
+    looks_like: "A large metal canister in the exhaust of a diesel, longer than a catalytic converter, with two thin metal pipes leaving it and running to a small pressure sensor mounted somewhere cooler."
+    find_it: "In the exhaust of a diesel, after the first catalyst and before the silencer. Usually under the floor, sometimes close to the engine."
+    codes: ["P2002-P2003", "P242F", "P2452-P2456", "P2458-P2459", "P2463"]
+    monitors: ["B0-B1"]
+
+  # ---- engine bay ------------------------------------------------------------
+  - id: egr_valve
+    name: "Exhaust gas recirculation (EGR) valve"
+    zone: engine_bay
+    looks_like: "A metal valve about the size of a fist, bolted to the engine, with a metal pipe coming from the exhaust on one side and an electrical plug or a small vacuum hose on top."
+    find_it: "On the engine, between the exhaust side and the air intake. Follow the thin metal pipe that leaves the exhaust manifold."
+    codes: ["P0400-P0409"]
+    monitors: ["31-34"]
+
+  - id: mass_air_flow_sensor
+    name: "Air flow sensor"
+    zone: engine_bay
+    looks_like: "A short plastic tube or a small plastic block pushed into the side of the air intake pipe, with an electrical plug on it. Inside is a fine wire or a tiny chip that the air blows across."
+    find_it: "In the big plastic air pipe between the air filter box and the engine, usually right at the air filter box."
+    codes: ["P0100-P0104"]
+
+  - id: throttle_body
+    name: "Throttle body"
+    zone: engine_bay
+    looks_like: "A metal ring about the size of a fist with a round brass or steel flap inside it, and a small electric motor in a plastic housing on its side."
+    find_it: "Where the big air intake pipe meets the engine."
+    codes: ["P0120-P0124", "P2100-P2112", "P2135"]
+
+  - id: coolant_temp_sensor
+    name: "Coolant temperature sensor"
+    zone: engine_bay
+    looks_like: "A small brass or plastic plug, about the size of the end of your finger, with a two-pin electrical plug on top. It is screwed into the engine where coolant flows."
+    find_it: "Screwed into the engine or into the coolant housing where the top radiator hose joins it."
+    codes: ["P0115-P0119"]
+
+  - id: thermostat
+    name: "Thermostat"
+    zone: engine_bay
+    looks_like: "A brass and steel disc about the size of a jam-jar lid with a spring in its middle. You do not see it from outside: it sits inside a metal or plastic housing that a radiator hose clamps onto."
+    find_it: "Inside the housing where one of the two big radiator hoses joins the engine."
+    codes: ["P0125-P0128"]
+
+  - id: ignition_coil
+    name: "Ignition coil"
+    zone: engine_bay
+    looks_like: "A black plastic block about the size of a marker pen's box, with an electrical plug on top and a long rubber boot underneath that pushes down over a spark plug. There is normally one per cylinder, in a row."
+    find_it: "On top of the engine, one over each spark plug, often under a plastic engine cover."
+    codes: ["P0350-P0362", "P2300-P2335"]
+
+  - id: fuel_injector
+    name: "Fuel injector"
+    zone: engine_bay
+    looks_like: "A metal and plastic cylinder about the size of your little finger, with an electrical plug on its side. One per cylinder, each pushed into the engine at one end and into a shared metal fuel pipe at the other."
+    find_it: "In a row along the engine, between the shared fuel pipe (the rail) and the engine itself."
+    codes: ["P0200-P0212", "P0261-P0296"]
+
+  - id: position_sensor
+    name: "Crankshaft or camshaft position sensor"
+    zone: engine_bay
+    looks_like: "A plastic stub about the size of your thumb with a single bolt through a tab on its side and an electrical plug on the end. It pokes into the engine through a small round hole."
+    find_it: "Bolted into the engine. A crankshaft sensor is low down, near where the engine meets the gearbox or behind the bottom pulley; a camshaft sensor is high up, near the top of the engine."
+    codes: ["P0335-P0349"]
+
+  - id: turbocharger
+    name: "Turbocharger and boost control"
+    zone: engine_bay
+    looks_like: "A metal snail shell, in fact two joined back to back, each about the size of a grapefruit. One half is in the exhaust and gets very hot; the other feeds a large hose to the engine's air intake."
+    find_it: "Bolted to the exhaust side of the engine, with large air hoses running to and from it."
+    codes: ["P0234-P0250", "P0299"]
+    monitors: ["85-86"]
+
+  # ---- fuel and vapour -------------------------------------------------------
+  - id: evap_system
+    name: "Fuel vapour system (canister, valves and hoses)"
+    zone: fuel_system
+    looks_like: "A black plastic box about the size of a shoebox, the charcoal canister, with several rubber hoses on it and one or two small electric valves the size of a film canister."
+    find_it: "The canister is usually near the fuel tank, under the rear of the vehicle. One of its valves, the purge valve, is in the engine bay on a thin hose to the air intake."
+    codes: ["P0440-P0456", "P0458-P0459"]
+    monitors: ["39-3D"]
+
+  - id: fuel_cap
+    name: "Fuel filler cap"
+    zone: fuel_system
+    looks_like: "The cap you take off to fill up, or on a capless filler the spring flap just inside the filler neck. It has a rubber ring that has to seal."
+    find_it: "Behind the fuel filler door."
+    codes: ["P0457"]
+
+  - id: fuel_level_sender
+    name: "Fuel level sender"
+    zone: fuel_system
+    looks_like: "A float on a thin metal arm, like the one in a toilet cistern, attached to the fuel pump assembly inside the tank. You see only the round plate on top of the tank that it hangs from."
+    find_it: "Inside the fuel tank, under a round plate on top of it. Often reached through a panel under the rear seat."
+    codes: ["P0460-P0464"]
+
+  # ---- electrical ------------------------------------------------------------
+  - id: battery
+    name: "Battery and charging"
+    zone: electrical
+    looks_like: "The battery is a heavy plastic box about the size of a shoebox with two thick cables bolted to it. The alternator that charges it is a round metal unit about the size of a small melon, driven by the belt on the front of the engine."
+    find_it: "The battery is usually in a corner of the engine bay, sometimes in the boot or under a seat. The alternator is on the front of the engine, on the belt."
+    codes: ["P0560-P0563"]

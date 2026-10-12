@@ -36,6 +36,12 @@ function finding(f: Finding, i: number): string {
   ];
   if (f.evidence?.length) lines.push(`   Evidence: ${f.evidence.join("; ")}`);
   if (f.what_to_do) lines.push(`   What to do: ${f.what_to_do}`);
+  // Words only, and marked as general: a mechanic reading this knows where a
+  // catalytic converter is, and the person forwarding it may not.
+  if (f.location?.part) {
+    lines.push(`   The part: ${f.location.part.name}. ${f.location.part.looks_like}`);
+    lines.push(`   Where to look (any vehicle, not measured on this one): ${f.location.part.find_it}`);
+  }
   if (f.estimated_cost) {
     lines.push(
       `   Rough cost: ${f.estimated_cost.currency} ${Math.round(f.estimated_cost.low)}-${Math.round(

@@ -24,6 +24,7 @@ import { ModuleProbeCard } from "./ModuleProbeCard";
 import { MonitorTestsCard } from "./MonitorTestsCard";
 import { ReadinessCard } from "./ReadinessCard";
 import { PaneIntro } from "../explain";
+import { WhereItIs } from "./WhereItIs";
 
 /**
  * The verdict, said the way the reader needs to hear it.
@@ -626,6 +627,14 @@ function FindingCard({
         <div style={{ marginTop: 8 }}>
           <span className="faint">What to do: </span>
           {finding.what_to_do}
+        </div>
+      )}
+
+      {/* From the code the finding cites, by the app's own tables. The model
+          did not say where this is and was not asked. */}
+      {finding.location && (
+        <div style={{ marginTop: 10 }}>
+          <WhereItIs placed={finding.location} what={finding.title} />
         </div>
       )}
 

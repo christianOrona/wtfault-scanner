@@ -1277,6 +1277,29 @@ places it: `engine_bay`, `exhaust`, `fuel_system`, `transmission`, `cabin`,
 codes. A zone, never a part location: a catalyst fault is in the exhaust on every
 vehicle ever built, and this project has part locations for none.
 
+`part` is the kind of part the code is about, when the standard gives the code
+to one, and `null` otherwise:
+
+```json
+{ "id": "particulate_filter", "name": "Diesel particulate filter", "zone": "exhaust",
+  "looks_like": "A large metal canister in the exhaust of a diesel, ...",
+  "find_it": "In the exhaust of a diesel, after the first catalyst ...",
+  "sketch": null }
+```
+
+It describes that kind of part on any vehicle, never the one on this vehicle.
+A code whose cause could be several parts has none: a misfire is not a spark
+plug. `sketch` names another part's drawing where two share one. The table is
+`vehicle-profiles/generic-obd/parts.yaml`.
+
+The same two fields, `region` and `part`, are on every fault in a full scan
+(read from its `base_code`) and on every self-test result in
+`GET /modules/{key}/monitor-tests`. In an inspection report each finding and watch
+item carries `location`: `{ "code", "region", "part" }` for the first trouble
+code it cites that the standard places, or `null`. The core adds it after the
+report is checked. The model is not asked where anything is, and a `location`
+it writes is not kept.
+
 A service the module did not answer, or refused, produces
 `dtc_service_unanswered` rather than being read as "no codes".
 

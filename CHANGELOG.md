@@ -5,7 +5,32 @@ with the caveat that everything below 1.0 is allowed to move.
 
 ## [Unreleased]
 
+### Added
+
+- **See what the part is and where to look.** When the app says something is
+  failing or close to it, it now shows a drawing of that kind of part, what it
+  looks like in plain words, where to look for it, and the area of the vehicle
+  it is in. An exhaust filter code comes with a picture of an exhaust filter
+  and the exhaust picked out on the outline of your vehicle. It appears under
+  the codes on *Codes*, beside a self-test that is failing or wearing out,
+  on each fault in a *Full scan*, and on each finding in an AI inspection,
+  and the saved report says it in words.
+- **Seventeen kinds of part,** among them oxygen sensors, the catalytic
+  converter, the particulate filter, the EGR valve, ignition coils, injectors,
+  the thermostat, the turbocharger, the fuel vapour system and the fuel cap.
+  A code that could be several parts, such as a misfire, shows the area and
+  no part.
+- **What it is not.** The drawing is a typical part, and the area is where
+  that kind of part is on any vehicle. Nobody has measured where it is on
+  yours, and the line under the picture says so. The AI is never asked where
+  a part is: the app reads that from the code.
+
 ### Fixed
+
+- **A fault from a body or chassis module is now placed.** The outline was
+  never offered for a fault found by the full scan, whatever it was.
+- **An oxygen sensor heater fault points at the exhaust,** where the sensor
+  is. It pointed under the bonnet.
 
 - **Self-tests are called what they are.** The table that names each of the
   car's self-tests was wrong for most of them: a petrol Honda's fuel system

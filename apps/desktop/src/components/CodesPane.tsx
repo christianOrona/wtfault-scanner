@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, describeError } from "../api/client";
 import type { ClearResult, Dtc, DtcData, FreezeFrameData, ToolResult } from "../api/types";
-import { VehicleMap } from "./VehicleMap";
+import { WhereItIs, isPlaced } from "./WhereItIs";
 import { ErrorBanner, FailedResult, Spinner, Value, Warnings } from "./primitives";
 import { PaneIntro, useExplain } from "../explain";
 import { saveFile, scanFilename, toCsv, whereSaved } from "./exportFile";
@@ -198,6 +198,20 @@ export function CodesPane({
                 </tbody>
               </table>
             )}
+            {/* "What is that, and where is it?" follows "what is wrong?". One
+                picture per kind of part, under the codes that are about it:
+                three codes about one filter are one filter. Shown without
+                being asked for. It was a button on each row once, and nobody
+                found it. */}
+            {placesOf(dtcs).map((place) => (
+              <div key={place.key} style={{ marginTop: 12 }}>
+                <div className="faint" style={{ fontSize: 12, marginBottom: 4 }}>
+                  <span className="mono">{place.codes.join(", ")}</span>
+                  {place.codes.length === 1 ? " is about this:" : " are about this:"}
+                </div>
+                <WhereItIs placed={place.first} what={place.first.description ?? place.first.code} />
+              </div>
+            ))}
             {result.raw_evidence_ref != null && (
               <div className="provenance">
                 <button className="ev" onClick={() => onEvidence(result.raw_evidence_ref!)}>
@@ -253,14 +267,24 @@ export function CodesPane({
   );
 }
 
-function DtcRow({ dtc }: { dtc: Dtc }) {
-  // "Where is it?" is the question that follows "what is wrong?", and the app
-  // used to answer it with a part name and nothing else. Behind a toggle
-  // because it is a zone rather than a location, and a diagram that opened
-  // itself would be claiming more than it can support.
-  const [showWhere, setShowWhere] = useState(false);
-  const placeable = dtc.region !== "unknown";
+/**
+ * The distinct things a list of codes is about: one entry per kind of part,
+ * or per area of the vehicle where the standard names no one part, with the
+ * codes that point at it. Codes the standard does not place are left out.
+ */
+function placesOf(dtcs: Dtc[]): { key: string; first: Dtc; codes: string[] }[] {
+  const places = new Map<string, { key: string; first: Dtc; codes: string[] }>();
+  for (const dtc of dtcs) {
+    if (!isPlaced(dtc)) continue;
+    const key = dtc.part?.id ?? `zone:${dtc.region}`;
+    const place = places.get(key) ?? { key, first: dtc, codes: [] };
+    if (!place.codes.includes(dtc.code)) place.codes.push(dtc.code);
+    places.set(key, place);
+  }
+  return [...places.values()];
+}
 
+function DtcRow({ dtc }: { dtc: Dtc }) {
   return (
     <>
       <tr>
@@ -272,31 +296,12 @@ function DtcRow({ dtc }: { dtc: Dtc }) {
               Not in the catalog. It decoded structurally as: {dtc.structural_summary ?? "unknown"}
             </span>
           )}
-          {/* Offered only where the standard actually places the subsystem.
-              Most manufacturer-specific codes get no button, because nobody
-              published what they are about. */}
-          {placeable && (
-            <button
-              className="mini"
-              style={{ marginLeft: 8 }}
-              onClick={() => setShowWhere((s) => !s)}
-            >
-              {showWhere ? "Hide" : "Where is it?"}
-            </button>
-          )}
         </td>
         <td className="faint">
           {dtc.is_generic ? "SAE generic" : "manufacturer-specific"}
           {dtc.verification !== "verified" && <span className="tag unverified" style={{ marginLeft: 6 }}>unverified</span>}
         </td>
       </tr>
-      {showWhere && placeable && (
-        <tr>
-          <td colSpan={4} style={{ paddingTop: 0 }}>
-            <VehicleMap region={dtc.region} what={dtc.description ?? dtc.code} />
-          </td>
-        </tr>
-      )}
     </>
   );
 }

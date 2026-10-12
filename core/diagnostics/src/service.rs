@@ -636,6 +636,11 @@ pub struct DtcReport {
     /// is that a catalyst fault is in the exhaust, which is true of every
     /// vehicle ever built because that is where a catalyst has to be.
     pub region: aim_decoders::Region,
+    /// The kind of part this is about, when the standard gives the code to
+    /// one: what it looks like and where to look. A description of that kind
+    /// of part, never of the one on this vehicle.
+    #[serde(default)]
+    pub part: Option<aim_decoders::Part>,
 }
 
 /// The service.
@@ -2725,6 +2730,23 @@ impl DiagnosticService {
         })
     }
 
+    /// Each self-test result with roughly where its subject is and what kind
+    /// of part it tests, for the monitors the standard gives to one.
+    fn placed_monitors(&self, readings: &[aim_decoders::MonitorReading]) -> Vec<serde_json::Value> {
+        readings
+            .iter()
+            .map(|reading| {
+                let mut entry = serde_json::to_value(reading).unwrap_or_default();
+                let placed = self.decoders.parts.place_monitor(reading.mid);
+                if let Some(fields) = entry.as_object_mut() {
+                    fields.insert("region".into(), serde_json::json!(placed.region));
+                    fields.insert("part".into(), serde_json::json!(placed.part));
+                }
+                entry
+            })
+            .collect()
+    }
+
     /// Read service 06 on-board monitor test results.
     ///
     /// This is the reading a code reader cannot give you. A DTC says a monitor
@@ -2900,7 +2922,7 @@ impl DiagnosticService {
             data: Some(serde_json::json!({
                 "module": module_key,
                 "supported": true,
-                "monitors": readings,
+                "monitors": self.placed_monitors(&readings),
                 "failing": failing,
                 "marginal": marginal,
                 "marginal_threshold": MARGINAL,
@@ -5567,7 +5589,7 @@ impl DiagnosticService {
                             Self::unknown_dtc_next_steps(&code, &module.module_key, &info),
                         ));
                     }
-                    let region = aim_decoders::region_for_dtc(&code, info.system, info.is_generic);
+                    let placed = self.decoders.parts.place_dtc(&code, info.system, info.is_generic);
                     let report = DtcReport {
                         code,
                         status,
@@ -5576,7 +5598,8 @@ impl DiagnosticService {
                         structural_summary: info.structural_summary,
                         verification: info.verification,
                         is_generic: info.is_generic,
-                        region,
+                        region: placed.region,
+                        part: placed.part,
                     };
                     self.record_dtc_read(module, &report)?;
                     reports.push(report);
@@ -6607,6 +6630,8 @@ impl DiagnosticService {
                             "description": d["description"],
                             "structural_summary": d["structural_summary"],
                             "is_generic": d["is_generic"],
+                            "region": d["region"],
+                            "part": d["part"],
                             "status": 0,
                             "status_summary": format!(
                                 "{}; whether it is failing right now is not reported on this \
@@ -7931,6 +7956,7 @@ impl DiagnosticService {
     /// One UDS fault as the same report type service 03 produces.
     fn uds_dtc_report(&self, d: &aim_protocols::UdsDtc, module_key: &str) -> DtcReport {
         let info = self.decoders.dtcs.describe(&d.base_code).ok();
+        let placed = self.place_uds_dtc(d, info.as_ref());
         DtcReport {
             code: d.code.clone(),
             // UDS reports status as bits rather than as a service, so the
@@ -7950,10 +7976,24 @@ impl DiagnosticService {
                 .map(|i| i.verification)
                 .unwrap_or(aim_types::VerificationStatus::Unverified),
             is_generic: info.as_ref().map(|i| i.is_generic).unwrap_or(false),
-            region: info
-                .as_ref()
-                .map(|i| aim_decoders::region_for_dtc(&d.code, i.system, i.is_generic))
-                .unwrap_or(aim_decoders::Region::Unknown),
+            region: placed.region,
+            part: placed.part,
+        }
+    }
+
+    /// Roughly where a UDS fault's subject is, and what kind of part.
+    ///
+    /// From the two-byte base code, which is the J2012 code. The three-byte
+    /// form was passed here once, did not parse as a code, and no UDS fault
+    /// was ever placed.
+    fn place_uds_dtc(
+        &self,
+        d: &aim_protocols::UdsDtc,
+        info: Option<&aim_decoders::DtcInfo>,
+    ) -> aim_decoders::Placement {
+        match info {
+            Some(i) => self.decoders.parts.place_dtc(&d.base_code, i.system, i.is_generic),
+            None => aim_decoders::Placement::unknown(),
         }
     }
 
@@ -8055,6 +8095,7 @@ impl DiagnosticService {
                     // module nobody legislated is exactly the case where this
                     // build is most likely to have nothing to say.
                     let info = self.decoders.dtcs.describe(&d.base_code).ok();
+                    let placed = self.place_uds_dtc(d, info.as_ref());
                     serde_json::json!({
                         "code": d.code,
                         "base_code": d.base_code,
@@ -8070,6 +8111,10 @@ impl DiagnosticService {
                             .filter(|i| i.description.is_none())
                             .map(|i| Self::unknown_dtc_next_steps(&d.code, module_key, i)),
                         "is_generic": info.as_ref().map(|i| i.is_generic),
+                        // Roughly where, and what kind of part. Read from the
+                        // code's first two bytes, which are the J2012 code.
+                        "region": placed.region,
+                        "part": placed.part,
                         "status": d.status,
                         "status_summary": d.status_summary(),
                         "failing_now": d.test_failed(),

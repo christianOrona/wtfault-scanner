@@ -26,6 +26,7 @@ pub mod knowledge;
 pub mod modules;
 pub mod monitors;
 pub mod obdb;
+pub mod parts;
 pub mod pids;
 pub mod profiles;
 pub mod regions;
@@ -47,6 +48,7 @@ pub use knowledge::{
     MappingAnswer, ProviderInfo, SignalAnswer, VehicleContext,
 };
 pub use monitors::{MonitorCatalog, MonitorReading, RawCounts};
+pub use parts::{Part, PartCatalog, Placement};
 pub use pids::{PidDefinition, PidKind, PidRegistry};
 pub use profiles::{ProfileKind, ProfileLoad, ProfileReport};
 pub use regions::{region_for_dtc, Region};
@@ -76,6 +78,8 @@ pub struct DecoderSet {
     pub module_names: modules::ModuleNames,
     /// Security gateways, by make and model year.
     pub gateways: gateways::GatewayCatalog,
+    /// The kinds of part a finding can be about, and what each looks like.
+    pub parts: PartCatalog,
 }
 
 impl DecoderSet {
@@ -91,6 +95,7 @@ impl DecoderSet {
             catalog: catalog::SignalCatalog::embedded(),
             module_names: modules::ModuleNames::ford()?,
             gateways: gateways::GatewayCatalog::shipped()?,
+            parts: PartCatalog::generic_obd()?,
         })
     }
 

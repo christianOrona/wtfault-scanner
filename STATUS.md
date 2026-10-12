@@ -254,6 +254,12 @@ removed, not yet against the 2012 truck.
 
 ## What is built
 
+- **What a failing part looks like and roughly where it is.** Seventeen kinds
+  of part, each with a drawing, a description and where to look, shown for a
+  trouble code, a full-scan fault, a self-test that is failing or close to it,
+  and an inspection finding. Read from the published ranges of generic codes
+  and self-test ids, never from a model. Looked at in the running app against
+  the virtual truck; no inspection with a real model has been run with it.
 - **Configuration writes**, behind an approval the core issues for one
   specific change, the full precondition list, and mandatory read-back
   verification. A module answering "accepted" is not treated as a changed
@@ -372,6 +378,12 @@ Needs the vehicle or the owner (steps in `docs/AT-THE-CAR.md`):
 
 Honest gaps, in the order they matter.
 
+- **Where a part is on your vehicle.** The picture is a typical part and the
+  highlighted area is where that kind of part is on any vehicle. This project
+  has part locations and photographs for no vehicle. Manufacturer-specific
+  codes, most body and chassis codes and network codes name no part, and a
+  code whose cause could be several parts shows an area only. The body shape
+  is picked by hand once: it is not read from the VIN.
 - **The Android app has never met a real adapter.** It builds in CI, installs,
   and runs the whole core in the emulator against the virtual vehicle. The
   Bluetooth link to a paired ELM327 is written but unverified until a phone

@@ -293,6 +293,33 @@ const DEFAULT_INSPECTION: &str = "I am thinking about buying this vehicle. Inspe
                                   what is wrong with it, how serious each thing is, what it is \
                                   likely to cost, and whether I should buy it.";
 
+/// A report with each finding's rough location and kind of part beside it.
+///
+/// Read from the trouble codes the finding cites, by the same tables the
+/// Codes screen uses. The model is never asked where anything is, and the
+/// report type has nowhere for it to say: a `location` is added here, after
+/// the report has been checked, to the first cited code the standard places.
+fn placed_report(report: Option<&aim_agent::Report>, decoders: &aim_decoders::DecoderSet) -> Value {
+    let Some(report) = report else { return Value::Null };
+    let mut value = serde_json::to_value(report).unwrap_or(Value::Null);
+    for (list, findings) in [("findings", &report.findings), ("watch_items", &report.watch_items)] {
+        let Some(entries) = value.get_mut(list).and_then(Value::as_array_mut) else { continue };
+        for (entry, finding) in entries.iter_mut().zip(findings.iter()) {
+            let location = finding.cited_codes().into_iter().find_map(|code| {
+                let info = decoders.dtcs.describe(&code).ok()?;
+                let placed = decoders.parts.place_dtc(&code, info.system, info.is_generic);
+                placed
+                    .is_known()
+                    .then(|| json!({ "code": code, "region": placed.region, "part": placed.part }))
+            });
+            if let Some(fields) = entry.as_object_mut() {
+                fields.insert("location".into(), location.unwrap_or(Value::Null));
+            }
+        }
+    }
+    value
+}
+
 /// `POST /api/v1/agent/inspect`
 pub async fn inspect(
     State(state): State<AppState>,
@@ -307,7 +334,7 @@ pub async fn inspect(
     let outcome = agent::run_inspection(&state, &request, &mut sink).await.map_err(agent_error)?;
 
     Ok(Json(json!({
-        "report": outcome.report,
+        "report": placed_report(outcome.report.as_ref(), &state.decoders()),
         "text": outcome.text,
         "steps": outcome.steps,
         "truncated": outcome.truncated,
@@ -517,4 +544,91 @@ fn privacy_view(_state: &AppState, settings: &aim_agent::settings::ProviderSetti
 pub async fn privacy(State(state): State<AppState>) -> ApiResult<Json<Value>> {
     let settings = state.settings.load().map_err(agent_error)?;
     Ok(Json(privacy_view(&state, &settings)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn report(findings: Value) -> aim_agent::Report {
+        serde_json::from_value(json!({
+            "verdict": "negotiate",
+            "headline": "The exhaust filter is clogging",
+            "summary": "Three codes point at the particulate filter.",
+            "findings": findings,
+        }))
+        .expect("a report")
+    }
+
+    fn finding(title: &str, evidence: &[&str]) -> Value {
+        json!({
+            "title": title,
+            "severity": "serious",
+            "plain_english": "Something is wrong with it.",
+            "source": "measured",
+            "evidence": evidence,
+            "evidence_refs": [12],
+        })
+    }
+
+    /// A finding is placed by the codes it cites and by nothing else. The
+    /// model is not asked where a part is and has no field to say it in.
+    #[test]
+    fn a_finding_is_placed_by_the_codes_it_cites() {
+        let decoders = aim_decoders::DecoderSet::generic_obd().unwrap();
+        let report = report(json!([
+            finding("Exhaust filter clogging", &["P2463 confirmed", "P242F confirmed"]),
+            finding("A module stopped answering", &["U0121 stored"]),
+            finding("Running lean and a tired catalyst", &["P0171 pending", "P0420 confirmed"]),
+            finding("The battery looks weak", &[]),
+        ]));
+        let placed = placed_report(Some(&report), &decoders);
+        let findings = placed["findings"].as_array().unwrap();
+
+        assert_eq!(findings[0]["location"]["code"], "P2463");
+        assert_eq!(findings[0]["location"]["region"], "exhaust");
+        assert_eq!(findings[0]["location"]["part"]["id"], "particulate_filter");
+
+        // Nothing the standard places is no location, not a guess.
+        assert!(findings[1]["location"].is_null(), "{}", findings[1]);
+
+        // The first cited code that has a place: lean is in the engine bay
+        // and about no one part.
+        assert_eq!(findings[2]["location"]["code"], "P0171");
+        assert_eq!(findings[2]["location"]["region"], "engine_bay");
+        assert!(findings[2]["location"]["part"].is_null());
+
+        // Words alone place nothing, whatever they say.
+        assert!(findings[3]["location"].is_null(), "{}", findings[3]);
+
+        // Everything the model wrote is still there, unchanged.
+        assert_eq!(findings[0]["title"], "Exhaust filter clogging");
+        assert_eq!(placed["verdict"], "negotiate");
+    }
+
+    /// No report is still no report.
+    #[test]
+    fn no_report_has_nothing_to_place() {
+        let decoders = aim_decoders::DecoderSet::generic_obd().unwrap();
+        assert!(placed_report(None, &decoders).is_null());
+    }
+
+    /// A model that writes a location into a finding does not get to keep it.
+    #[test]
+    fn a_location_the_model_wrote_is_not_kept() {
+        let decoders = aim_decoders::DecoderSet::generic_obd().unwrap();
+        let mut written = finding("The battery looks weak", &[]);
+        written["location"] = json!({ "region": "cabin", "code": "P0000" });
+        let Ok(report) = serde_json::from_value::<aim_agent::Report>(json!({
+            "verdict": "negotiate",
+            "headline": "h",
+            "summary": "s",
+            "findings": [written],
+        })) else {
+            // Refused outright is as good as dropped.
+            return;
+        };
+        let placed = placed_report(Some(&report), &decoders);
+        assert!(placed["findings"][0]["location"].is_null(), "{}", placed["findings"][0]);
+    }
 }

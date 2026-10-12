@@ -141,6 +141,10 @@ fn powertrain_region(code: &str) -> Region {
     };
 
     match n {
+        // Oxygen sensor heater control. The heater is inside the sensor, and
+        // the sensor is in the exhaust. This sat in the range below and was
+        // drawn under the bonnet.
+        0x0030..=0x0064 => Region::Exhaust,
         // Fuel metering components — volume regulator, rail pressure, injector
         // metering. All bolted to the engine.
         0x0001..=0x00FF => Region::EngineBay,
@@ -221,6 +225,8 @@ mod tests {
         for (code, expected) in [
             ("P0420", Region::Exhaust),    // catalyst efficiency
             ("P0131", Region::Exhaust),    // oxygen sensor
+            ("P0031", Region::Exhaust),    // and its heater
+            ("P0089", Region::EngineBay),  // fuel pressure regulator
             ("P0455", Region::FuelSystem), // evaporative leak
             ("P0462", Region::FuelSystem), // fuel level sender
             ("P0301", Region::EngineBay),  // cylinder 1 misfire

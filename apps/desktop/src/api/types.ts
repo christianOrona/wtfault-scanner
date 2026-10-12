@@ -289,6 +289,20 @@ export type Region =
   | "engine_bay" | "exhaust" | "fuel_system" | "transmission"
   | "cabin" | "wheels" | "electrical" | "unknown";
 
+/**
+ * One KIND of part: what it looks like and where to look. True of that kind
+ * of part on any vehicle; never a description of the one on this vehicle.
+ */
+export interface Part {
+  id: string;
+  name: string;
+  zone: Region;
+  looks_like: string;
+  find_it: string;
+  /** The drawing to use when it shares another part's. Otherwise its own id. */
+  sketch?: string | null;
+}
+
 export interface Dtc {
   code: string;
   status: DtcStatus;
@@ -299,6 +313,8 @@ export interface Dtc {
   is_generic: boolean;
   /** Where it roughly lives, from the SAE subsystem ranges. Often unknown. */
   region: Region;
+  /** The kind of part it is about, when the standard gives the code to one. */
+  part?: Part | null;
 }
 
 export interface DtcData {
@@ -526,6 +542,12 @@ export interface Finding {
   evidence_refs?: number[];
   what_to_do?: string | null;
   estimated_cost?: CostRange | null;
+  /**
+   * Roughly where this is and what kind of part, read by the core from the
+   * first trouble code the finding cites that the standard places. The model
+   * does not write this and cannot.
+   */
+  location?: { code: string; region: Region; part: Part | null } | null;
 }
 
 export interface Report {
@@ -660,6 +682,10 @@ export interface MonitorReading {
   raw: { value: number; min: number; max: number; uasid: number };
   unknown_monitor: boolean;
   unknown_scaling: boolean;
+  /** Roughly where what this tests is. */
+  region?: Region | null;
+  /** The kind of part it tests, for a self-test of one part. */
+  part?: Part | null;
 }
 
 export interface MonitorTestsData {
@@ -842,6 +868,10 @@ export interface UdsFault {
   failing_now: boolean | null;
   confirmed: boolean;
   warning_lamp: boolean | null;
+  /** Roughly where, read from the base code. */
+  region?: Region | null;
+  /** The kind of part, when the standard gives the code to one. */
+  part?: Part | null;
 }
 
 export interface ScannedModule {

@@ -105,11 +105,14 @@ const WHEELS: Record<BodyShape, [number, number]> = {
 export function VehicleMap({
   region,
   what,
+  generic = false,
 }: {
   /** The zone to highlight. `unknown` renders nothing at all. */
   region: Region;
   /** What is being pointed at, for the caption. */
   what: string;
+  /** True when a typical part is drawn beside this, which the caption says. */
+  generic?: boolean;
 }) {
   const [shape, setShape] = useState<BodyShape | null>(() => {
     try {
@@ -184,9 +187,10 @@ export function VehicleMap({
       <div className="vmap-caption">
         <strong>{ZONE_LABEL[region]}</strong>
         <span className="faint">
-          {" "}— roughly where {what} sits on a vehicle of this shape. This is not your
-          vehicle's layout: nobody has measured where that part is on your particular
-          vehicle, and this app will not pretend otherwise.
+          {" "}— roughly where this is on a vehicle this shape.{" "}
+          {generic
+            ? "The drawing is a typical one, not yours: the exact spot and shape vary by model."
+            : "The exact spot varies by model."}
         </span>
         <button className="mini" style={{ marginLeft: 8 }} onClick={() => setShape(null)}>
           Wrong shape?

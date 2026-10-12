@@ -552,6 +552,10 @@ fn monitor_tests_report_the_measured_value_against_the_vehicles_own_limit() {
     assert_eq!(near["passed"], true, "still inside its limits");
     assert!(near["margin"].as_f64().unwrap() < 0.10, "and within a tenth of them: {near:?}");
     assert_eq!(near["name"], "Particulate filter, bank 1");
+    // A part that is about to fail comes with where to look and what for.
+    assert_eq!(near["region"], "exhaust");
+    assert_eq!(near["part"]["id"], "particulate_filter");
+    assert!(near["part"]["looks_like"].as_str().unwrap().contains("canister"), "{near}");
 
     let failed = monitors
         .iter()
@@ -579,6 +583,9 @@ fn a_monitor_this_build_cannot_name_still_reports_its_verdict() {
         .expect("the unlisted monitor must still be reported");
     assert_eq!(unknown["name"], "Manufacturer monitor 0xC4");
     assert_eq!(unknown["unknown_monitor"], true);
+    // And it is not drawn anywhere: nobody published what it tests.
+    assert_eq!(unknown["region"], "unknown");
+    assert!(unknown["part"].is_null(), "{unknown}");
     assert_eq!(unknown["passed"], true);
     // Its scaling is unknown too, so the numbers stay raw rather than invented.
     assert_eq!(unknown["unknown_scaling"], true);
@@ -2164,4 +2171,55 @@ fn clearing_a_uds_module_still_needs_confirmation() {
     assert_eq!(refused.error.unwrap().code, ErrorCode::ConfirmationRequired);
     let still = service.read_dtcs(Some("ECU_768"), USER);
     assert_eq!(still.data.as_ref().unwrap()["dtcs"].as_array().unwrap().len(), 2);
+}
+
+/// A trouble code about one kind of part says which, where to look and what
+/// it looks like. Read from the code's published range, the same on every
+/// vehicle; nothing here is about where this truck keeps it.
+#[test]
+fn a_code_about_one_kind_of_part_comes_with_what_to_look_for() {
+    let (mut service, _) = connected(ScenarioId::DpfRegen);
+    service.scan_modules(USER);
+    let read = service.read_dtcs(None, USER);
+    assert!(read.success, "{:?}", read.error);
+    let dtcs: Vec<aim_diagnostics::DtcReport> =
+        serde_json::from_value(read.data.unwrap()["dtcs"].clone()).unwrap();
+    assert!(!dtcs.is_empty());
+    for dtc in dtcs.iter().filter(|d| ["P2463", "P242F", "P2002"].contains(&d.code.as_str())) {
+        let part = dtc.part.as_ref().unwrap_or_else(|| panic!("{} names no part", dtc.code));
+        assert_eq!(part.id, "particulate_filter", "{}", dtc.code);
+        assert_eq!(dtc.region, aim_decoders::Region::Exhaust, "{}", dtc.code);
+        assert!(!part.find_it.is_empty() && !part.looks_like.is_empty());
+    }
+}
+
+/// The full scan's faults are placed too. They are three-byte codes, and the
+/// three-byte form was once passed where the two-byte code was wanted, so no
+/// fault from a body or chassis module was ever placed.
+#[test]
+fn a_full_scan_fault_is_placed_by_its_base_code() {
+    let (mut service, _) = connected(ScenarioId::Healthy);
+    let scan = service.scan_all_modules(USER);
+    assert!(scan.success, "{:?}", scan.error);
+    let data = scan.data.unwrap();
+    let wheel_speed = data["modules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|m| m["faults"].as_array().into_iter().flatten())
+        .find(|f| f["base_code"] == "C0035")
+        .expect("the simulated truck holds a wheel speed sensor fault");
+    assert_eq!(wheel_speed["region"], "wheels", "{wheel_speed}");
+    // A zone and no part: the standard gives chassis codes no one kind of part.
+    assert!(wheel_speed["part"].is_null(), "{wheel_speed}");
+
+    // A network fault is a conversation that did not happen. It is nowhere.
+    let lost = data["modules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|m| m["faults"].as_array().into_iter().flatten())
+        .find(|f| f["base_code"] == "U0121")
+        .expect("and a lost-communication fault");
+    assert_eq!(lost["region"], "unknown", "{lost}");
 }

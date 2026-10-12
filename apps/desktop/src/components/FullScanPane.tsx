@@ -31,6 +31,7 @@ import type { FullScanData, ScannedModule, ToolResult, UdsFault } from "../api/t
 import { ErrorBanner, FailedResult, Spinner, Warnings, localTime } from "./primitives";
 import { PaneIntro, useExplain } from "../explain";
 import { saveFile, scanFilename, toCsv, whereSaved } from "./exportFile";
+import { WhereItIs, isPlaced } from "./WhereItIs";
 
 export function FullScanPane({
   connected,
@@ -457,7 +458,12 @@ function ModuleCard({
 }
 
 function FaultRow({ fault: f }: { fault: UdsFault }) {
+  // Open for a fault that is happening now, which is the one somebody is about
+  // to go and look for. A stored one keeps the button.
+  const [showWhere, setShowWhere] = useState(!!f.failing_now);
+  const placeable = isPlaced(f);
   return (
+    <>
     <tr>
       <td style={{ width: 110 }}>
         <span className="mono" style={{ fontWeight: 600 }}>{f.code}</span>
@@ -475,9 +481,26 @@ function FaultRow({ fault: f }: { fault: UdsFault }) {
         >
           {f.status_summary}
           {f.warning_lamp ? " · the module is asking for a warning light" : ""}
+          {placeable && (
+            <button
+              className="mini"
+              style={{ marginLeft: 8 }}
+              onClick={() => setShowWhere((s) => !s)}
+            >
+              {showWhere ? "Hide picture" : "What and where is it?"}
+            </button>
+          )}
         </div>
       </td>
     </tr>
+    {showWhere && placeable && (
+      <tr>
+        <td colSpan={2} style={{ paddingTop: 0 }}>
+          <WhereItIs placed={f} what={f.description ?? f.code} />
+        </td>
+      </tr>
+    )}
+    </>
   );
 }
 

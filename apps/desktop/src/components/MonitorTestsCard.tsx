@@ -26,6 +26,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, describeError } from "../api/client";
 import type { MonitorReading, MonitorTestsData, ToolResult } from "../api/types";
 import { ErrorBanner, Spinner } from "./primitives";
+import { WhereItIs, isPlaced } from "./WhereItIs";
 
 /** Under this much of the limit band left, a passing result is worth flagging. */
 const MARGINAL = 0.1;
@@ -212,6 +213,15 @@ function MonitorBody({
         </div>
       )}
 
+      {/* What each of those is and where to look, once per kind of part: an
+          engine with four oxygen sensor tests close to the limit gets one
+          picture of an oxygen sensor, not four. */}
+      {distinctPlaces([...failed, ...marginal].map((r) => r.m)).map((m) => (
+        <div key={`${m.mid}-${m.tid}`} style={{ marginTop: 10 }}>
+          <WhereItIs placed={m} what={m.name} />
+        </div>
+      ))}
+
       {!failed.length && !marginal.length && (
         <div className="banner info" style={{ marginTop: 12, marginBottom: 0 }}>
           <span className="b-code">all clear</span>
@@ -304,6 +314,18 @@ function MonitorBody({
       )}
     </>
   );
+}
+
+/** The first test for each kind of part, or each zone where no part is named. */
+function distinctPlaces(tests: MonitorReading[]): MonitorReading[] {
+  const seen = new Set<string>();
+  return tests.filter((m) => {
+    if (!isPlaced(m)) return false;
+    const key = m.part?.id ?? `zone:${m.region}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function Stat({ label, value, tone }: { label: string; value: string; tone?: string }) {
