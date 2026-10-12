@@ -730,6 +730,27 @@ pids:
     bytes: 4
     verification: verified
 
+  - pid: 0x80
+    signal_id: supported_pids_81_a0
+    name: "PIDs supported [81-A0]"
+    kind: supported_pids
+    bytes: 4
+    verification: verified
+
+  - pid: 0xA0
+    signal_id: supported_pids_a1_c0
+    name: "PIDs supported [A1-C0]"
+    kind: supported_pids
+    bytes: 4
+    verification: verified
+
+  - pid: 0xC0
+    signal_id: supported_pids_c1_e0
+    name: "PIDs supported [C1-E0]"
+    kind: supported_pids
+    bytes: 4
+    verification: verified
+
   - pid: 0x61
     signal_id: driver_demand_torque
     name: "Driver's demand engine torque, percent"
@@ -797,6 +818,115 @@ pids:
     notes: >
       PID 0x7C is allocated for DPF temperature but this project has not
       validated its byte layout or scaling. Present only as raw evidence.
+
+  # Readings a 2023 Honda Odyssey's engine lists (2026-10-04) that this build
+  # did not decode. None was asked for in that session, so there are no
+  # recorded bytes to hold these against: each is unverified until it is read
+  # on a vehicle. Where it says two sources, the public PID table and
+  # python-OBD's decoder agree on the layout.
+
+  # Wide-range oxygen sensors. Bytes A-B are the air-fuel equivalence ratio
+  # (lambda: 1.0 is the exact mixture, above it lean, below it rich) and C-D
+  # the sensor's voltage. Two sources for the voltage; the lambda scaling is
+  # the public PID table's alone. Which bank "sensor 5" is on depends on how
+  # the engine numbers its sensors (PID 13 or 1D), which is not decoded.
+  - pid: 0x24
+    signal_id: o2_wide_s1_voltage
+    name: "Wide-range oxygen sensor 1 voltage (UNVERIFIED)"
+    kind: numeric
+    bytes: 4
+    unit: "V"
+    formula: "(256 * C + D) * 8 / 65535"
+    range: { min: 0, max: 8 }
+    verification: unverified
+    derived:
+      - signal_id: o2_wide_s1_lambda
+        name: "Wide-range oxygen sensor 1 air-fuel ratio, lambda (UNVERIFIED)"
+        formula: "(256 * A + B) / 32768"
+        unit: "lambda"
+        range: { min: 0, max: 2 }
+
+  - pid: 0x28
+    signal_id: o2_wide_s5_voltage
+    name: "Wide-range oxygen sensor 5 voltage (UNVERIFIED)"
+    kind: numeric
+    bytes: 4
+    unit: "V"
+    formula: "(256 * C + D) * 8 / 65535"
+    range: { min: 0, max: 8 }
+    verification: unverified
+    derived:
+      - signal_id: o2_wide_s5_lambda
+        name: "Wide-range oxygen sensor 5 air-fuel ratio, lambda (UNVERIFIED)"
+        formula: "(256 * A + B) / 32768"
+        unit: "lambda"
+        range: { min: 0, max: 2 }
+
+  # Fuel tank vapour pressure: a signed sixteen-bit count of quarter pascals,
+  # so the formula takes 65536 off when the top bit of A is set. Two sources.
+  - pid: 0x32
+    signal_id: evap_vapor_pressure
+    name: "Evaporative system vapour pressure (UNVERIFIED)"
+    kind: numeric
+    bytes: 2
+    unit: "Pa"
+    formula: "(256 * A + B - 65536 * ((A - A % 128) / 128)) / 4"
+    range: { min: -8192, max: 8191.75 }
+    verification: unverified
+
+  # The correction the sensor after the catalytic converter adds. Byte A is
+  # the bank named; byte B, where a module sends one, is bank 3 or 4 and is
+  # not decoded. Scaled as the fuel trims are. Two sources.
+  - pid: 0x55
+    signal_id: short_secondary_o2_trim_b1
+    name: "Short term secondary oxygen sensor trim, bank 1 (UNVERIFIED)"
+    kind: numeric
+    bytes: 1
+    unit: "%"
+    formula: "A / 1.28 - 100"
+    range: { min: -100, max: 99.2 }
+    verification: unverified
+
+  - pid: 0x56
+    signal_id: long_secondary_o2_trim_b1
+    name: "Long term secondary oxygen sensor trim, bank 1 (UNVERIFIED)"
+    kind: numeric
+    bytes: 1
+    unit: "%"
+    formula: "A / 1.28 - 100"
+    range: { min: -100, max: 99.2 }
+    verification: unverified
+
+  - pid: 0x57
+    signal_id: short_secondary_o2_trim_b2
+    name: "Short term secondary oxygen sensor trim, bank 2 (UNVERIFIED)"
+    kind: numeric
+    bytes: 1
+    unit: "%"
+    formula: "A / 1.28 - 100"
+    range: { min: -100, max: 99.2 }
+    verification: unverified
+
+  - pid: 0x58
+    signal_id: long_secondary_o2_trim_b2
+    name: "Long term secondary oxygen sensor trim, bank 2 (UNVERIFIED)"
+    kind: numeric
+    bytes: 1
+    unit: "%"
+    formula: "A / 1.28 - 100"
+    range: { min: -100, max: 99.2 }
+    verification: unverified
+
+  # Scaled as the other torque PIDs are (61, 62). One source.
+  - pid: 0x8E
+    signal_id: engine_friction_torque
+    name: "Engine friction, percent torque (UNVERIFIED)"
+    kind: numeric
+    bytes: 1
+    unit: "%"
+    formula: "A - 125"
+    range: { min: -125, max: 130 }
+    verification: unverified
 
   # Diesel exhaust fluid, from the two legislated PIDs that carry it. Both give
   # the tank level as one byte of 100/255 % (SAE J1979, as quoted in the public

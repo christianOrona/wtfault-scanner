@@ -22,6 +22,12 @@ import { PaneIntro, useExplain } from "../explain";
 /** How often to re-read the car while somebody works towards the state. */
 const WATCH_MS = 2000;
 
+/**
+ * The note that a reading came from the PID this engine carries it on. Not
+ * shown as a banner here: the row it belongs to already names what was read.
+ */
+const READ_ELSEWHERE = "signal_read_from_another_pid";
+
 export function GuidedTestsPane({
   connected,
   onEvidence,
@@ -155,10 +161,13 @@ export function GuidedTestsPane({
           )}
 
           {check && !check.success && <FailedResult result={check} />}
-          {/* "Does not apply" has its own banner below, with the reason. */}
+          {/* "Does not apply" has its own banner below, with the reason. A
+              reading taken from another PID is named on its own row. */}
           {check && (
             <Warnings
-              warnings={check.warnings.filter((w) => w.code !== "procedure_does_not_apply")}
+              warnings={check.warnings.filter(
+                (w) => w.code !== "procedure_does_not_apply" && w.code !== READ_ELSEWHERE,
+              )}
             />
           )}
 
@@ -234,7 +243,8 @@ export function GuidedTestsPane({
       {measured && (
         <div className="card">
           {!measured.success && <FailedResult result={measured} />}
-          <Warnings warnings={measured.warnings} />
+          {/* Each reading below carries its own name and how far it is checked. */}
+          <Warnings warnings={measured.warnings.filter((w) => w.code !== READ_ELSEWHERE)} />
           {measured.data?.held_throughout === false && (
             <div className="banner caution">
               <span className="b-code">state lost</span>

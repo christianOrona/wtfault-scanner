@@ -123,6 +123,124 @@ fn a_procedure_reads_the_engine_at_its_29_bit_address() {
     assert_eq!(not_on, serde_json::json!([]), "nothing is out of reach on a petrol engine");
 }
 
+/// Measured on the real Odyssey (2026-10-04): its engine has no PID 05, 0F or
+/// 10, and reports coolant temperature, intake air temperature and air flow
+/// on 67, 68 and 66 alone. Asked for by their older names it had none of the
+/// three, and *Warm idle* waited for ever on a coolant temperature that was
+/// one PID away.
+#[test]
+fn a_reading_it_carries_on_a_newer_pid_is_read_from_there() {
+    let mut service = honda();
+    assert!(service.scan_modules(USER).success);
+
+    // Nothing has asked this engine for its list of PIDs yet.
+    let live = service.read_live_data(
+        "ECU_18DAF110",
+        &["coolant_temp".into(), "intake_air_temp".into(), "maf_rate".into(), "engine_rpm".into()],
+        USER,
+    );
+    assert!(live.success, "{:?}", live.error);
+    let ids: Vec<&str> = live.values.iter().map(|v| v.signal_id.as_str()).collect();
+    for read in ["coolant_temp_sensor_1", "intake_air_temp_sensor_1", "maf_sensor_a", "engine_rpm"]
+    {
+        assert!(ids.contains(&read), "{read} was not read: {ids:?}");
+    }
+    assert!(!live.warnings.iter().any(|w| w.code == "signal_unavailable"), "{:?}", live.warnings);
+    // And it says which was read for which, once each.
+    assert_eq!(
+        live.data.as_ref().unwrap()["read_instead"],
+        serde_json::json!({
+            "coolant_temp": "coolant_temp_sensor_1",
+            "intake_air_temp": "intake_air_temp_sensor_1",
+            "maf_rate": "maf_sensor_a",
+        })
+    );
+    let notes: Vec<&str> = live
+        .warnings
+        .iter()
+        .filter(|w| w.code == "signal_read_from_another_pid")
+        .map(|w| w.message.as_str())
+        .collect();
+    assert_eq!(notes.len(), 3, "{notes:?}");
+    assert!(notes[0].contains("PID 05") && notes[0].contains("PID 67"), "{}", notes[0]);
+    assert!(notes[0].contains("not yet been checked"), "{}", notes[0]);
+
+    // The values are the vehicle's: a second coolant sensor it has, and no
+    // second air flow sensor, which it has not.
+    let value = |id: &str| live.values.iter().find(|v| v.signal_id == id).map(|v| v.value.as_f64());
+    let coolant = value("coolant_temp_sensor_1").flatten().unwrap();
+    assert!((40.0..=110.0).contains(&coolant), "{coolant}");
+    assert_eq!(value("coolant_temp_sensor_2").flatten(), Some(coolant - 30.0));
+    assert!(value("maf_sensor_b").is_none(), "{ids:?}");
+}
+
+/// *Warm idle* is what this engine's missing coolant temperature broke: a
+/// petrol engine, at idle, and no way to see that it was warm.
+#[test]
+fn warm_idle_sees_this_engine_warm() {
+    let mut service = honda();
+    assert!(service.scan_modules(USER).success);
+
+    let check = service.check_procedure("warm_idle", USER);
+    assert!(check.success, "{:?}", check.error);
+    let data = check.data.as_ref().unwrap();
+    let coolant = data["conditions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["condition"]["kind"] == "coolant_at_least")
+        .expect("warm idle waits on coolant temperature");
+    assert_eq!(coolant["signal"], "coolant_temp_sensor_1", "{coolant}");
+    assert!(coolant["value"].is_number(), "{coolant}");
+    assert!(coolant["unmeasurable"].is_null(), "{coolant}");
+    assert!(
+        check.warnings.iter().any(|w| w.code == "signal_read_from_another_pid"),
+        "{:?}",
+        check.warnings
+    );
+
+    // Run, it measures what the procedure exists for, with nothing missing:
+    // the three it carries elsewhere count as read.
+    let run = service.run_procedure("warm_idle", USER);
+    assert!(run.success, "{:?}", run.error);
+    let codes: Vec<&str> = run.warnings.iter().map(|w| w.code.as_str()).collect();
+    assert!(!codes.contains(&"declared_measurements_missing"), "{:?}", run.warnings);
+    if !codes.contains(&"conditions_not_met") {
+        let ids: Vec<&str> = run.values.iter().map(|v| v.signal_id.as_str()).collect();
+        for read in ["coolant_temp_sensor_1", "short_fuel_trim_b1", "maf_sensor_a"] {
+            assert!(ids.contains(&read), "{read} was not measured: {ids:?}");
+        }
+    }
+}
+
+/// A vehicle that has the older PID is asked for it, as before.
+#[test]
+fn an_engine_with_the_older_pid_is_still_asked_for_that_one() {
+    let transport = SimulatedTransport::with_vehicle(
+        VirtualVehicle::toyota_2004(ScenarioId::Healthy),
+        AdapterPersonality::genuine_v1_5(),
+    );
+    let adapter: Box<dyn DiagnosticAdapter> =
+        Box::new(Elm327Adapter::new(Box::new(transport), Elm327Config::fast()));
+    let mut service = DiagnosticService::start(
+        adapter,
+        SessionStore::open_in_memory().unwrap(),
+        Arc::new(DecoderSet::generic_obd().unwrap()),
+        SafetyGate::phase1(),
+        None,
+    )
+    .unwrap();
+    assert!(service.connect(USER).success);
+    assert!(service.scan_modules(USER).success);
+    let engine = module_keys(&service).into_iter().next().unwrap();
+
+    let live = service.read_live_data(&engine, &["coolant_temp".into()], USER);
+    assert!(live.success, "{:?}", live.error);
+    assert_eq!(live.values[0].signal_id, "coolant_temp");
+    assert_eq!(live.data.as_ref().unwrap()["read_instead"], serde_json::json!({}));
+    assert!(!live.warnings.iter().any(|w| w.code == "signal_read_from_another_pid"));
+}
+
 /// Ford's configuration range is not asked of it, and the features list
 /// offers it none of the Ford truck's settings.
 #[test]

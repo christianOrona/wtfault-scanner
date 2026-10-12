@@ -258,6 +258,17 @@ pub fn encode_pid(pid: u8, s: &VehicleState) -> Option<Vec<u8>> {
         0x61 => vec![u8_clamped(s.demand_torque_pct + 125.0)],
         0x62 => vec![u8_clamped(s.torque_pct + 125.0)],
         0x63 => u16_clamped(s.reference_torque_nm as f64).to_vec(),
+        // The newer forms of air flow, coolant and intake air temperature,
+        // laid out as a 2023 Honda Odyssey sent them (2026-10-04): a byte
+        // saying which sensors are fitted, then a value for each. Two coolant
+        // sensors, one air flow and one intake air sensor, and zeros where a
+        // sensor that is not fitted would be.
+        0x66 => {
+            let [hi, lo] = u16_clamped(s.maf_gs * 32.0);
+            vec![0x01, hi, lo, 0x00, 0x00]
+        }
+        0x67 => vec![0x03, enc_temp(s.coolant_c), enc_temp(s.coolant_c - 30.0)],
+        0x68 => vec![0x01, enc_temp(s.intake_air_c), 0x00, 0x00, 0x00, 0x00, 0x00],
         0x78 => enc_temp_bank([s.egt_c, s.egt_c - 30.0, s.egt_c - 55.0, s.egt_c - 80.0]),
         0x7C => enc_temp_bank([
             s.dpf_inlet_c,

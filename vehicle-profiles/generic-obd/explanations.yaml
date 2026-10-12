@@ -36,6 +36,15 @@ signals:
   - id: supported_pids_61_80
     easy: "The fourth page of the menu of available readings. Not a measurement."
     technical: "Service 01 PID 60. Bitmask for PIDs 0x61-0x80."
+  - id: supported_pids_81_a0
+    easy: "The fifth page of the menu of available readings. Not a measurement."
+    technical: "Service 01 PID 80. Bitmask for PIDs 0x81-0xA0."
+  - id: supported_pids_a1_c0
+    easy: "The sixth page of the menu of available readings. Not a measurement."
+    technical: "Service 01 PID A0. Bitmask for PIDs 0xA1-0xC0."
+  - id: supported_pids_c1_e0
+    easy: "The seventh page of the menu of available readings. Not a measurement."
+    technical: "Service 01 PID C0. Bitmask for PIDs 0xC1-0xE0."
   - id: supported_info_types_01_20
     easy: "The list of which identity details the car will tell us, like its serial number. Not a measurement."
     technical: "Service 09 info type 00. Bitmask of supported info types 0x01-0x20."
@@ -256,6 +265,33 @@ signals:
   - id: maf_sensor_b
     easy: "How much air a second air flow sensor measures each second, on engines that have two."
     technical: "Service 01 PID 66, bytes D-E, 1/32 g/s per count. Decoded only when byte A bit 1 says sensor B is fitted."
+  - id: o2_wide_s1_voltage
+    easy: "The voltage from the newer kind of oxygen sensor in the exhaust, the kind that measures how far the fuel mixture is from ideal rather than only which side of it. The number on its own says little; the mixture reading beside it is the one to look at."
+    technical: "Service 01 PID 24, bytes C-D, 8/65535 V per count. Wide-range (air-fuel ratio) sensor 1. Not comparable with a narrowband sensor's 0-1 V swing."
+  - id: o2_wide_s1_lambda
+    easy: "How close the fuel mixture is to ideal, measured in the exhaust. 1.0 is exactly right. Above 1 there is more air than the fuel needs (lean), below 1 more fuel than the air can burn (rich). A warm engine cruising or idling should hover around 1.0."
+    technical: "Service 01 PID 24, bytes A-B, 2/65536 per count. Equivalence ratio (lambda) from wide-range sensor 1. Deliberate enrichment under load and fuel cut on overrun both move it and neither is a fault."
+  - id: o2_wide_s5_voltage
+    easy: "The voltage from a second oxygen sensor of the newer kind, usually the one on the engine's other row of cylinders. The mixture reading beside it is the one to look at."
+    technical: "Service 01 PID 28, bytes C-D, 8/65535 V per count. Wide-range sensor 5; which bank that is follows the PID 13 or 1D layout, which this build does not decode."
+  - id: o2_wide_s5_lambda
+    easy: "How close the fuel mixture is to ideal at a second oxygen sensor, usually on the engine's other row of cylinders. 1.0 is exactly right, above 1 is lean, below 1 is rich. The two rows should read about the same."
+    technical: "Service 01 PID 28, bytes A-B, 2/65536 per count. Equivalence ratio (lambda) from wide-range sensor 5. A sustained difference between banks points at one bank rather than at fuelling as a whole."
+  - id: evap_vapor_pressure
+    easy: "The pressure of the fuel fumes in the tank, compared with the air outside. It sits near zero and drifts a little either way as the tank warms and cools. The car uses it to check the tank is sealed, which is the test a loose fuel cap fails."
+    technical: "Service 01 PID 32. EVAP system vapour pressure, signed 16-bit, 0.25 Pa per count, gauge. The leak monitor's verdict is in service 06; this is the sensor it uses."
+  - id: short_secondary_o2_trim_b1
+    easy: "A small live correction made from the oxygen sensor after the catalytic converter, on the first row of cylinders. Near zero is healthy."
+    technical: "Service 01 PID 55, byte A. Short-term secondary O2 sensor trim, bank 1, percent, scaled as the fuel trims. Byte B (bank 3) is not decoded."
+  - id: long_secondary_o2_trim_b1
+    easy: "The correction the car has learned over time from the oxygen sensor after the catalytic converter, on the first row of cylinders. Near zero is healthy."
+    technical: "Service 01 PID 56, byte A. Long-term secondary O2 sensor trim, bank 1, percent, scaled as the fuel trims. Byte B (bank 3) is not decoded."
+  - id: short_secondary_o2_trim_b2
+    easy: "A small live correction made from the oxygen sensor after the catalytic converter, on the second row of cylinders. Near zero is healthy."
+    technical: "Service 01 PID 57, byte A. Short-term secondary O2 sensor trim, bank 2, percent, scaled as the fuel trims. Byte B (bank 4) is not decoded."
+  - id: long_secondary_o2_trim_b2
+    easy: "The correction the car has learned over time from the oxygen sensor after the catalytic converter, on the second row of cylinders. Near zero is healthy."
+    technical: "Service 01 PID 58, byte A. Long-term secondary O2 sensor trim, bank 2, percent, scaled as the fuel trims. Byte B (bank 4) is not decoded."
   - id: odometer
     easy: "How far the car has travelled in total, as the engine computer reports it. It should match the number on the dash."
     technical: "Service 01 PID A6. Four bytes, 0.1 km per count."
@@ -267,6 +303,9 @@ signals:
   - id: actual_engine_torque
     easy: "How much pull the engine is actually producing. Comparing this with what you asked for shows whether it is delivering."
     technical: "Service 01 PID 62. Actual engine torque, percent of reference, signed with a -125 offset."
+  - id: engine_friction_torque
+    easy: "How much of the engine's pull is used up just turning itself over: its own friction, pumps and belts. It is highest on a cold engine and falls as the oil warms."
+    technical: "Service 01 PID 8E. Engine friction, percent of reference torque, signed with a -125 offset."
   - id: reference_engine_torque
     easy: "The engine's maximum pulling power, used as the yardstick the other two torque numbers are percentages of."
     technical: "Service 01 PID 63. Engine reference torque in newton metres, the 100 percent basis for PIDs 61 and 62."

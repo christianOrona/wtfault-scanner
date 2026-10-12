@@ -651,6 +651,9 @@ pub struct DiagnosticService {
     conditions: VehicleConditions,
     /// Per-module service 01 support, cached after the first enumeration.
     supported_pids: BTreeMap<String, Vec<u8>>,
+    /// Modules asked for that list on a read's behalf, answered or not. One
+    /// that did not answer is not asked again before every sample.
+    pid_list_asked: BTreeSet<String>,
     /// Per-module service 06 monitor support, cached the same way. Without
     /// this a repeated visit to the Inspect screen re-walks the whole mask
     /// chain and puts dozens of extra requests on the bus.
@@ -716,6 +719,7 @@ impl DiagnosticService {
             connection_id: None,
             conditions: VehicleConditions::unknown(),
             supported_pids: BTreeMap::new(),
+            pid_list_asked: BTreeSet::new(),
             supported_mids: BTreeMap::new(),
             identification: BTreeMap::new(),
             vehicle: None,
@@ -2686,6 +2690,10 @@ impl DiagnosticService {
                     ),
                     "verification": c.def.verification,
                     "decoder_available": true,
+                    // The older signal this carries the same reading as, so a
+                    // dashboard that opens on coolant temperature opens on it
+                    // on an engine that has it only here.
+                    "stands_in_for": c.def.stands_in_for,
                 }),
                 None => serde_json::json!({
                     "pid": pid,
@@ -3115,11 +3123,29 @@ impl DiagnosticService {
         let fuel = self.fuel_type(&module);
         let engine = fuel.as_deref().and_then(crate::procedure::Engine::from_fuel_type);
 
+        // Which readings this engine has decides which signal a condition is
+        // read from, so its list is asked for before the conditions are.
+        self.learn_supported_pids(&module);
+
         let mut checks = Vec::new();
+        let mut warnings = Vec::new();
         for condition in &procedure.conditions {
-            let (value, unmeasurable) = match condition.signal() {
+            // The signal this engine carries the reading on, which is not
+            // always the one the condition names.
+            let consulted = condition.signal().map(|s| self.signal_on_module(&module, s));
+            let (value, unmeasurable) = match &consulted {
                 Some(signal) => match self.sample_signal(&module, signal) {
-                    Ok(v) => (Some(v), None),
+                    Ok((v, verification)) => {
+                        if condition.signal() != Some(signal.as_str()) {
+                            warnings.push(self.stand_in_note(
+                                &module,
+                                condition.signal().unwrap_or_default(),
+                                signal,
+                                verification,
+                            ));
+                        }
+                        (Some(v), None)
+                    }
                     Err(e) => (None, Some(e.message)),
                 },
                 None => (
@@ -3133,7 +3159,7 @@ impl DiagnosticService {
             checks.push(crate::procedure::ConditionCheck {
                 condition: condition.clone(),
                 instruction: condition.instruction(),
-                signal: condition.signal().map(String::from),
+                signal: consulted,
                 value,
                 // Unreadable is not satisfied. A condition nobody could check
                 // must not count as met, or the window would close on a state
@@ -3174,7 +3200,7 @@ impl DiagnosticService {
                 "engine": engine,
                 "not_on_this_engine": engine.map(|e| procedure.not_on(e)).unwrap_or_default(),
             })),
-            warnings: Vec::new(),
+            warnings,
             evidence: self.recorder.last_response_event(),
             ..Default::default()
         })
@@ -3258,11 +3284,22 @@ impl DiagnosticService {
         let fuel = self.fuel_type(&module);
         let engine = fuel.as_deref().and_then(crate::procedure::Engine::from_fuel_type);
         let not_on_this_engine = engine.map(|e| procedure.not_on(e)).unwrap_or_default();
+        // A reading taken from the PID this engine carries it on was taken.
+        let read_instead = reading.data.as_ref().map(|d| d["read_instead"].clone());
+        let read_as = |wanted: &String| -> String {
+            read_instead
+                .as_ref()
+                .and_then(|map| map[wanted.as_str()].as_str())
+                .map_or_else(|| wanted.clone(), String::from)
+        };
         let missing: Vec<String> = procedure
             .measure
             .iter()
             .filter(|wanted| !not_on_this_engine.contains(wanted))
-            .filter(|wanted| !reading.values.iter().any(|v| &&v.signal_id == wanted))
+            .filter(|wanted| {
+                let read_as = read_as(wanted);
+                !reading.values.iter().any(|v| v.signal_id == read_as)
+            })
             .cloned()
             .collect();
 
@@ -3455,8 +3492,13 @@ impl DiagnosticService {
         })
     }
 
-    /// One signal's current value, as a number.
-    fn sample_signal(&mut self, module_key: &str, signal: &str) -> AimResult<f64> {
+    /// One signal's current value, as a number, and how far its decoding has
+    /// been checked.
+    fn sample_signal(
+        &mut self,
+        module_key: &str,
+        signal: &str,
+    ) -> AimResult<(f64, aim_types::VerificationStatus)> {
         let result = self.read_pid(module_key, signal, "user:procedure");
         if !result.success {
             return Err(result
@@ -3464,17 +3506,97 @@ impl DiagnosticService {
                 .clone()
                 .unwrap_or_else(|| AimError::new(ErrorCode::NoData, "no reading")));
         }
-        result
-            .values
-            .first()
+        // By id where the reply names it, not by position: a reply can carry
+        // a second sensor, and can carry that one alone.
+        let by_id = result.values.iter().find(|v| v.signal_id == signal);
+        let named = self.decoders.pids.address_of(signal).is_some();
+        by_id
+            .or_else(|| result.values.first().filter(|_| !named))
             .and_then(|v| match &v.value {
-                aim_types::Value::Number(n) => Some(*n),
-                aim_types::Value::Integer(n) => Some(*n as f64),
+                aim_types::Value::Number(n) => Some((*n, v.provenance.verification)),
+                aim_types::Value::Integer(n) => Some((*n as f64, v.provenance.verification)),
                 _ => None,
             })
             .ok_or_else(|| {
                 AimError::new(ErrorCode::NoData, format!("{signal} did not decode to a number"))
             })
+    }
+
+    /// Ask a module which PIDs it has, if that is not known yet.
+    ///
+    /// Kept for the session, so this costs its handful of requests once. A
+    /// module that does not answer is left unknown, is asked for each signal
+    /// by the name it was asked for, and is not asked for its list again
+    /// here: this runs ahead of every live sample.
+    fn learn_supported_pids(&mut self, module_key: &str) {
+        if self.supported_pids.contains_key(module_key)
+            || !self.pid_list_asked.insert(module_key.to_string())
+        {
+            return;
+        }
+        if let Ok(module) = self.module_by_key(module_key) {
+            let _ = self.enumerate_supported(&module);
+        }
+    }
+
+    /// The signal to ask `module_key` for when `signal` is wanted.
+    ///
+    /// Usually `signal` itself. A module that lists its PIDs, does not list
+    /// this one, and does list a PID carrying the same reading is asked for
+    /// that instead: a 2023 Honda Odyssey has no PID 05, and its coolant
+    /// temperature is on 67 alone. Asked for by its older name, that engine
+    /// had no coolant temperature at all, and a procedure waiting on a warm
+    /// engine waited for ever.
+    ///
+    /// Decided from what the module says it has, never by trying one and then
+    /// the other. A module whose list is not known is asked for `signal`.
+    fn signal_on_module(&self, module_key: &str, signal: &str) -> String {
+        let Some((0x01, pid)) = self.decoders.pids.address_of(signal) else {
+            return signal.to_string();
+        };
+        let Some(supported) = self.supported_pids.get(module_key) else {
+            return signal.to_string();
+        };
+        if supported.contains(&pid) {
+            return signal.to_string();
+        }
+        self.decoders
+            .pids
+            .stand_ins_for(signal)
+            .into_iter()
+            .find(|c| supported.contains(&c.def.pid))
+            .map_or_else(|| signal.to_string(), |c| c.def.signal_id.clone())
+    }
+
+    /// What to say when a reading came from the PID a module carries it on
+    /// rather than the one it was asked for by.
+    fn stand_in_note(
+        &self,
+        module_key: &str,
+        wanted: &str,
+        read: &str,
+        verification: aim_types::VerificationStatus,
+    ) -> Warning {
+        let pid = |signal: &str| {
+            self.decoders
+                .pids
+                .address_of(signal)
+                .map_or_else(String::new, |(_, pid)| format!(" (PID {pid:02X})"))
+        };
+        let unchecked = if verification == aim_types::VerificationStatus::Verified {
+            ""
+        } else {
+            " This build's decoding of it has not yet been checked against a vehicle."
+        };
+        Warning::info(
+            "signal_read_from_another_pid",
+            format!(
+                "{module_key} does not list {wanted}{}. {read}{} carries the same reading and \
+                 was read instead.{unchecked}",
+                pid(wanted),
+                pid(read),
+            ),
+        )
     }
 }
 
@@ -5735,9 +5857,19 @@ impl DiagnosticService {
 
         let mut given_up = Vec::new();
 
-        for signal in signals {
+        // A signal this module carries on another PID is read from there, and
+        // the reply says which was read for which. The module is asked for
+        // its list only when something wanted could be elsewhere.
+        if signals.iter().any(|s| !self.decoders.pids.stand_ins_for(s).is_empty()) {
+            self.learn_supported_pids(module_key);
+        }
+        let mut read_instead = serde_json::Map::new();
+
+        for wanted in signals {
+            let on_module = self.signal_on_module(module_key, wanted);
+            let signal = &on_module;
             if bus_errors >= 2 {
-                skipped.push(signal.clone());
+                skipped.push(wanted.clone());
                 continue;
             }
             // A parameter that has timed out repeatedly is not going to start
@@ -5761,6 +5893,16 @@ impl DiagnosticService {
             match self.sample(&module, pid) {
                 Ok((mut decoded, ev)) => {
                     evidence = ev.or(evidence);
+                    if signal != wanted {
+                        let verification = decoded
+                            .iter()
+                            .find(|v| &v.signal_id == signal)
+                            .map_or(aim_types::VerificationStatus::Unverified, |v| {
+                                v.provenance.verification
+                            });
+                        warnings.push(self.stand_in_note(module_key, wanted, signal, verification));
+                        read_instead.insert(wanted.clone(), serde_json::json!(signal));
+                    }
                     values.append(&mut decoded);
                     // It answered, so whatever went wrong before has passed.
                     self.signal_timeouts.remove(&key);
@@ -5822,6 +5964,7 @@ impl DiagnosticService {
             data: Some(serde_json::json!({
                 "module": module_key,
                 "requested": signals,
+                "read_instead": read_instead,
             })),
             warnings,
             evidence,

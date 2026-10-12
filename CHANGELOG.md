@@ -48,6 +48,17 @@ with the caveat that everything below 1.0 is allowed to move.
   newer cars.** Some engines, a 2023 Honda Odyssey among them, report these
   only on newer PIDs. They are read now, marked unverified until checked
   against a car.
+- **Those readings are used wherever the older ones were asked for.** *Warm
+  idle* waits on coolant temperature, and on such an engine it could never see
+  one. A guided test, the assistant and the live dashboard now read each from
+  the PID the engine has it on, and say which they read.
+- **A second coolant or air flow sensor, when the engine has one.** The newer
+  PIDs say which of their sensors are fitted. A second one is shown, and one
+  that is not fitted is no longer at risk of reading as -40 degrees.
+- **More readings on newer petrol engines.** Wide-range oxygen sensor voltage
+  and fuel mixture (lambda), fuel tank vapour pressure, the correction from
+  the oxygen sensor after the catalytic converter, and engine friction. All
+  marked unverified: no car has been asked for them yet.
 
 ### Changed
 

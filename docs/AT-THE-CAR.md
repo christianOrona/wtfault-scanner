@@ -88,13 +88,24 @@ simulator. With the OBDLink MX+, engine running:
    cut off.
 3. *Inspect*: the readiness card should fill in by itself after the scan.
 4. *Live data*, Advanced: pick `coolant_temp_sensor_1`, `odometer`,
-   `intake_air_temp_sensor_1`, `maf_sensor_a`. The odometer was 27,224 on the
-   dash that day. Note the unit the dash uses: the reading is in kilometres.
+   `intake_air_temp_sensor_1`, `maf_sensor_a`. The dashboard should open with
+   the coolant temperature on it without being asked. Read the odometer on
+   the dash at the same moment and write down every digit: the first
+   session's reply decodes to 27,234.7 miles and the dash was noted as
+   27,224. The reading is in kilometres.
 5. *Inspect* → *Software on this module*; steps in
    [CALIBRATION.md](CALIBRATION.md).
+6. *Guided tests* → *Warm idle*, engine warm and idling. The coolant row
+   should show a temperature read from `coolant_temp_sensor_1` and tick at
+   80 degC, and *Measure* should come back with fuel trims, air flow and both
+   temperatures, nothing listed as missing.
+7. *Live data*, Advanced: the wide-range oxygen readings
+   (`o2_wide_s1_lambda` should sit near 1.0 at a warm idle),
+   `evap_vapor_pressure`, the four `secondary_o2_trim` readings and
+   `engine_friction_torque`. None has been read on any car.
 
-Bring back the four readings, the scan time, and anything empty without a
-reason.
+Bring back the readings, the dash odometer, the scan time, and anything empty
+without a reason.
 
 ## 4. The phone as the scanner (#64)
 

@@ -1224,7 +1224,7 @@ Walks the full supported-PID mask chain (`0x00`, `0x20`, `0x40`, …).
   "pids": [
     { "pid": 1, "hex": "01", "signal_id": "monitor_status", "name": "Monitor status since DTCs cleared",
       "unit": null, "verification": "verified", "decoder_available": true,
-      "kind": "bitfield", "is_measurement": false },
+      "kind": "bitfield", "is_measurement": false, "stands_in_for": null },
     { "pid": 254, "hex": "FE", "decoder_available": false }
   ]
 }
@@ -1234,6 +1234,9 @@ Walks the full supported-PID mask chain (`0x00`, `0x20`, `0x40`, …).
 no definition for it — a visible gap rather than a hidden one. Build the
 live-data picker from entries with `is_measurement: true`; masks and bitfields
 are real but are not gauges.
+
+`stands_in_for` names the older signal an entry carries the same reading as:
+`coolant_temp_sensor_1` (PID 67) stands in for `coolant_temp` (PID 05).
 
 #### `GET /modules/{key}/dtcs` → `ToolResult`
 
@@ -1321,6 +1324,14 @@ is `400`.
 A signal that has timed out three times running on a module stops being asked
 for the rest of the session and is reported as such, rather than costing every
 sample another six-second wait.
+
+A signal the module does not list is read from the PID that carries the same
+reading, when the module lists that one. Asked for `coolant_temp`, an engine
+with no PID 05 and a PID 67 returns `coolant_temp_sensor_1`. `data.read_instead`
+maps each signal asked for to the one read (`{}` when none was), and each
+carries a `signal_read_from_another_pid` note. The module is asked for its PID
+list first if it has not been this session. Guided tests read their conditions
+and measurements the same way, and a condition's `signal` is the one consulted.
 
 A signal may be a signal id (`engine_rpm`) or a PID number. Number spellings are
 fixed and unambiguous:

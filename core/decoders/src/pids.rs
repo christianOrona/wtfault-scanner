@@ -845,6 +845,76 @@ pids:
         assert_eq!(none.code, ErrorCode::NoData, "not -40 degC: {}", none.message);
     }
 
+    /// The readings a 2023 Honda Odyssey lists that had no decoder. Nothing
+    /// recorded them, so these hold the formulas to the published scalings
+    /// rather than to a vehicle.
+    #[test]
+    fn the_newer_standard_readings_decode_to_their_published_scalings() {
+        let r = registry();
+        let ts = aim_types::now();
+        let read = |pid: u8, payload: &[u8]| -> Vec<(String, Value)> {
+            r.decode(1, pid, payload, ts)
+                .unwrap()
+                .into_iter()
+                .map(|v| (v.signal_id, v.value))
+                .collect()
+        };
+        let one = |pid: u8, payload: &[u8]| -> f64 {
+            match &read(pid, payload)[0].1 {
+                Value::Number(n) => *n,
+                other => panic!("{pid:02X} decoded to {other:?}"),
+            }
+        };
+
+        // Lambda 1.0 is 0x8000, and full scale on the voltage is 8 V.
+        assert_eq!(
+            read(0x24, &[0x80, 0x00, 0xFF, 0xFF]),
+            [
+                ("o2_wide_s1_voltage".to_string(), Value::Number(8.0)),
+                ("o2_wide_s1_lambda".to_string(), Value::Number(1.0)),
+            ]
+        );
+        assert_eq!(
+            read(0x28, &[0x7F, 0x5C, 0x00, 0x00]),
+            [
+                ("o2_wide_s5_voltage".to_string(), Value::Number(0.0)),
+                ("o2_wide_s5_lambda".to_string(), Value::Number(0.994995)),
+            ]
+        );
+
+        // Signed: the top bit of A takes it below zero.
+        assert_eq!(one(0x32, &[0x00, 0x04]), 1.0);
+        assert_eq!(one(0x32, &[0xFF, 0xFC]), -1.0);
+        assert_eq!(one(0x32, &[0x7F, 0xFF]), 8191.75);
+        assert_eq!(one(0x32, &[0x80, 0x00]), -8192.0);
+
+        // The trims are centred on 0x80, and a second bank's byte is ignored.
+        for pid in [0x55, 0x56, 0x57, 0x58] {
+            assert_eq!(one(pid, &[0x80]), 0.0, "{pid:02X}");
+            assert_eq!(one(pid, &[0x00, 0xFF]), -100.0, "{pid:02X}");
+        }
+        assert_eq!(one(0x8E, &[125]), 0.0);
+        assert_eq!(one(0x8E, &[140]), 15.0);
+
+        // And the masks above 0x80, as the Odyssey sent them.
+        assert_eq!(
+            read(0x80, &[0x00, 0x04, 0x00, 0x0F]),
+            [("supported_pids_81_a0".to_string(), Value::Text("8E,9D,9E,9F,A0".into()))]
+        );
+        assert_eq!(
+            read(0xA0, &[0x04, 0x00, 0x00, 0x00]),
+            [("supported_pids_a1_c0".to_string(), Value::Text("A6".into()))]
+        );
+
+        for pid in [0x24, 0x28, 0x32, 0x55, 0x56, 0x57, 0x58, 0x8E] {
+            assert_eq!(
+                r.get(1, pid).unwrap().def.verification,
+                VerificationStatus::Unverified,
+                "{pid:02X} has been read on no vehicle"
+            );
+        }
+    }
+
     /// A stand-in is handed to whatever asked for the older signal, so it has
     /// to be the same quantity in the same unit.
     #[test]

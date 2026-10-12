@@ -265,6 +265,8 @@ export interface SupportedPid {
   kind?: string | null;
   /** False for masks and bitfields - real things, but not gauges. */
   is_measurement?: boolean;
+  /** The older signal this one carries the same reading as, on a newer PID. */
+  stands_in_for?: string | null;
 }
 
 export interface SignalsData {

@@ -3,7 +3,7 @@
 Where the project actually is, updated when something significant changes.
 Not a changelog — see `CHANGELOG.md` for releases — and not a diary.
 
-Last reviewed: **2026-10-04**
+Last reviewed: **2026-10-12**
 
 ---
 
@@ -58,9 +58,23 @@ results were read from the engine. What it showed that the truck could not:
 - **Its engine has no PID 05.** It lists 59 service 01 PIDs, and coolant
   temperature, intake air temperature and air flow are only on 67, 68 and 66.
   This build decoded none of them, so the car had no coolant temperature at
-  all and *Warm idle* could never see a warm engine. Decoders for 66, 67, 68
-  and A6 (odometer) are **added, unverified**; the guided tests still ask for
-  PID 05. Eighteen of its PIDs have no decoder.
+  all and *Warm idle* could never see a warm engine. **Fixed, in the
+  simulator**: whatever asks for one of the three older readings is given the
+  newer PID on an engine that lists that and not the older one, and the
+  simulated Odyssey now lacks 05, 0F and 10 as the real one does. Decoders for
+  66, 67, 68 and A6 (odometer) are unverified. Its recorded replies decode to
+  87 and 57 degC on two coolant sensors with the gauge at about half, 60 degC
+  intake air and 4.75 g/s of air: plausible, and checked against nothing else
+  the car said.
+- **Its recorded odometer reply is ten miles from the dash.** `00 06 B0 1C`
+  decodes to 43,830.0 km, which is 27,234.7 miles; the owner read 27,224.
+  Either the layout is right and one digit was misread, or it is wrong by
+  0.04 %. Not settled, and PID A6 stays unverified.
+- **Ten more of its PIDs are decoded, none of them read yet.** Wide-range
+  oxygen sensor voltage and lambda (24, 28), fuel tank vapour pressure (32),
+  secondary oxygen sensor trims (55-58), engine friction (8E) and the two PID
+  lists above 80. Its first session asked for none of them, so nothing recorded
+  checks them. Six have no decoder: 13, 41, 6C, 9D, 9E and 9F.
 - **Every module refused every standard identification identifier**
   (`7F 22 31` to F187, F188, F18A, F191, F195, F197 and Ford's two), so 11 of
   13 are still listed by address. The engine and transmission name themselves
@@ -304,12 +318,13 @@ removed, not yet against the 2012 truck.
 ## Pending, as of 2026-10-04
 
 Desk work that is ready to pick up:
-- Wideband oxygen sensors: PIDs 24-2B (voltage, `(256C+D)*8/65535` V) and
-  34-3B (current, `(256C+D)/256 - 128` mA), both checked against python-OBD.
-  Lambda from bytes A-B needs a second output for numeric PIDs, which the file
-  format does not have yet.
+- Wideband oxygen sensors: 24 and 28 are decoded, voltage and lambda, because
+  the Odyssey lists them. The rest of 24-2B are the same layout, and 34-3B
+  (current, `(256C+D)/256 - 128` mA, checked against python-OBD) are not
+  written. A numeric PID can now give a second value.
 - PID 13 (which O2 sensors are present): the two sources disagree on which
   nibble is bank 1. Needs a third source before it is decoded.
+- PID 41 (monitors this drive cycle) has PID 01's layout and no decoder.
 
 Needs the vehicle or the owner (steps in `docs/AT-THE-CAR.md`):
 - #54 cold-start baseline on the F-250 (`dev-core.ps1 -Db` is ready).

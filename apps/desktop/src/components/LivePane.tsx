@@ -74,8 +74,15 @@ export function LivePane({
         (p) => p.decoder_available && p.signal_id && p.is_measurement !== false,
       );
       const preferred = ["engine_rpm", "coolant_temp", "vehicle_speed", "engine_load"];
+      // An engine can carry one of these on a newer PID alone: a 2023 Odyssey
+      // has no coolant_temp, and opened with no temperature on the dashboard.
+      const has = new Set(gauges.map((p) => p.signal_id!));
       const pick = gauges
-        .filter((p) => preferred.includes(p.signal_id!))
+        .filter(
+          (p) =>
+            preferred.includes(p.signal_id!) ||
+            (!!p.stands_in_for && preferred.includes(p.stands_in_for) && !has.has(p.stands_in_for)),
+        )
         .map((p) => p.signal_id!);
       setSelected(pick.length ? pick : gauges.slice(0, 4).map((p) => p.signal_id!));
     } catch (e) {
