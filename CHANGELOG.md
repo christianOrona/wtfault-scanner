@@ -3,7 +3,16 @@
 Notable changes, newest first. Versions follow [semantic versioning](https://semver.org),
 with the caveat that everything below 1.0 is allowed to move.
 
-## [Unreleased]
+## [0.7.1] — 2026-10-13
+
+When the app tells you a part is failing, it now shows you the part. A vehicle
+like yours turns on the screen with the area to look in lit up, the part is
+labelled, and underneath is what that kind of part looks like and where to find
+it. It is a typical vehicle and a typical place, and it says so: nobody has
+measured where the part is on yours.
+
+Also in this release: the names beside your car's self-tests were wrong for
+most of them, and are right now.
 
 ### Added
 

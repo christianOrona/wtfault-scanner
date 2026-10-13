@@ -3,7 +3,7 @@
 Where the project actually is, updated when something significant changes.
 Not a changelog — see `CHANGELOG.md` for releases — and not a diary.
 
-Last reviewed: **2026-10-12**
+Last reviewed: **2026-10-13**
 
 ---
 

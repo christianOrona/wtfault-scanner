@@ -85,8 +85,6 @@ It is a typical vehicle and a typical place, and the app says so under every
 picture. Nobody has measured where the part is on yours, and a code that could
 be several parts, like a misfire, lights up the area and names none.
 
-*On `main` today. It arrives in the download with the next release.*
-
 ---
 
 ## AI that shows its receipts
