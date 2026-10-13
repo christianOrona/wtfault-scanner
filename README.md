@@ -19,13 +19,14 @@ evidence behind every claim.
 [![platform](https://img.shields.io/badge/platform-Windows%20%7C%20Android%20preview-lightgrey)](#get-started)
 [![status: work in progress](https://img.shields.io/badge/status-work%20in%20progress-orange)](#where-it-stands)
 
-<img src="docs/screenshots/report.png" alt="An AI inspection report: a verdict, a cost range labelled as an estimate, and a finding labelled measured with links to its evidence" width="820">
+<img src="docs/screenshots/codes.gif" alt="The app's Codes screen: four trouble codes about a diesel particulate filter, and under them a pickup truck drawn as a wireframe of blue light, turning slowly, with its exhaust glowing orange and the filter labelled. Below that, a drawing and a description of the part." width="820">
 
-<sub>Not a mock-up and not edited: this is what the app produced, written up by
-Claude. Every line marked <code>measured</code> links to the bytes it came from.</sub>
+<sub>Three trouble codes, one part, and where to look for it. Recorded from the
+app, not drawn for this page.</sub>
 
 **Every screenshot on this page is the built-in virtual F-250, not a real
-truck.**
+truck.** The vehicles in the animations are typical shapes, not models of
+anybody's.
 
 </div>
 
@@ -52,7 +53,48 @@ Free is the least interesting thing about it.
 
 ---
 
+## It shows you the part
+
+`P2463` tells you nothing. "Diesel particulate filter" tells you little more if
+you have never seen one. So when something is failing, or about to, the app
+draws a vehicle like yours, lights up the part of it to look in, and tells you
+what you are looking for.
+
+<div align="center">
+
+<img src="docs/screenshots/hologram-shapes.gif" alt="A car, an SUV, a pickup and a van, each a wireframe of light with a different part glowing: a catalytic converter, an ignition coil, a fuel filler cap and a battery." width="720">
+
+</div>
+
+- **A car, an SUV, a pickup or a van**, with the engine, gearbox, exhaust,
+  fuel tank, battery and brakes inside it. The system the fault is in glows,
+  and a label follows the part as the vehicle turns. Drag it to look from
+  wherever you like.
+- **What it is, in words.** "A metal canister built into the exhaust pipe,
+  about the size of a loaf of bread" gets you further under a car than a part
+  name does. Seventeen kinds of part have a drawing, a description and where
+  to look.
+- **Wherever the app tells you something is wrong.** Under your trouble
+  codes, beside a self-test that is failing or wearing out, on a fault from a
+  full scan, and on every finding in an AI inspection.
+- **Read from the code, never from the AI.** Which part a code is about comes
+  from the published standard. The model is not asked where anything is, so
+  it cannot point you at the wrong end of the car.
+
+It is a typical vehicle and a typical place, and the app says so under every
+picture. Nobody has measured where the part is on yours, and a code that could
+be several parts, like a misfire, lights up the area and names none.
+
+*On `main` today. It arrives in the download with the next release.*
+
+---
+
 ## AI that shows its receipts
+
+![An AI inspection report: a verdict, a cost range labelled as an estimate, and a finding labelled measured with links to its evidence](docs/screenshots/report.png)
+
+Not a mock-up and not edited: this is what the app produced, written up by
+Claude. Every line marked `measured` links to the bytes it came from.
 
 The model can be wrong. What it cannot do is hand you a guess wearing the label
 of something your car said. Three sources, always labelled, never blended:
@@ -103,13 +145,13 @@ right now** from one merely **stored** from an earlier drive, which the
 legislated services cannot tell you at all.
 
 - **AI inspection.** One button. It decides which checks are worth running,
-  runs them and writes the report at the top of this page. Tell it whether you
+  runs them and writes [a report like the one above](#ai-that-shows-its-receipts). Tell it whether you
   **own** the vehicle or are **thinking of buying it**, and the whole report
   changes.
 - **Self-test results.** Your car grades its own emissions systems and reports
   the measured value *next to the limit it is judged by*. A catalyst reading
   0.58 against a 0.60 limit is passing, and about to stop. You see it months
-  before it sets a code.
+  before it sets a code, with [the part lit up](#it-shows-you-the-part).
 - **The used-car check.** Clearing trouble codes also resets every self-test,
   and they only finish again after 50 to 100 miles. No codes but unfinished
   self-tests means the car was very probably cleared shortly before you
@@ -124,7 +166,7 @@ legislated services cannot tell you at all.
 needs from the car to answer, shows you what it read, and asks you back when
 the answer depends on something only you can see.
 
-![Live data: five readings with graphs, each with a link to where the number came from](docs/screenshots/live.png)
+![Live data streaming: four readings, each with a graph moving as new values arrive and a link to where the number came from](docs/screenshots/live.gif)
 
 **Live data that explains itself.** Every reading can say what it is in a
 sentence, and the number of signals is worked out from what your adapter
@@ -373,6 +415,12 @@ Some of it is a licence obligation to say so; the rest is just true.
 - **[NHTSA vPIC](https://vpic.nhtsa.dot.gov/)**: the US government's free VIN
   decoder, asked only when you press the button.
 
+**Drawn with**
+
+- **[three.js](https://threejs.org/)** (MIT): the vehicle that turns on the
+  screen. The shapes are this project's own, built from numbers rather than
+  loaded from anybody's model.
+
 **Behaviour learned by reading, and reimplemented independently**
 
 These are GPL and this project is MIT/Apache, so no code was taken from either.
@@ -382,8 +430,9 @@ enough to say plainly.
 
 - **[python-OBD](https://github.com/Ircama/python-OBD)** (Ircama's maintained
   fork, and [Brendan Whitfield's](https://github.com/brendan-w/python-OBD)
-  original): checking the socket is powered before sweeping protocols, and a
-  faster way to find an adapter's line speed.
+  original): checking the socket is powered before sweeping protocols, a
+  faster way to find an adapter's line speed, and the standard's numbering of
+  a car's self-tests, which this project had wrong.
 - **[AndrOBD](https://github.com/fr3ts0n/AndrOBD)** by fr3ts0n: years of field
   knowledge about what real adapters do when they misbehave. Which error
   strings actually appear, that `NABLETO` is a truncated `UNABLE TO CONNECT`,
