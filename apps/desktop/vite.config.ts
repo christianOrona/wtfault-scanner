@@ -25,5 +25,13 @@ export default defineConfig({
       },
     },
   },
-  build: { outDir: "dist", target: "es2021", sourcemap: true },
+  build: {
+    outDir: "dist",
+    target: "es2021",
+    sourcemap: true,
+    // The vehicle hologram's 3D library is one chunk of about 550 kB, loaded
+    // only when a finding has somewhere to point. That is its size, not a
+    // sign that something needs splitting, so the warning is set above it.
+    chunkSizeWarningLimit: 700,
+  },
 });

@@ -254,7 +254,9 @@ removed, not yet against the 2012 truck.
 
 ## What is built
 
-- **What a failing part looks like and roughly where it is.** Seventeen kinds
+- **What a failing part looks like and roughly where it is.** A turning 3D
+  vehicle in one of four typical shapes, with the area a finding is in lit up
+  inside it. Seventeen kinds
   of part, each with a drawing, a description and where to look, shown for a
   trouble code, a full-scan fault, a self-test that is failing or close to it,
   and an inspection finding. Read from the published ranges of generic codes

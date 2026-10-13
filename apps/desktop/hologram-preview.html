@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Hologram preview</title>
+  </head>
+  <body>
+    <!--
+      A page for looking at the vehicle hologram without a vehicle, a core or a
+      fault: `npm run dev`, then /hologram-preview.html. Development only. It is
+      not an entry of the production build, so it is not in the app.
+
+        ?region=exhaust&part=particulate_filter   what to light up
+        ?shape=truck                              one shape, large
+        (no shape)                                all four, side by side
+    -->
+    <div id="root"></div>
+    <script type="module" src="/src/hologram/preview.tsx"></script>
+  </body>
+</html>

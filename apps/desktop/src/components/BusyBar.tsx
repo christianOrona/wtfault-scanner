@@ -40,7 +40,12 @@ const USUALLY: Record<string, string> = {
 };
 
 export function BusyBar({ busy }: { busy: AdapterBusy | null | undefined }) {
-  if (!busy) return null;
+  // Not for the first second. Live data asks the car a question twice a
+  // second and each takes a tenth of one, so a strip for every request blinked
+  // on and off above the graphs and pushed the page down each time. This is
+  // for the wait somebody starts to wonder about, and nobody wonders about a
+  // read that is over before they could.
+  if (!busy || busy.seconds < 1) return null;
   const usually = USUALLY[busy.doing];
   return (
     <div className="busybar" role="status" aria-live="polite">

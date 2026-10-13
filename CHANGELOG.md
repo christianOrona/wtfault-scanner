@@ -8,13 +8,16 @@ with the caveat that everything below 1.0 is allowed to move.
 ### Added
 
 - **See what the part is and where to look.** When the app says something is
-  failing or close to it, it now shows a drawing of that kind of part, what it
-  looks like in plain words, where to look for it, and the area of the vehicle
-  it is in. An exhaust filter code comes with a picture of an exhaust filter
-  and the exhaust picked out on the outline of your vehicle. It appears under
-  the codes on *Codes*, beside a self-test that is failing or wearing out,
-  on each fault in a *Full scan*, and on each finding in an AI inspection,
-  and the saved report says it in words.
+  failing or close to it, it now draws a vehicle like yours, turning slowly,
+  with the part of it to look in lit up and the part labelled. Under it are a
+  drawing of that kind of part, what it looks like in plain words, and where
+  to look for it. It appears under the codes on *Codes*, beside a self-test
+  that is failing or wearing out, on each fault in a *Full scan*, and on each
+  finding in an AI inspection, and the saved report says it in words.
+- **A car, an SUV, a pickup or a van.** Pick the one nearest yours and it is
+  remembered. Each has its engine, gearbox, exhaust, fuel tank, battery and
+  brakes inside it, and you can drag it round to look from any side. On a
+  computer that cannot draw it, a flat outline is shown instead.
 - **Seventeen kinds of part,** among them oxygen sensors, the catalytic
   converter, the particulate filter, the EGR valve, ignition coils, injectors,
   the thermostat, the turbocharger, the fuel vapour system and the fuel cap.
@@ -27,6 +30,10 @@ with the caveat that everything below 1.0 is allowed to move.
 
 ### Fixed
 
+- **Live data no longer has a strip blinking above it.** The strip that says
+  what the car is being asked appeared for every reading, twice a second, and
+  pushed the page down each time. It now waits a second, which is when
+  somebody starts to wonder.
 - **A fault from a body or chassis module is now placed.** The outline was
   never offered for a fault found by the full scan, whatever it was.
 - **An oxygen sensor heater fault points at the exhaust,** where the sensor

@@ -12,9 +12,13 @@
 // decides where anything is, and a finding the standard does not place renders
 // nothing at all.
 
+import { Suspense, lazy } from "react";
 import type { Part, Region } from "../api/types";
 import { PartSketch, hasSketch } from "./PartSketch";
-import { VehicleMap } from "./VehicleMap";
+
+// Loaded when first needed: the 3D library is most of a megabyte, and a scan
+// with nothing to place never asks for it.
+const VehicleHologram = lazy(() => import("./VehicleHologram"));
 
 export interface Placed {
   region?: Region | null;
@@ -41,6 +45,11 @@ export function WhereItIs({
 
   return (
     <div className="where">
+      {/* The vehicle first and full width: it is what somebody looks at. What
+          the part is and how to find it sits under it, in words. */}
+      <Suspense fallback={<div className="holo holo-loading">Drawing the vehicle…</div>}>
+        <VehicleHologram region={region} partId={part?.id ?? null} what={part?.name ?? what} />
+      </Suspense>
       {part && (
         <div className="where-part">
           {hasSketch(sketch) && <PartSketch id={sketch!} name={part.name} />}
@@ -54,7 +63,6 @@ export function WhereItIs({
           </div>
         </div>
       )}
-      <VehicleMap region={region} what={part?.name ?? what} generic={!!part} />
     </div>
   );
 }
