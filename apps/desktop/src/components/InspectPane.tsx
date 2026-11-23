@@ -697,6 +697,8 @@ export function TraceList({
             </div>
           );
         }
+        // Shown with the answer it fed, under "What each mechanic said".
+        if (e.type === "council_opinion") return null;
         if (e.type === "tool") {
           return (
             <div key={i} style={{ padding: "2px 0" }}>

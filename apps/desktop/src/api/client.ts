@@ -18,7 +18,7 @@ import type {
   SessionEvent, SessionSummary, SignalsData, ToolResult, ApiError, Dtc, MonitorTestsData,
   VpicHeld, VpicLookup, ObdbStatus, ObdbFetch, ApprovalAnswer, ApprovalChallenge,
   AgentStatus, InspectResponse, ChatResponse as AgentChatResponse,
-  ProvidersResponse, ProviderView, ProviderKindId, ProbeResult, Speed, ExplanationsResponse, FeaturesData, ChangePlan, ApplyResult, WriteGateResult, ProfilesResponse, ClearResult, ReadinessData, ScanPurpose, Tone, FullScanData, ComparisonResponse, UpdateStatus, DownloadState, ModuleProbeData, VehicleKnowledge, SupportReport, AsBuiltStatus, AsBuiltImport,
+  ProvidersResponse, ProviderView, ProviderKindId, LocalAgentKind, LocalAgentsResponse, CouncilSettings, ProbeResult, Speed, ExplanationsResponse, FeaturesData, ChangePlan, ApplyResult, WriteGateResult, ProfilesResponse, ClearResult, ReadinessData, ScanPurpose, Tone, FullScanData, ComparisonResponse, UpdateStatus, DownloadState, ModuleProbeData, VehicleKnowledge, SupportReport, AsBuiltStatus, AsBuiltImport,
 } from "./types";
 
 /**
@@ -541,6 +541,10 @@ export const api = {
   selectProvider: (id: string) =>
     post<{ providers: ProviderView[] }>(`/settings/providers/${enc(id)}/select`),
   testProvider: (id: string) => post<ProbeResult>(`/settings/providers/${enc(id)}/test`),
+  /** Agent CLIs installed here. Runs `--version` on each; sends no prompt. */
+  localAgents: () => request<LocalAgentsResponse>("/settings/local-agents"),
+  setCouncil: (body: CouncilSettings) =>
+    post<{ council: CouncilSettings; sitting: { id: string; label: string }[] }>("/settings/council", body),
 };
 
 /** Creating or editing a provider. */
@@ -556,6 +560,10 @@ export interface ProviderInput {
   max_tokens?: number | null;
   context_tokens?: number | null;
   select?: boolean;
+  /** Which agent CLI, for kind `local_agent`. */
+  local_agent?: LocalAgentKind | null;
+  /** Overrides finding the CLI on PATH. */
+  executable?: string | null;
 }
 
 const enc = encodeURIComponent;

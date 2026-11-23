@@ -56,6 +56,13 @@ pub enum AgentEvent {
         /// Row id of the adapter exchange, when there was one.
         evidence_ref: Option<i64>,
     },
+    /// A council member gave its opinion, or could not. See [`crate::council`].
+    CouncilOpinion {
+        /// The member's name, as configured.
+        member: String,
+        /// Whether it answered.
+        success: bool,
+    },
     /// The run is over.
     Finished,
 }
@@ -89,6 +96,10 @@ pub struct AgentOutcome {
     pub usage: Usage,
     /// True when the step limit stopped the run before the model was done.
     pub truncated: bool,
+    /// Which modules' trouble codes this run actually read, so an answer
+    /// written later from its evidence (a council's merged answer) can be held
+    /// to the same "no faults without a read" check.
+    pub fault_reads: FaultReads,
 }
 
 /// Drives a model through a task.
@@ -461,7 +472,7 @@ impl<'a> Agent<'a> {
 
         sink.emit(AgentEvent::Finished);
 
-        Ok(AgentOutcome { text, report, messages, steps, usage, truncated })
+        Ok(AgentOutcome { text, report, messages, steps, usage, truncated, fault_reads })
     }
 }
 

@@ -18,9 +18,10 @@
 
 use crate::credentials::{CredentialStore, KeySource, OsCredentialStore};
 use crate::error::{AgentError, Secret};
+use crate::local_agents::LocalAgentKind;
 use crate::provider::{
-    anthropic::AnthropicProvider, ollama::OllamaProvider, openai::OpenAiProvider,
-    openrouter::OpenRouterProvider, LlmProvider,
+    anthropic::AnthropicProvider, local_agent::LocalAgentProvider, ollama::OllamaProvider,
+    openai::OpenAiProvider, openrouter::OpenRouterProvider, LlmProvider,
 };
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -58,6 +59,10 @@ pub enum ProviderKind {
     /// one is busy. See [`crate::provider::openrouter`].
     #[serde(rename = "openrouter")]
     OpenRouter,
+    /// An agent CLI installed on this computer (Claude Code, Codex, Gemini
+    /// CLI), signed in with the person's own subscription. See
+    /// [`crate::provider::local_agent`].
+    LocalAgent,
 }
 
 impl ProviderKind {
@@ -73,7 +78,7 @@ impl ProviderKind {
             ProviderKind::Ollama => Some(crate::provider::ollama::DEFAULT_BASE_URL),
             ProviderKind::Xai => Some(XAI_BASE_URL),
             ProviderKind::OpenRouter => Some(crate::provider::openrouter::BASE_URL),
-            ProviderKind::OpenAiCompatible => None,
+            ProviderKind::OpenAiCompatible | ProviderKind::LocalAgent => None,
         }
     }
 }
@@ -118,6 +123,12 @@ pub struct ProviderConfig {
     /// which manage their own context.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_tokens: Option<u32>,
+    /// Which installed agent, for [`ProviderKind::LocalAgent`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_agent: Option<LocalAgentKind>,
+    /// Full path to the agent's executable, when discovery should not choose.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub executable: Option<String>,
 }
 
 /// How much deliberation to buy.
@@ -201,6 +212,12 @@ pub struct ProviderView {
     pub speed_supported: bool,
     /// Whether this is the provider the agent will use.
     pub selected: bool,
+    /// Which installed agent, for a local agent.
+    pub local_agent: Option<LocalAgentKind>,
+    /// The executable path set by hand, if any.
+    pub executable: Option<String>,
+    /// Where prompts to this provider end up, as a stable id.
+    pub locality: String,
 }
 
 impl ProviderConfig {
@@ -224,11 +241,17 @@ impl ProviderConfig {
             max_tokens: self.max_tokens,
             context_tokens: self.context_tokens,
             context_supported: matches!(self.kind, ProviderKind::Ollama),
+            local_agent: self.local_agent,
+            executable: self.executable.clone(),
+            locality: crate::privacy::locality_of(self).as_str().to_string(),
             // Said plainly so the UI can grey the control rather than offering
             // a switch that quietly does nothing.
             speed_supported: !matches!(
                 self.kind,
-                ProviderKind::OpenAiCompatible | ProviderKind::Xai | ProviderKind::OpenRouter
+                ProviderKind::OpenAiCompatible
+                    | ProviderKind::Xai
+                    | ProviderKind::OpenRouter
+                    | ProviderKind::LocalAgent
             ),
             selected,
         }
@@ -280,6 +303,21 @@ impl ProviderConfig {
                     provider: self.label.clone(),
                 })?,
             )?)),
+            ProviderKind::LocalAgent => {
+                let agent = self.local_agent.ok_or_else(|| {
+                    AgentError::Settings(format!(
+                        "{} is a local agent but does not say which one",
+                        self.label
+                    ))
+                })?;
+                Ok(Box::new(LocalAgentProvider::new(
+                    &self.id,
+                    &self.label,
+                    &self.model,
+                    agent,
+                    self.executable.as_deref(),
+                )))
+            }
             ProviderKind::Ollama => Ok(Box::new(OllamaProvider::new(
                 &self.id,
                 &self.label,
@@ -353,6 +391,28 @@ pub struct ProviderSettings {
     /// machine rather than local versus hosted.
     #[serde(default)]
     pub share_identifiers: crate::privacy::ShareIdentifiers,
+    /// Whether Ask is answered by several models together.
+    #[serde(default)]
+    pub council: CouncilSettings,
+}
+
+/// Most members a council may have besides its lead.
+///
+/// Each one is another model turn on every question. Four is already a slow
+/// answer on a laptop; past that the merged answer gets longer, not better.
+pub const MAX_COUNCIL_MEMBERS: usize = 4;
+
+/// The Mechanic council: which configured providers answer alongside the lead.
+///
+/// The lead is always the selected provider. See [`crate::council`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CouncilSettings {
+    /// Whether Ask uses the council at all.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Provider ids of the other members, in the order chosen.
+    #[serde(default)]
+    pub members: Vec<String>,
 }
 
 impl ProviderSettings {
@@ -364,6 +424,30 @@ impl ProviderSettings {
             None if self.providers.len() == 1 => self.providers.first(),
             None => None,
         }
+    }
+
+    /// The council members that would sit with the active lead right now.
+    ///
+    /// Empty when the council is off, has no members that still exist, or
+    /// would consist of the lead alone. The lead is never its own member.
+    pub fn council_members(&self) -> Vec<&ProviderConfig> {
+        if !self.council.enabled {
+            return Vec::new();
+        }
+        let lead = self.active().map(|p| p.id.as_str());
+        let mut out: Vec<&ProviderConfig> = Vec::new();
+        for id in &self.council.members {
+            if Some(id.as_str()) == lead || out.iter().any(|p| &p.id == id) {
+                continue;
+            }
+            if let Some(p) = self.providers.iter().find(|p| &p.id == id) {
+                out.push(p);
+            }
+            if out.len() == MAX_COUNCIL_MEMBERS {
+                break;
+            }
+        }
+        out
     }
 
     /// Redacted view of everything, for the settings UI.
@@ -586,7 +670,42 @@ mod tests {
             max_steps: None,
             max_tokens: None,
             context_tokens: None,
+            local_agent: None,
+            executable: None,
         }
+    }
+
+    #[test]
+    fn council_members_exclude_the_lead_duplicates_and_the_missing() {
+        let mut s = ProviderSettings {
+            providers: vec![
+                cfg("lead", ProviderKind::Ollama),
+                cfg("a", ProviderKind::LocalAgent),
+                cfg("b", ProviderKind::Anthropic),
+            ],
+            selected: Some("lead".into()),
+            council: CouncilSettings {
+                enabled: true,
+                members: vec!["lead".into(), "a".into(), "a".into(), "gone".into(), "b".into()],
+            },
+            ..Default::default()
+        };
+        let ids: Vec<&str> = s.council_members().iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(ids, ["a", "b"]);
+        s.council.enabled = false;
+        assert!(s.council_members().is_empty(), "off means off, whatever is ticked");
+    }
+
+    #[test]
+    fn a_settings_file_from_before_the_council_still_loads() {
+        let s: ProviderSettings = serde_json::from_str(r#"{"providers":[]}"#).unwrap();
+        assert_eq!(s.council, CouncilSettings::default());
+        let c: ProviderConfig = serde_json::from_str(
+            r#"{"id":"x","kind":"local_agent","label":"Claude","model":"","local_agent":"claude_code"}"#,
+        )
+        .unwrap();
+        assert_eq!(c.local_agent, Some(LocalAgentKind::ClaudeCode));
+        assert!(c.build().is_ok(), "a local agent needs no key to build");
     }
 
     #[test]

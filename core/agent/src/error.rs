@@ -103,6 +103,16 @@ pub enum AgentError {
     /// Reading or writing the provider settings failed.
     #[error("provider settings: {0}")]
     Settings(String),
+
+    /// An installed agent CLI could not answer: not installed, not signed in,
+    /// out of allowance, or it exited with an error.
+    #[error("{provider}: {detail}")]
+    LocalAgent {
+        /// Which agent.
+        provider: String,
+        /// What it said, or what went wrong running it, in words for a person.
+        detail: String,
+    },
 }
 
 impl AgentError {
@@ -132,6 +142,7 @@ impl AgentError {
             AgentError::Refused { .. } => "model_refused",
             AgentError::StepLimit { .. } => "agent_step_limit",
             AgentError::Settings(_) => "settings_error",
+            AgentError::LocalAgent { .. } => "local_agent_failed",
         }
     }
 }

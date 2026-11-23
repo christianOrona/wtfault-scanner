@@ -6,8 +6,10 @@
 use crate::agent::{self, RecordingSink};
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
+use aim_agent::local_agents::LocalAgentKind;
 use aim_agent::provider::Role;
 use aim_agent::settings::Speed;
+use aim_agent::settings::{CouncilSettings, MAX_COUNCIL_MEMBERS};
 use aim_agent::{AgentError, AgentEvent, Content, Message, ProviderConfig, ProviderKind, Secret};
 use axum::extract::{Path, State};
 use axum::Json;
@@ -28,6 +30,9 @@ fn agent_error(e: AgentError) -> ApiError {
         AgentError::Unreachable { .. } => (ErrorCode::TransportOpenFailed, "check the endpoint"),
         AgentError::Refused { .. } => (ErrorCode::OperationNotAllowed, "the model declined"),
         AgentError::Settings(_) => (ErrorCode::BadRequest, "check the settings file"),
+        AgentError::LocalAgent { .. } => {
+            (ErrorCode::PreconditionFailed, "check the local agent is installed and signed in")
+        }
         _ => (ErrorCode::Internal, "provider failure"),
     };
     ApiError::new(
@@ -45,6 +50,10 @@ pub async fn list_providers(State(state): State<AppState>) -> ApiResult<Json<Val
         "providers": state.settings.views(&settings),
         "purpose": settings.purpose,
         "tone": settings.tone,
+        "council": settings.council,
+        "council_max_members": MAX_COUNCIL_MEMBERS,
+        // No agent CLIs on a phone; the interface hides the whole section.
+        "local_agents_supported": LOCAL_AGENTS_SUPPORTED,
         "settings_path": state.settings.path().display().to_string(),
         // Said plainly rather than buried: the user is about to paste a key.
         // Describes where keys go on *this* machine rather than where they go
@@ -70,6 +79,9 @@ pub async fn list_providers(State(state): State<AppState>) -> ApiResult<Json<Val
               "default_model": aim_agent::provider::openrouter::AUTO_FREE,
               "key_url": "https://openrouter.ai/keys",
               "help": "Free models, no GPU needed. Needs a free OpenRouter key. Automatic picks the best free model and moves on when one is busy. Free models allow 50 requests a day (an inspection takes 10-30), and whoever serves a free model may keep what it is sent." },
+            { "id": "local_agent", "label": "Local agent (Claude Code, Codex, Gemini CLI)",
+              "requires_key": false, "default_base_url": null, "default_model": "",
+              "help": "An agent already installed and signed in on this computer. Uses your own subscription, not an API key. It has no tools of its own: it reads the vehicle only through this app. Prompts still go to the agent's maker." },
             { "id": "openai_compatible", "label": "OpenAI-compatible", "requires_key": false,
               "default_base_url": null,
               "help": "vLLM, LM Studio, OpenRouter, or anything speaking /chat/completions." }
@@ -101,6 +113,40 @@ pub struct ProviderBody {
     context_tokens: Option<u32>,
     #[serde(default)]
     select: bool,
+    /// Which installed agent, for a `local_agent` provider.
+    #[serde(default)]
+    local_agent: Option<LocalAgentKind>,
+    /// Full path to its executable; omit to let discovery choose.
+    #[serde(default)]
+    executable: Option<String>,
+}
+
+/// Whether this build can run agent CLIs at all.
+const LOCAL_AGENTS_SUPPORTED: bool = !cfg!(any(target_os = "android", target_os = "ios"));
+
+/// Refuse a body that cannot describe a working provider of its kind.
+fn check_body(body: &ProviderBody) -> ApiResult<()> {
+    if body.label.trim().is_empty() {
+        return Err(ApiError::bad_request("a provider needs a label"));
+    }
+    match body.kind {
+        // A blank model means the CLI's own default, which is usually right.
+        ProviderKind::LocalAgent => {
+            if !LOCAL_AGENTS_SUPPORTED {
+                return Err(ApiError::bad_request("local agents are not available on this device"));
+            }
+            if body.local_agent.is_none() {
+                return Err(ApiError::bad_request(
+                    "a local agent needs to say which one: claude_code, codex or gemini",
+                ));
+            }
+        }
+        _ if body.model.trim().is_empty() => {
+            return Err(ApiError::bad_request("a provider needs a label and a model"))
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 /// `POST /api/v1/settings/providers`
@@ -108,9 +154,7 @@ pub async fn add_provider(
     State(state): State<AppState>,
     Json(body): Json<ProviderBody>,
 ) -> ApiResult<Json<Value>> {
-    if body.label.trim().is_empty() || body.model.trim().is_empty() {
-        return Err(ApiError::bad_request("a provider needs a label and a model"));
-    }
+    check_body(&body)?;
     let mut settings = state.settings.load().map_err(agent_error)?;
 
     let id = format!("prov_{:016x}", fastrand_id());
@@ -127,6 +171,11 @@ pub async fn add_provider(
         // Below 2k cannot hold a system prompt plus one tool result; above 128k
         // no consumer card has the VRAM for the KV cache.
         context_tokens: body.context_tokens.map(|n| n.clamp(2_048, 131_072)),
+        local_agent: body.local_agent.filter(|_| body.kind == ProviderKind::LocalAgent),
+        executable: body
+            .executable
+            .filter(|e| !e.trim().is_empty() && body.kind == ProviderKind::LocalAgent)
+            .map(|e| e.trim().to_string()),
     };
 
     // First provider is selected automatically: making someone add one and then
@@ -147,6 +196,7 @@ pub async fn update_provider(
     Path(id): Path<String>,
     Json(body): Json<ProviderBody>,
 ) -> ApiResult<Json<Value>> {
+    check_body(&body)?;
     let mut settings = state.settings.load().map_err(agent_error)?;
     let existing = settings.providers.iter_mut().find(|p| p.id == id).ok_or_else(|| {
         ApiError::new(aim_types::AimError::new(
@@ -165,6 +215,11 @@ pub async fn update_provider(
     existing.max_steps = body.max_steps.map(|n| n.clamp(2, 40));
     existing.max_tokens = body.max_tokens.map(|n| n.clamp(512, 64_000));
     existing.context_tokens = body.context_tokens.map(|n| n.clamp(2_048, 131_072));
+    existing.local_agent = body.local_agent.filter(|_| body.kind == ProviderKind::LocalAgent);
+    existing.executable = body
+        .executable
+        .filter(|e| !e.trim().is_empty() && body.kind == ProviderKind::LocalAgent)
+        .map(|e| e.trim().to_string());
     // A missing key means "leave it alone"; an empty string means "remove it".
     // Without that distinction, editing the model would silently wipe the key.
     match body.api_key {
@@ -196,6 +251,7 @@ pub async fn delete_provider(
     if settings.selected.as_deref() == Some(id.as_str()) {
         settings.selected = settings.providers.first().map(|p| p.id.clone());
     }
+    settings.council.members.retain(|m| m != &id);
     state.settings.save(&settings).map_err(agent_error)?;
     // Saving cannot reach a key whose provider is no longer in the list —
     // nothing iterates over it to notice it should go — so removing it from
@@ -260,6 +316,67 @@ pub async fn test_provider(
     }
 }
 
+/// `GET /api/v1/settings/local-agents` — agent CLIs installed on this computer.
+///
+/// Runs each one's `--version` and, where it is cheap, its sign-in check. No
+/// prompt is sent and no allowance is spent.
+pub async fn local_agents() -> ApiResult<Json<Value>> {
+    let found = if LOCAL_AGENTS_SUPPORTED {
+        aim_agent::local_agents::detect_all(&aim_agent::local_agents::ProcessRunner).await
+    } else {
+        Vec::new()
+    };
+    Ok(Json(json!({
+        "supported": LOCAL_AGENTS_SUPPORTED,
+        "agents": found,
+        "looked_for": LocalAgentKind::ALL.iter().map(|k| json!({
+            "kind": k, "label": k.label(), "command": k.command(), "vendor": k.vendor(),
+        })).collect::<Vec<_>>(),
+    })))
+}
+
+/// Body for the council setting.
+#[derive(Debug, Deserialize)]
+pub struct CouncilBody {
+    enabled: bool,
+    #[serde(default)]
+    members: Vec<String>,
+}
+
+/// `POST /api/v1/settings/council`
+///
+/// Members must be configured providers. The lead (the selected provider) may
+/// be ticked too, and is simply skipped while it is the lead, so choosing a
+/// different lead later does not silently empty the council.
+pub async fn set_council(
+    State(state): State<AppState>,
+    Json(body): Json<CouncilBody>,
+) -> ApiResult<Json<Value>> {
+    let mut settings = state.settings.load().map_err(agent_error)?;
+    let mut members: Vec<String> = Vec::new();
+    for id in body.members {
+        if !settings.providers.iter().any(|p| p.id == id) {
+            return Err(ApiError::bad_request(format!("no provider {id:?}")));
+        }
+        if !members.contains(&id) {
+            members.push(id);
+        }
+    }
+    if members.len() > MAX_COUNCIL_MEMBERS + 1 {
+        return Err(ApiError::bad_request(format!(
+            "a council has at most {MAX_COUNCIL_MEMBERS} members besides the lead"
+        )));
+    }
+    settings.council = CouncilSettings { enabled: body.enabled, members };
+    state.settings.save(&settings).map_err(agent_error)?;
+    let sitting: Vec<Value> = settings
+        .council_members()
+        .iter()
+        .map(|p| json!({ "id": p.id, "label": p.label }))
+        .collect();
+    Ok(Json(json!({ "council": settings.council, "sitting": sitting })))
+}
+
 // ------------------------------------------------------------------- agent
 
 /// `GET /api/v1/agent` — whether the agent is usable, and why not if it isn't.
@@ -277,6 +394,9 @@ pub async fn agent_status(State(state): State<AppState>) -> ApiResult<Json<Value
         // decision or as a maintenance one.
         "purpose": settings.purpose,
         "tone": settings.tone,
+        // Who answers alongside the lead in Ask. Empty when the council is off.
+        "council": settings.council_members().iter()
+            .map(|p| json!({ "id": p.id, "label": p.label })).collect::<Vec<_>>(),
     })))
 }
 
@@ -382,7 +502,8 @@ pub async fn messages(
         .collect();
 
     let mut sink = RecordingSink::default();
-    let outcome = agent::run_chat(&state, history, &mut sink).await.map_err(agent_error)?;
+    let (outcome, council) =
+        agent::run_chat_turn(&state, history, &mut sink).await.map_err(agent_error)?;
 
     Ok(Json(json!({
         "text": outcome.text,
@@ -398,6 +519,9 @@ pub async fn messages(
         // interface re-previews it against the vehicle before drawing a button,
         // and a person presses that button or nothing happens.
         "proposed_change": agent::proposed_change(&sink),
+        // Present only when a council answered: who sat, what each said, and
+        // whether the text above is their merge or the lead's draft alone.
+        "council": council,
     })))
 }
 
@@ -414,6 +538,9 @@ fn trace_of(sink: &RecordingSink) -> Vec<Value> {
                 "type": "tool_done", "name": name,
                 "success": success, "evidence_ref": evidence_ref
             })),
+            AgentEvent::CouncilOpinion { member, success } => {
+                Some(json!({ "type": "council_opinion", "member": member, "success": success }))
+            }
             AgentEvent::Finished => None,
         })
         .collect()

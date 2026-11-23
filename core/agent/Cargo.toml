@@ -12,6 +12,10 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 thiserror = "2.0.20"
 tracing = "0.1.44"
+# Running installed agent CLIs (Claude Code, Codex) with a timeout, and asking
+# council members in parallel.
+tokio = { version = "1.49.0", features = ["process", "time", "io-util", "rt"] }
+futures-util = { version = "0.3.31", default-features = false, features = ["std"] }
 
 # rustls rather than the default native-tls: no OpenSSL to find, and the same
 # behaviour on the Windows garage laptop as anywhere else.
