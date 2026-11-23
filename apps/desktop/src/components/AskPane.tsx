@@ -7,7 +7,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { api, describeError } from "../api/client";
-import type { AgentQuestion, AgentStatus, ProposedChange, TraceEntry } from "../api/types";
+import type { AgentQuestion, AgentStatus, CouncilReport, ProposedChange, TraceEntry } from "../api/types";
 import { ChangeFlow } from "./ChangeFlow";
 import { ErrorBanner, Spinner } from "./primitives";
 import { PaneIntro } from "../explain";
@@ -24,6 +24,8 @@ interface Turn {
   answered?: string;
   /** A change the assistant previewed, offered to the person to make. */
   proposal?: ProposedChange | null;
+  /** What each council member said, when the council answered. */
+  council?: CouncilReport | null;
 }
 
 /**
@@ -110,6 +112,7 @@ export function AskPane({
           trace: res.trace,
           question: res.question,
           proposal: res.proposed_change ?? null,
+          council: res.council ?? null,
         },
       ]);
       onFinished?.();
@@ -190,6 +193,7 @@ export function AskPane({
                 onAnswer={(choice) => void send(choice, i)}
               />
             )}
+            {t.council && <CouncilOpinions council={t.council} />}
             {!!t.trace?.length && (
               <details style={{ marginTop: 8 }}>
                 <summary className="faint" style={{ cursor: "pointer", fontSize: 12 }}>
@@ -203,7 +207,9 @@ export function AskPane({
 
         {busy && (
           <div className="card">
-            <Spinner label="Reading the vehicle and thinking" />
+            <Spinner
+              label={agent.council?.length ? "Reading the vehicle and asking the council" : "Reading the vehicle and thinking"}
+            />
           </div>
         )}
 
@@ -244,6 +250,11 @@ export function AskPane({
             </button>
           )}
         </div>
+        {!!agent.council?.length && (
+          <div className="faint" style={{ marginTop: 6, fontSize: 12 }}>
+            Mechanic council: {agent.provider?.label}, {agent.council.map((m) => m.label).join(", ")}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -407,5 +418,33 @@ function Suggestions({
         </button>
       ))}
     </div>
+  );
+}
+
+/**
+ * Each council member's opinion, folded away under the answer it fed. The
+ * answer above is already the merged one; this is for anyone who wants to see
+ * where the mechanics agreed or did not.
+ */
+function CouncilOpinions({ council }: { council: CouncilReport }) {
+  if (!council.opinions.length) return null;
+  const answered = council.opinions.filter((o) => o.text).length;
+  return (
+    <details style={{ marginTop: 8 }}>
+      <summary className="faint" style={{ cursor: "pointer", fontSize: 12 }}>
+        What each mechanic said ({answered} of {council.opinions.length} answered
+        {council.merged ? "" : ", answer is " + council.lead + "'s alone"})
+      </summary>
+      {council.opinions.map((o, i) => (
+        <div key={i} style={{ marginTop: 8 }}>
+          <strong style={{ fontSize: 12 }}>{o.member}</strong>
+          {o.text ? (
+            <div style={{ whiteSpace: "pre-wrap" }}>{renderInline(o.text)}</div>
+          ) : (
+            <div className="faint">No opinion: {o.error ?? "it did not answer"}</div>
+          )}
+        </div>
+      ))}
+    </details>
   );
 }

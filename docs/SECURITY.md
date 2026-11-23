@@ -137,6 +137,14 @@ copy:
 | Ollama on this machine | Nowhere. It does not leave the computer. |
 | Ollama on another box on your network | It leaves this machine for that one. |
 | Anthropic, xAI, any hosted endpoint | It goes to that provider. |
+| A local agent (Claude Code, Codex, Gemini CLI) | The program runs here, but it sends the prompt to its company (Anthropic, OpenAI, Google) under your sign-in. Treated as hosted for the VIN. |
+| A Mechanic council | Every member gets the readings. The VIN is held back if any member may not have it. |
+
+A local agent is started with its own tools off, in an empty temporary folder,
+with API-key variables removed from its environment, and its reply is read as
+text. Tool calls it asks for go through the same schema check and safety gate
+as any other model's; it has no route to the vehicle, the shell or your files
+of its own.
 
 Scans are stored on this machine only, in a SQLite database whose path the About
 screen shows. A VIN identifies a specific vehicle and, by extension, often a

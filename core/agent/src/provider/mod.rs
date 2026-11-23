@@ -7,9 +7,11 @@
 
 pub mod anthropic;
 pub mod free_models;
+pub mod local_agent;
 pub mod ollama;
 pub mod openai;
 pub mod openrouter;
+pub mod text_tools;
 
 use crate::error::AgentError;
 use serde::{Deserialize, Serialize};

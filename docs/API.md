@@ -2616,6 +2616,35 @@ result of the test, not a failure of the request.
 { "reachable": false, "error": { "code": "provider_unreachable", "message": "cannot reach Workshop GPU at http://127.0.0.1:11434/api/tags: ..." } }
 ```
 
+#### `GET /settings/local-agents`
+
+Agent CLIs found on this computer. Runs each one's `--version` and, where it has
+one, a sign-in check. Sends no prompt and spends nothing. `supported` is false
+on phones, where `agents` is always empty.
+
+```json
+{ "supported": true,
+  "agents": [{ "kind": "claude_code", "label": "Claude Code", "path": "/usr/local/bin/claude",
+               "version": "2.1.0 (Claude Code)", "signed_in": true, "vendor": "Anthropic" }],
+  "looked_for": [{ "kind": "claude_code", "label": "Claude Code", "command": "claude", "vendor": "Anthropic" }] }
+```
+
+Add one with `POST /settings/providers` and `{ "kind": "local_agent", "local_agent":
+"claude_code", "label": "Claude Code", "model": "" }`. A blank model is the CLI's own
+default; `executable` overrides finding it.
+
+#### `POST /settings/council`
+
+```json
+{ "enabled": true, "members": ["prov_2", "prov_3"] }
+```
+
+Every id must be a configured provider; at most four sit besides the lead. The
+provider in use leads and is never its own member. → `{ "council": {...},
+"sitting": [{ "id", "label" }] }`. `GET /agent` lists who is sitting under
+`council`, and `POST /agent/messages` answers with a `council` object (`lead`,
+`opinions` with `member`, `model`, `text`, `error`, and `merged`) when one sat.
+
 #### `POST /settings/voice`
 
 Who the assistant is talking to and how bluntly. Separate from providers because

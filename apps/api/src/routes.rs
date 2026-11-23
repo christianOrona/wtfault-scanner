@@ -144,6 +144,8 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/v1/settings/providers/{id}/select", post(crate::agent_routes::select_provider))
         .route("/api/v1/settings/providers/{id}/test", post(crate::agent_routes::test_provider))
+        .route("/api/v1/settings/local-agents", get(crate::agent_routes::local_agents))
+        .route("/api/v1/settings/council", post(crate::agent_routes::set_council))
         .route("/api/v1/settings/voice", post(crate::agent_routes::set_voice))
         .route(
             "/api/v1/settings/privacy",

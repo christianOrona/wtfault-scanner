@@ -22,6 +22,8 @@
 //! # Layout
 //!
 //! * [`provider`] — the vendor-neutral seam: Anthropic, OpenAI-compatible, Ollama.
+//! * [`local_agents`] — agent CLIs installed on this computer, found and run.
+//! * [`council`] — several models answering one question together.
 //! * [`claims`] — a chat answer that says "no faults", checked against what was read.
 //! * [`settings`] — which providers are configured, and where the keys live.
 //! * [`error`] — failures, and the [`error::Secret`] wrapper that keeps
@@ -30,8 +32,10 @@
 #![warn(missing_docs)]
 
 pub mod claims;
+pub mod council;
 pub mod credentials;
 pub mod error;
+pub mod local_agents;
 pub mod privacy;
 pub mod prompts;
 pub mod provider;

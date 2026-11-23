@@ -3,6 +3,21 @@
 Notable changes, newest first. Versions follow [semantic versioning](https://semver.org),
 with the caveat that everything below 1.0 is allowed to move.
 
+## [Unreleased]
+
+### Added
+
+- **Use the agents already on your computer.** Settings now lists Claude Code,
+  Codex and Gemini CLI when they are installed, each one tap from being the
+  model. They run with your own sign-in, so no API key is needed. Their own
+  tools are switched off: the app still does every read of the vehicle itself,
+  through the same safety checks as any other model.
+- **Mechanic council.** Tick other models in Settings and every answer in
+  *Ask* gets their second opinion. The model in use reads the vehicle, the
+  others give their view of the same readings, and the answer you see is the
+  merged one. What each said is one click away under the answer. Inspection
+  reports are unchanged and still use one model.
+
 ## [0.7.1] — 2026-10-13
 
 When the app tells you a part is failing, it now shows you the part. A vehicle

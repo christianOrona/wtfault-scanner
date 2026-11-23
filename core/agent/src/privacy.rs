@@ -96,9 +96,14 @@ pub fn locality_of(config: &ProviderConfig) -> Locality {
     match config.kind {
         // OpenRouter passes the request on to whoever serves the model, and
         // for a free model that is often someone who keeps what it is sent.
-        ProviderKind::Anthropic | ProviderKind::Xai | ProviderKind::OpenRouter => {
-            Locality::SomebodyElse
-        }
+        //
+        // A local agent runs here, but the CLI sends the prompt to its vendor
+        // (Anthropic, OpenAI, Google). Where the process runs is not where the
+        // words go, and the words are what this setting protects.
+        ProviderKind::Anthropic
+        | ProviderKind::Xai
+        | ProviderKind::OpenRouter
+        | ProviderKind::LocalAgent => Locality::SomebodyElse,
         ProviderKind::Ollama | ProviderKind::OpenAiCompatible => {
             let url = config
                 .base_url
@@ -227,6 +232,8 @@ mod tests {
             max_steps: None,
             max_tokens: None,
             context_tokens: None,
+            local_agent: None,
+            executable: None,
         }
     }
 
@@ -256,7 +263,7 @@ mod tests {
     /// Hosted providers are somebody else's by definition, whatever URL is set.
     #[test]
     fn a_hosted_provider_is_somebody_elses_regardless_of_url() {
-        for kind in [ProviderKind::Anthropic, ProviderKind::Xai] {
+        for kind in [ProviderKind::Anthropic, ProviderKind::Xai, ProviderKind::LocalAgent] {
             let p = provider(kind, Some("http://127.0.0.1:9999"));
             assert_eq!(
                 locality_of(&p),

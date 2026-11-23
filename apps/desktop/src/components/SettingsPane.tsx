@@ -7,7 +7,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { api, describeError, type ProviderInput } from "../api/client";
-import type { ProbeResult, ProfilesResponse, ProviderKindId, ProviderView, ProvidersResponse, ScanPurpose, Tone, Health } from "../api/types";
+import type { DetectedAgent, LocalAgentKind, LocalAgentsResponse, ProbeResult, ProfilesResponse, ProviderKindId, ProviderView, ProvidersResponse, ScanPurpose, Tone, Health } from "../api/types";
 import { LINKS, PRODUCT_NAME, TAGLINE } from "../branding";
 import appIcon from "../assets/icon.png";
 import { ProblemReportSection } from "./ProblemReport";
@@ -62,6 +62,7 @@ export function SettingsPane({
   // The server decides which endpoints can honour a speed setting, so the
   // control is never offered where it would quietly do nothing.
   const speedSupported = draft.kind === "ollama" || draft.kind === "anthropic";
+  const isLocalAgent = draft.kind === "local_agent";
 
   function startAdd(kind: ProviderKindId) {
     const info = kinds.find((k) => k.id === kind);
@@ -75,7 +76,23 @@ export function SettingsPane({
       speed: "quality",
       max_steps: null,
       context_tokens: null,
+      local_agent: kind === "local_agent" ? "claude_code" : null,
     });
+  }
+
+  /** One tap from the list of agents found on this computer. */
+  async function addLocalAgent(agent: DetectedAgent) {
+    await act(() =>
+      api.addProvider({
+        kind: "local_agent",
+        label: agent.label,
+        model: "",
+        local_agent: agent.kind,
+        // Selected only when nothing else is set up, so adding a second
+        // opinion never quietly swaps out the model already in use.
+        select: !data?.providers.length,
+      }),
+    );
   }
 
   function startEdit(p: ProviderView) {
@@ -90,6 +107,8 @@ export function SettingsPane({
       speed: p.speed,
       max_steps: p.max_steps,
       context_tokens: p.context_tokens,
+      local_agent: p.local_agent ?? null,
+      executable: p.executable ?? "",
     });
   }
 
@@ -100,6 +119,7 @@ export function SettingsPane({
       const body: ProviderInput = {
         ...draft,
         base_url: draft.base_url?.trim() ? draft.base_url.trim() : null,
+        executable: draft.executable?.trim() ? draft.executable.trim() : null,
       };
       if (editing === "new") await api.addProvider({ ...body, select: true });
       else if (editing) await api.updateProvider(editing, body);
@@ -142,7 +162,8 @@ export function SettingsPane({
   const canSave =
     !busy &&
     draft.label.trim() !== "" &&
-    draft.model.trim() !== "" &&
+    // A local agent with no model uses its CLI's own default.
+    (isLocalAgent ? !!draft.local_agent : draft.model.trim() !== "") &&
     (draft.kind !== "openai_compatible" || !!draft.base_url?.trim()) &&
     // A kind that requires a key needs one, unless one is already stored.
     (!kinds.find((k) => k.id === draft.kind)?.requires_key ||
@@ -155,7 +176,7 @@ export function SettingsPane({
         <strong>Model providers</strong>
         {!editing && (
           <div className="row">
-            {kinds.map((k) => (
+            {kinds.filter((k) => k.id !== "local_agent").map((k) => (
               <button key={k.id} onClick={() => startAdd(k.id)} disabled={busy}>
                 Add {k.label}
               </button>
@@ -165,6 +186,15 @@ export function SettingsPane({
       </div>
 
       <ErrorBanner error={error} />
+
+      {data?.local_agents_supported && !editing && (
+        <LocalAgents
+          providers={data.providers}
+          busy={busy}
+          onAdd={(a) => void addLocalAgent(a)}
+          onAddByPath={() => startAdd("local_agent")}
+        />
+      )}
 
       {!data?.providers.length && !editing && (
         <div className="card">
@@ -209,9 +239,15 @@ export function SettingsPane({
             </div>
 
             <div className="provenance" style={{ marginTop: 8 }}>
-              <span>model {p.model}</span>
+              <span>model {p.model || "default"}</span>
               {p.base_url && <span>{p.base_url}</span>}
-              <span>{p.has_key ? `key ${p.key_hint}` : "no key"}</span>
+              {p.kind === "local_agent" ? (
+                <span title="Runs the agent installed on this computer with its own sign-in. No API key is used.">
+                  your own sign-in
+                </span>
+              ) : (
+                <span>{p.has_key ? `key ${p.key_hint}` : "no key"}</span>
+              )}
               {/* Where the key actually is, next to the key itself. The only
                   one worth colouring is the plaintext file: everything else is
                   "stored properly", and that one is "anything running as you
@@ -293,8 +329,39 @@ export function SettingsPane({
             />
           </div>
 
+          {isLocalAgent && (
+            <>
+              <div className="field">
+                <label>Agent</label>
+                <select
+                  value={draft.local_agent ?? "claude_code"}
+                  onChange={(e) =>
+                    setDraft((d) => ({ ...d, local_agent: e.target.value as LocalAgentKind }))
+                  }
+                >
+                  <option value="claude_code">Claude Code</option>
+                  <option value="codex">Codex</option>
+                  <option value="gemini">Gemini CLI</option>
+                </select>
+              </div>
+              <div className="field">
+                <label>Program (optional)</label>
+                <input
+                  type="text"
+                  value={draft.executable ?? ""}
+                  placeholder="found automatically"
+                  onChange={(e) => setDraft((d) => ({ ...d, executable: e.target.value }))}
+                />
+                <span className="faint">
+                  Only if it was not found: the full path to the program, such as{" "}
+                  <code>C:\Users\you\AppData\Roaming\npm\claude.cmd</code>.
+                </span>
+              </div>
+            </>
+          )}
+
           {/* Endpoints with no reason to be overridden. */}
-          {draft.kind !== "anthropic" && draft.kind !== "openrouter" && (
+          {draft.kind !== "anthropic" && draft.kind !== "openrouter" && !isLocalAgent && (
             <div className="field">
               <label>Endpoint{draft.kind === "openai_compatible" ? "" : " (optional)"}</label>
               <input
@@ -311,12 +378,18 @@ export function SettingsPane({
           )}
 
           <div className="field">
-            <label>Model</label>
+            <label>Model{isLocalAgent ? " (optional)" : ""}</label>
             <input
               type="text"
               value={draft.model}
               list={draft.kind === "openrouter" ? "openrouter-models" : undefined}
-              placeholder={draft.kind === "anthropic" ? "claude-opus-5" : "qwen2.5:7b"}
+              placeholder={
+                isLocalAgent
+                  ? "blank uses the agent's default"
+                  : draft.kind === "anthropic"
+                    ? "claude-opus-5"
+                    : "qwen2.5:7b"
+              }
               onChange={(e) => setDraft((d) => ({ ...d, model: e.target.value }))}
             />
             {draft.kind === "openrouter" && (
@@ -336,7 +409,7 @@ export function SettingsPane({
             )}
           </div>
 
-          {(kindInfo?.requires_key || draft.kind === "openai_compatible") && (
+          {(kindInfo?.requires_key || draft.kind === "openai_compatible") && !isLocalAgent && (
             <div className="field">
               <label>
                 API key
@@ -372,6 +445,7 @@ export function SettingsPane({
               99% of a local inspection is the model deliberating, not the
               adapter reading, so these are what decide whether a scan takes two
               minutes or ten. */}
+          {!isLocalAgent && (
           <div className="field">
             <label>Thinking</label>
             <div className="seg">
@@ -398,6 +472,7 @@ export function SettingsPane({
                   : "Fast lowers the effort level. It does not disable thinking, which Anthropic warns can make a model describe a tool call instead of making one."}
             </span>
           </div>
+          )}
 
           <div className="field">
             <label>Step budget</label>
@@ -460,6 +535,10 @@ export function SettingsPane({
             </button>
           </div>
         </div>
+      )}
+
+      {data && data.providers.length > 1 && !editing && (
+        <CouncilCard data={data} busy={busy} onSave={(c) => void act(() => api.setCouncil(c))} />
       )}
 
       <AgentVoice
@@ -797,5 +876,137 @@ function ExternalLink({ href, label }: { href: string | null; label: string }) {
       {state === "failed" ? `${label}: ${href}` : null}
       {state === "idle" ? `${label} ↗` : null}
     </a>
+  );
+}
+
+/**
+ * Agent CLIs already installed on this computer, each one tap from being a
+ * provider. They run with the person's own sign-in, so nothing here asks for
+ * a key. Finding them runs `--version` and a sign-in check; no prompt is sent.
+ */
+function LocalAgents({
+  providers,
+  busy,
+  onAdd,
+  onAddByPath,
+}: {
+  providers: ProviderView[];
+  busy: boolean;
+  onAdd: (agent: DetectedAgent) => void;
+  onAddByPath: () => void;
+}) {
+  const [found, setFound] = useState<LocalAgentsResponse | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    api.localAgents().then(
+      (r) => live && setFound(r),
+      () => live && setFailed(true),
+    );
+    return () => { live = false; };
+  }, []);
+
+  const added = new Set(providers.filter((p) => p.kind === "local_agent").map((p) => p.local_agent));
+
+  return (
+    <div className="card">
+      <div className="row" style={{ justifyContent: "space-between" }}>
+        <strong>Local agents on this computer</strong>
+        <button onClick={onAddByPath} disabled={busy}>Add by path</button>
+      </div>
+      {!found && !failed && <div className="faint" style={{ marginTop: 6 }}><Spinner label="Looking" /></div>}
+      {failed && <div className="faint" style={{ marginTop: 6 }}>Could not look for installed agents.</div>}
+      {found && found.agents.length === 0 && (
+        <div className="faint" style={{ marginTop: 6 }}>
+          None found. Looked for {found.looked_for.map((k) => k.label).join(", ")}.
+        </div>
+      )}
+      {found?.agents.map((a) => (
+        <div className="row" key={a.kind} style={{ justifyContent: "space-between", marginTop: 8 }}>
+          <div className="row">
+            <span>{a.label}</span>
+            {a.version && <span className="faint">{a.version}</span>}
+            {a.signed_in === false && (
+              <span className="faint" style={{ color: "var(--caution)" }}>
+                not signed in
+              </span>
+            )}
+          </div>
+          {added.has(a.kind) ? (
+            <span className="faint">added</span>
+          ) : (
+            <button onClick={() => onAdd(a)} disabled={busy}>Add</button>
+          )}
+        </div>
+      ))}
+      {found && found.agents.length > 0 && (
+        <div className="faint" style={{ marginTop: 8 }}>
+          Uses your own sign-in, not an API key. Prompts go to the agent&apos;s company.
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The Mechanic council: other providers that read the same evidence and give
+ * a second opinion on every answer in Ask. The provider in use leads and
+ * writes the final answer.
+ */
+function CouncilCard({
+  data,
+  busy,
+  onSave,
+}: {
+  data: ProvidersResponse;
+  busy: boolean;
+  onSave: (c: { enabled: boolean; members: string[] }) => void;
+}) {
+  const council = data.council ?? { enabled: false, members: [] };
+  const max = data.council_max_members ?? 4;
+  const lead = data.providers.find((p) => p.selected);
+  const others = data.providers.filter((p) => !p.selected);
+  const ticked = council.members.filter((id) => others.some((p) => p.id === id));
+
+  function toggle(id: string) {
+    const members = ticked.includes(id) ? ticked.filter((m) => m !== id) : [...ticked, id];
+    onSave({ enabled: council.enabled, members });
+  }
+
+  return (
+    <div className="card">
+      <label className="row" style={{ gap: 8, cursor: "pointer" }}>
+        <input
+          type="checkbox"
+          checked={council.enabled}
+          disabled={busy}
+          onChange={(e) => onSave({ enabled: e.target.checked, members: ticked })}
+        />
+        <strong>Mechanic council</strong>
+      </label>
+      <div className="faint" style={{ marginTop: 4 }}>
+        Ask gets a second opinion from the ones ticked here. {lead ? lead.label : "The provider in use"}{" "}
+        reads the vehicle and writes the answer. Slower, and each one uses its own allowance.
+      </div>
+      {council.enabled && (
+        <div style={{ marginTop: 8 }}>
+          {others.map((p) => {
+            const on = ticked.includes(p.id);
+            return (
+              <label key={p.id} className="row" style={{ gap: 8, cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={on}
+                  disabled={busy || (!on && ticked.length >= max)}
+                  onChange={() => toggle(p.id)}
+                />
+                <span>{p.label}</span>
+              </label>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }

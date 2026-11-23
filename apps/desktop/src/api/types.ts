@@ -447,7 +447,19 @@ export type StreamFrame =
 
 // ---------------------------------------------------------------- the agent
 
-export type ProviderKindId = "anthropic" | "ollama" | "openai_compatible" | "xai" | "openrouter";
+export type ProviderKindId =
+  | "anthropic"
+  | "ollama"
+  | "openai_compatible"
+  | "xai"
+  | "openrouter"
+  | "local_agent";
+
+/** An agent CLI installed on this computer, driven with its own sign-in. */
+export type LocalAgentKind = "claude_code" | "codex" | "gemini";
+
+/** Where prompts sent to a provider end up. */
+export type Locality = "this_machine" | "your_network" | "somebody_else";
 
 /** How much the model should deliberate. Applied differently per provider. */
 export type Speed = "quality" | "fast";
@@ -478,6 +490,51 @@ export interface ProviderView {
   /** False when a context window does not apply to this endpoint. */
   context_supported: boolean;
   selected: boolean;
+  /** Which agent CLI, for a local agent. */
+  local_agent?: LocalAgentKind | null;
+  /** A path that overrides finding the CLI, for a local agent. */
+  executable?: string | null;
+  locality?: Locality;
+}
+
+/** One agent CLI found on this computer. */
+export interface DetectedAgent {
+  kind: LocalAgentKind;
+  label: string;
+  path: string;
+  version: string | null;
+  /** Null when the CLI has no cheap way to say. */
+  signed_in: boolean | null;
+  /** Whose computers it sends prompts to. */
+  vendor: string;
+}
+
+export interface LocalAgentsResponse {
+  /** False on phones, where there is nothing to run. */
+  supported: boolean;
+  agents: DetectedAgent[];
+  looked_for: { kind: LocalAgentKind; label: string; command: string; vendor: string }[];
+}
+
+/** Other providers that give a second opinion on every answer in Ask. */
+export interface CouncilSettings {
+  enabled: boolean;
+  members: string[];
+}
+
+/** One council member's opinion on a turn, or why it gave none. */
+export interface CouncilOpinion {
+  member: string;
+  model: string;
+  text: string | null;
+  error: string | null;
+}
+
+export interface CouncilReport {
+  lead: string;
+  opinions: CouncilOpinion[];
+  /** False when the lead's draft stands alone (nobody answered, or the merge failed). */
+  merged: boolean;
 }
 
 export interface ProviderKindInfo {
@@ -501,6 +558,9 @@ export interface ProvidersResponse {
   settings_path: string;
   storage_note: string;
   kinds: ProviderKindInfo[];
+  council?: CouncilSettings;
+  council_max_members?: number;
+  local_agents_supported?: boolean;
 }
 
 export interface ProbeResult {
@@ -519,6 +579,8 @@ export interface AgentStatus {
   ready: boolean;
   provider: { id: string; label: string; model: string } | null;
   reason: string | null;
+  /** The members sitting on this turn's council; empty when it is off. */
+  council?: { id: string; label: string }[];
 }
 
 /** Where a claim came from. Drives how it is presented, and it always is. */
@@ -563,7 +625,8 @@ export interface Report {
 export type TraceEntry =
   | { type: "thinking"; text: string }
   | { type: "tool"; name: string; arguments: unknown }
-  | { type: "tool_done"; name: string; success: boolean; evidence_ref: number | null };
+  | { type: "tool_done"; name: string; success: boolean; evidence_ref: number | null }
+  | { type: "council_opinion"; member: string; success: boolean };
 
 export interface AgentUsage {
   input_tokens: number;
@@ -607,6 +670,8 @@ export interface ChatResponse {
    *  those two things — the card asks the core for a fresh plan before it
    *  draws a button, so nothing the model was shown reaches the person. */
   proposed_change?: ProposedChange | null;
+  /** Present when the Mechanic council answered. */
+  council?: CouncilReport | null;
 }
 
 export interface ProposedChange {

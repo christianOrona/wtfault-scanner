@@ -342,7 +342,11 @@ pub async fn describe_context(state: &AppState) -> String {
 fn withhold_identifiers(state: &AppState) -> bool {
     let Ok(settings) = state.settings.load() else { return true };
     let Some(active) = settings.active() else { return true };
-    !settings.share_identifiers.may_send_to(aim_agent::privacy::locality_of(active))
+    // With the council on, the same prompt goes to every member, so the VIN
+    // goes only if every one of them may have it.
+    std::iter::once(active)
+        .chain(settings.council_members())
+        .any(|p| !settings.share_identifiers.may_send_to(aim_agent::privacy::locality_of(p)))
 }
 
 /// A live provider plus the per-provider limits the agent should run under.
@@ -398,6 +402,63 @@ pub async fn run_inspection(
         agent = agent.with_max_tokens(n);
     }
     agent.inspect(&system, request, &mut executor, sink).await
+}
+
+/// What a council run adds to a chat turn, for the interface.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CouncilReport {
+    /// The lead's name.
+    pub lead: String,
+    /// Each member's opinion, or why it gave none.
+    pub opinions: Vec<aim_agent::council::Opinion>,
+    /// Whether the answer is the council's merge or the lead's draft alone.
+    pub merged: bool,
+}
+
+/// Run one conversational turn, as a council when one is configured.
+///
+/// The members are the providers ticked in Settings that still exist and are
+/// not the lead. A member that cannot even be built (a missing key, a local
+/// agent with no kind) is reported as not answering rather than failing the
+/// turn: one broken member should not cost the person their answer.
+pub async fn run_chat_turn(
+    state: &AppState,
+    history: Vec<Message>,
+    sink: &mut dyn EventSink,
+) -> Result<(AgentOutcome, Option<CouncilReport>), AgentError> {
+    let settings = state.settings.load()?;
+    let configured = settings.council_members();
+    if configured.is_empty() {
+        return Ok((run_chat(state, history, sink).await?, None));
+    }
+    let mut built: Vec<Box<dyn aim_agent::LlmProvider>> = Vec::new();
+    let mut unbuildable: Vec<aim_agent::council::Opinion> = Vec::new();
+    for config in configured {
+        match config.build() {
+            Ok(p) => built.push(p),
+            Err(e) => unbuildable.push(aim_agent::council::Opinion {
+                member: config.label.clone(),
+                model: config.model.clone(),
+                text: None,
+                error: Some(e.to_string()),
+            }),
+        }
+    }
+
+    let ActiveProvider { provider, max_steps, max_tokens, purpose, tone } = active_provider(state)?;
+    let system = prompts::chat_system_prompt(&describe_context(state).await, purpose, tone);
+    let mut executor = CoreExecutor::new(state);
+    let members: Vec<&dyn aim_agent::LlmProvider> = built.iter().map(|b| b.as_ref()).collect();
+    let council = aim_agent::council::Council::new(provider.as_ref(), members)
+        .with_max_steps(max_steps)
+        .with_max_tokens(max_tokens);
+    let run = council.chat(&system, history, &mut executor, sink).await?;
+    let mut opinions = run.opinions;
+    opinions.extend(unbuildable);
+    Ok((
+        run.outcome,
+        Some(CouncilReport { lead: provider.label().to_string(), opinions, merged: run.merged }),
+    ))
 }
 
 /// Run one conversational turn.

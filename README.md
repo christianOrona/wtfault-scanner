@@ -279,6 +279,10 @@ a hosted one is your choice, on your own key:
 | **xAI** | Grok, same deal as Anthropic |
 | **OpenRouter (free)** | free models with a free key and no GPU. Built, and not yet run end to end on a real key. Whoever serves a free model may keep what it is sent |
 | **Anything OpenAI-shaped** | point it at a URL |
+| **Claude Code, Codex, Gemini CLI** | on the desktop, the agent you already have installed, on your own sign-in and no key. Its prompts go to its company |
+
+Turn on the **Mechanic council** in Settings to have more than one of these
+look at every answer in *Ask*. See [docs/MECHANIC-COUNCIL.md](docs/MECHANIC-COUNCIL.md).
 
 The tool layer is vendor-neutral JSON Schema, so switching from a hosted model
 to a local one is a dropdown, not a rewrite. If you want a diagnostic tool
