@@ -3,7 +3,13 @@
 Notable changes, newest first. Versions follow [semantic versioning](https://semver.org),
 with the caveat that everything below 1.0 is allowed to move.
 
-## [Unreleased]
+## [0.7.2] — 2026-11-24
+
+*Ask* can now use the AI agents already on your computer, Claude Code, Codex
+and Gemini CLI, on your own sign-in and with no API key. And you can have more
+than one of them look at the same question: a Mechanic council where the model
+in use reads the vehicle, the others give their view, and you see the merged
+answer.
 
 ### Added
 
